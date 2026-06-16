@@ -1,0 +1,5 @@
+agent-sessions
+agent-sessions.exe
+dist/
+coverage.out
+.DS_Store
