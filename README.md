@@ -48,12 +48,12 @@ Use "agent-sessions [command] --help" for more information about a command
 ## Hook Installation
 
 ```sh
+agent-sessions install-hooks <harness>
 agent-sessions install-hooks all
 agent-sessions install-hooks codex --dry-run
-agent-sessions install-hooks codex
-agent-sessions install-hooks pi
-agent-sessions install-hooks opencode
 ```
+
+`<harness>` is a supported harness name from the list above.
 
 ## Data Model
 
