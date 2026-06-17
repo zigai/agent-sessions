@@ -35,6 +35,13 @@ func TestResumeCommandFor(t *testing.T) {
 			want:        []string{codexCommand, "resume", testSessionID},
 		},
 		{
+			name:        "cursor",
+			harness:     registry.HarnessCursor,
+			sessionID:   testSessionID,
+			sessionPath: "",
+			want:        []string{cursorCommand, "--resume", testSessionID},
+		},
+		{
 			name:        "grok",
 			harness:     registry.HarnessGrok,
 			sessionID:   testSessionID,
@@ -85,6 +92,9 @@ func TestNormalize(t *testing.T) {
 		want  registry.Harness
 	}{
 		{name: codexCommand, value: codexCommand, want: registry.HarnessCodex},
+		{name: "cursor alias binary", value: "cursor-agent", want: registry.HarnessCursor},
+		{name: "cursor alias cli hyphen", value: "cursor-cli", want: registry.HarnessCursor},
+		{name: "cursor alias cli underscore", value: "cursor_cli", want: registry.HarnessCursor},
 		{name: "claude alias hyphen", value: "claude-code", want: registry.HarnessClaude},
 		{name: "claude alias underscore", value: "claude_code", want: registry.HarnessClaude},
 		{name: "grok alias hyphen", value: "grok-build", want: registry.HarnessGrok},
@@ -113,7 +123,7 @@ func TestNormalize(t *testing.T) {
 func TestSupportedNames(t *testing.T) {
 	t.Parallel()
 
-	want := []string{"claude", codexCommand, "grok", "pi", "opencode", "agy"}
+	want := []string{"claude", codexCommand, "cursor", "grok", "pi", "opencode", "agy"}
 	got := SupportedNames()
 	if !slices.Equal(got, want) {
 		t.Fatalf("expected %#v, got %#v", want, got)
@@ -150,6 +160,30 @@ func TestEnvNames(t *testing.T) {
 				"GROK_HOOK_EVENT",
 			},
 		},
+		{
+			name:  "session path",
+			field: EnvSessionPath,
+			want: []string{
+				"AGENT_SESSIONS_SESSION_PATH",
+				"AGENT_SESSION_PATH",
+				"CLAUDE_SESSION_PATH",
+				"CODEX_SESSION_PATH",
+				"CURSOR_TRANSCRIPT_PATH",
+				"PI_SESSION_PATH",
+				"OPENCODE_SESSION_PATH",
+			},
+		},
+		{
+			name:  "project root",
+			field: EnvProjectRoot,
+			want: []string{
+				"AGENT_SESSIONS_PROJECT_ROOT",
+				"PROJECT_ROOT",
+				"CURSOR_PROJECT_DIR",
+				"CLAUDE_PROJECT_DIR",
+				"GROK_WORKSPACE_ROOT",
+			},
+		},
 	}
 
 	for _, test := range tests {
@@ -173,6 +207,8 @@ func TestFromCommand(t *testing.T) {
 		wantOK  bool
 	}{
 		{command: "/usr/bin/codex", want: registry.HarnessCodex, wantOK: true},
+		{command: "/usr/local/bin/cursor-agent", want: registry.HarnessCursor, wantOK: true},
+		{command: "agent", want: registry.HarnessCursor, wantOK: true},
 		{command: "claude", want: registry.HarnessClaude, wantOK: true},
 		{command: "grok", want: registry.HarnessGrok, wantOK: true},
 		{command: "grok-build", want: registry.HarnessGrok, wantOK: true},
@@ -244,6 +280,18 @@ func TestDefaultsFromPayload(t *testing.T) {
 			wantEvent:  "UserPromptSubmit",
 			wantAttr:   "grok_tool_name",
 			wantAttrKV: "run_terminal_command",
+		},
+		{
+			name:       "cursor",
+			harness:    registry.HarnessCursor,
+			payload:    `{"conversation_id":"cursor-conversation","session_id":"cursor-session","transcript_path":"/tmp/cursor.jsonl","workspace_roots":["/repo"],"hook_event_name":"beforeSubmitPrompt","model":"gpt-5.2","cursor_version":"1.7.2","composer_mode":"agent","is_background_agent":false}`,
+			wantID:     "cursor-session",
+			wantPath:   "/tmp/cursor.jsonl",
+			wantCWD:    "/repo",
+			wantRoot:   "/repo",
+			wantEvent:  "beforeSubmitPrompt",
+			wantAttr:   "cursor_model",
+			wantAttrKV: "gpt-5.2",
 		},
 		{
 			name:       "agy",

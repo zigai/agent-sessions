@@ -23,6 +23,7 @@ type installer func(Options) (Result, error)
 var installers = map[registry.Harness]installer{
 	registry.HarnessClaude:   installClaude,
 	registry.HarnessCodex:    installCodex,
+	registry.HarnessCursor:   installCursor,
 	registry.HarnessGrok:     installGrok,
 	registry.HarnessPi:       installPi,
 	registry.HarnessOpenCode: installOpenCode,

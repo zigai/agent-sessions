@@ -217,6 +217,119 @@ func TestInstallClaudeReplacesManagedHooks(t *testing.T) {
 	}
 }
 
+func TestInstallCursorWritesHooks(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	result, err := Run(Options{
+		Harness:      registry.HarnessCursor,
+		Binary:       testInstallBinary,
+		TargetBinary: "",
+		DryRun:       false,
+		Force:        false,
+		UseShim:      false,
+	})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("expected cursor install to report changed")
+	}
+	if result.Path != filepath.Join(home, ".cursor", "hooks.json") {
+		t.Fatalf("unexpected path %q", result.Path)
+	}
+
+	data, err := os.ReadFile(result.Path)
+	if err != nil {
+		t.Fatalf("reading installed hooks: %v", err)
+	}
+
+	var config map[string]any
+	unmarshalErr := json.Unmarshal(data, &config)
+	if unmarshalErr != nil {
+		t.Fatalf("installed hooks are not valid JSON: %v", unmarshalErr)
+	}
+	if config["version"] != float64(1) {
+		t.Fatalf("expected cursor hooks version 1, got %#v", config["version"])
+	}
+
+	hooks, hooksOK := config["hooks"].(map[string]any)
+	if !hooksOK {
+		t.Fatal("expected hooks object")
+	}
+	for _, event := range []string{"sessionStart", "beforeSubmitPrompt", "beforeShellExecution", "afterShellExecution", "stop", "sessionEnd"} {
+		if _, ok := hooks[event]; !ok {
+			t.Fatalf("expected %s hook", event)
+		}
+	}
+
+	text := string(data)
+	if !strings.Contains(text, "--raw-stdin-defaults-only") || strings.Contains(text, "--raw-stdin ") {
+		t.Fatalf("expected defaults-only cursor hook commands: %s", text)
+	}
+	if !strings.Contains(text, "agent_sessions_integration=cursor-hook") {
+		t.Fatalf("expected managed cursor hook marker: %s", text)
+	}
+	if !strings.Contains(text, "continue") || !strings.Contains(text, "permission") {
+		t.Fatalf("expected non-blocking cursor hook responses: %s", text)
+	}
+}
+
+func TestInstallCursorReplacesManagedHooks(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	path := filepath.Join(home, ".cursor", "hooks.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatalf("creating cursor dir: %v", err)
+	}
+	oldConfig := `{"version":1,"hooks":{"sessionStart":[{"command":"./user-hook.sh"},{"command":"old-agent-sessions report --harness cursor --state idle --source cursor-hook --attribute agent_sessions_integration=cursor-hook"}]}}`
+	if err := os.WriteFile(path, []byte(oldConfig), 0o600); err != nil {
+		t.Fatalf("writing old hooks: %v", err)
+	}
+
+	result, err := Run(Options{
+		Harness:      registry.HarnessCursor,
+		Binary:       testInstallBinary,
+		TargetBinary: "",
+		DryRun:       false,
+		Force:        false,
+		UseShim:      false,
+	})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("expected cursor install to replace old managed hook")
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading installed hooks: %v", err)
+	}
+	text := string(data)
+	if strings.Contains(text, "old-agent-sessions") {
+		t.Fatalf("expected old managed hook to be removed: %s", text)
+	}
+	if !strings.Contains(text, "./user-hook.sh") {
+		t.Fatalf("expected user hook to be preserved: %s", text)
+	}
+
+	second, err := Run(Options{
+		Harness:      registry.HarnessCursor,
+		Binary:       testInstallBinary,
+		TargetBinary: "",
+		DryRun:       false,
+		Force:        false,
+		UseShim:      false,
+	})
+	if err != nil {
+		t.Fatalf("second Run returned error: %v", err)
+	}
+	if second.Changed {
+		t.Fatal("expected second cursor install to be idempotent")
+	}
+}
+
 func TestInstallShimRequiresForceForForeignFile(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv(registry.StateDirEnv, dir)
@@ -569,6 +682,7 @@ func TestRunAllInstallsEveryHarness(t *testing.T) {
 	t.Setenv(registry.StateDirEnv, t.TempDir())
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("AGY_CLI_HOME", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
 
 	results, err := RunAll(Options{
 		Harness:      "",

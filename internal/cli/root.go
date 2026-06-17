@@ -163,6 +163,7 @@ type reportOptions struct {
 	event           string
 	attributes      []string
 	rawStdin        bool
+	rawDefaultsOnly bool
 	noTmux          bool
 	quiet           bool
 	resumeCommand   []string
@@ -222,6 +223,7 @@ func (app *application) newReportCommand() *cobra.Command {
 	cmd.Flags().StringArrayVar(&options.attributes, "attribute", nil, "extra key=value attribute")
 	cmd.Flags().StringArrayVar(&options.resumeCommand, "resume-command", nil, "explicit resume command argv item, repeatable")
 	cmd.Flags().BoolVar(&options.rawStdin, "raw-stdin", false, "store stdin as raw hook payload")
+	cmd.Flags().BoolVar(&options.rawDefaultsOnly, "raw-stdin-defaults-only", false, "read stdin for harness defaults without storing raw hook payload")
 	cmd.Flags().BoolVar(&options.noTmux, "no-tmux", false, "do not auto-collect current tmux pane context")
 	cmd.Flags().BoolVar(&options.quiet, "quiet", false, "suppress normal report output")
 
@@ -252,11 +254,11 @@ func (app *application) runReport(ctx context.Context, stdin io.Reader, options 
 		return err
 	}
 
-	rawPayload, err := readRawPayload(stdin, options.rawStdin)
+	rawPayload, defaultsPayload, err := readStdinPayload(stdin, options.rawStdin, options.rawDefaultsOnly)
 	if err != nil {
 		return err
 	}
-	applyPayloadDefaults(&options, attributes, harnesspkg.DefaultsFromPayload(harness, rawPayload))
+	applyPayloadDefaults(&options, attributes, harnesspkg.DefaultsFromPayload(harness, defaultsPayload))
 
 	source := options.source
 	if source == "" {
@@ -829,30 +831,36 @@ func parseAttributes(values []string) (map[string]string, error) {
 	return attributes, nil
 }
 
-func readRawPayload(stdin io.Reader, enabled bool) (json.RawMessage, error) {
-	if !enabled {
-		return nil, nil
+func readStdinPayload(stdin io.Reader, storeRaw bool, defaultsOnly bool) (json.RawMessage, json.RawMessage, error) {
+	if !storeRaw && !defaultsOnly {
+		return nil, nil, nil
 	}
 
 	data, err := io.ReadAll(stdin)
 	if err != nil {
-		return nil, fmt.Errorf("reading stdin payload: %w", err)
+		return nil, nil, fmt.Errorf("reading stdin payload: %w", err)
 	}
 	data = []byte(strings.TrimSpace(string(data)))
 	if len(data) == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
 
+	var payload json.RawMessage
 	if json.Valid(data) {
-		return json.RawMessage(data), nil
+		payload = json.RawMessage(data)
+	} else {
+		wrapped, marshalErr := json.Marshal(string(data))
+		if marshalErr != nil {
+			return nil, nil, fmt.Errorf("encoding stdin payload: %w", marshalErr)
+		}
+		payload = json.RawMessage(wrapped)
 	}
 
-	wrapped, err := json.Marshal(string(data))
-	if err != nil {
-		return nil, fmt.Errorf("encoding stdin payload: %w", err)
+	if storeRaw {
+		return payload, payload, nil
 	}
 
-	return json.RawMessage(wrapped), nil
+	return nil, payload, nil
 }
 
 func applyPayloadDefaults(

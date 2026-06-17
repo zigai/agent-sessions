@@ -35,7 +35,7 @@ func TestReportHelpListsSupportedHarnesses(t *testing.T) {
 	}
 
 	got := output.String()
-	for _, harness := range []string{"codex", "grok", "pi", "opencode", "agy"} {
+	for _, harness := range []string{"codex", "cursor", "grok", "pi", "opencode", "agy"} {
 		if !strings.Contains(got, harness) {
 			t.Fatalf("expected report help to include %s, got %q", harness, got)
 		}
@@ -493,6 +493,62 @@ func TestAgyHookMalformedPayloadStillReturnsJSON(t *testing.T) {
 	}
 }
 
+func TestReportCursorHookDefaultsOnlyQuiet(t *testing.T) {
+	t.Parallel()
+
+	storePath := filepath.Join(t.TempDir(), "state.json")
+	var reportOut bytes.Buffer
+	cmd := NewRootCommand(&reportOut, &bytes.Buffer{})
+	cmd.SetArgs([]string{
+		storeFlag, storePath,
+		"report",
+		"--harness", "cursor",
+		"--state", "running",
+		"--source", "cursor-hook",
+		"--raw-stdin-defaults-only",
+		"--quiet",
+		"--no-tmux",
+	})
+	cmd.SetIn(strings.NewReader(`{"session_id":"cursor-session","transcript_path":"/tmp/cursor.jsonl","workspace_roots":["/repo"],"hook_event_name":"beforeSubmitPrompt","model":"gpt-5.2","prompt":"sensitive prompt text"}`))
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("report command failed: %v", err)
+	}
+	if reportOut.String() != "" {
+		t.Fatalf("expected quiet report to suppress output, got %q", reportOut.String())
+	}
+
+	sessions, err := registry.NewFileStore(storePath).List(context.Background(), registry.Filter{
+		Harness:     registry.HarnessCursor,
+		State:       "",
+		TmuxSession: "",
+		ActiveOnly:  false,
+	})
+	if err != nil {
+		t.Fatalf("listing sessions: %v", err)
+	}
+	if len(sessions) != 1 {
+		t.Fatalf("expected one session, got %d", len(sessions))
+	}
+	if sessions[0].SessionID != "cursor-session" {
+		t.Fatalf("expected cursor session id, got %q", sessions[0].SessionID)
+	}
+	if sessions[0].SessionPath != "/tmp/cursor.jsonl" {
+		t.Fatalf("expected cursor transcript path, got %q", sessions[0].SessionPath)
+	}
+	if sessions[0].ProjectRoot != "/repo" || sessions[0].CWD != "/repo" {
+		t.Fatalf("expected cursor root/cwd from workspace roots, got root=%q cwd=%q", sessions[0].ProjectRoot, sessions[0].CWD)
+	}
+	if sessions[0].Attributes["cursor_hook_event"] != "beforeSubmitPrompt" {
+		t.Fatalf("expected cursor hook event attribute, got %#v", sessions[0].Attributes)
+	}
+	if sessions[0].Attributes["cursor_model"] != "gpt-5.2" {
+		t.Fatalf("expected cursor model attribute, got %#v", sessions[0].Attributes)
+	}
+	if len(sessions[0].RawPayload) != 0 {
+		t.Fatalf("expected defaults-only report not to store raw payload, got %s", sessions[0].RawPayload)
+	}
+}
+
 func TestDefaultInstallBinaryIsAbsolute(t *testing.T) {
 	t.Parallel()
 
@@ -510,6 +566,7 @@ func TestInstallHooksAll(t *testing.T) {
 	t.Setenv("AGENT_SESSIONS_STATE_DIR", t.TempDir())
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("AGY_CLI_HOME", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
 
 	var output bytes.Buffer
 	cmd := NewRootCommand(&output, &bytes.Buffer{})
@@ -524,7 +581,7 @@ func TestInstallHooksAll(t *testing.T) {
 	}
 
 	got := output.String()
-	for _, harness := range []string{"claude", "codex", "grok", "pi", "opencode", "agy"} {
+	for _, harness := range []string{"claude", "codex", "cursor", "grok", "pi", "opencode", "agy"} {
 		if !strings.Contains(got, harness) {
 			t.Fatalf("expected output to include %s, got %q", harness, got)
 		}
