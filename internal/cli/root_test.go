@@ -509,6 +509,47 @@ func TestAgyHookStopFullyIdleReportsIdle(t *testing.T) {
 	}
 }
 
+func TestAgyHookEmptyPostToolUseDoesNotOverwriteIdleStop(t *testing.T) {
+	t.Parallel()
+
+	storePath := filepath.Join(t.TempDir(), "state.json")
+	var output bytes.Buffer
+	cmd := NewRootCommand(&output, &bytes.Buffer{})
+	cmd.SetArgs([]string{
+		storeFlag, storePath,
+		"agy-hook",
+		"--event", "Stop",
+	})
+	cmd.SetIn(strings.NewReader(`{"conversationId":"agy-session","transcriptPath":"/repo/.gemini/antigravity/transcript.jsonl","workspacePaths":["/repo"],"terminationReason":"NO_TOOL_CALL","fullyIdle":true}`))
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("agy stop hook command failed: %v", err)
+	}
+
+	output.Reset()
+	cmd = NewRootCommand(&output, &bytes.Buffer{})
+	cmd.SetArgs([]string{
+		storeFlag, storePath,
+		"agy-hook",
+		"--event", "PostToolUse",
+	})
+	cmd.SetIn(strings.NewReader(`{"conversationId":"agy-session","transcriptPath":"/repo/.gemini/antigravity/transcript.jsonl","workspacePaths":["/repo"],"toolCall":null}`))
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("agy empty PostToolUse hook command failed: %v", err)
+	}
+
+	sessions := listAgyTestSessions(t, storePath)
+	if len(sessions) != 1 {
+		t.Fatalf("expected one agy session, got %d", len(sessions))
+	}
+	session := sessions[0]
+	if session.State != registry.StateIdle {
+		t.Fatalf("expected idle state, got %q", session.State)
+	}
+	if session.LastEvent != "Stop" {
+		t.Fatalf("expected Stop to remain last event, got %q", session.LastEvent)
+	}
+}
+
 func TestAgyHookMalformedPayloadStillReturnsJSON(t *testing.T) {
 	t.Parallel()
 

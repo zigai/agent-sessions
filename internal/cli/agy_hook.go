@@ -109,6 +109,10 @@ func agyStateForHook(event string, payload map[string]any) registry.State {
 
 		return registry.StateRunning
 	case "PostToolUse":
+		if _, ok := payload["toolCall"].(map[string]any); !ok {
+			return ""
+		}
+
 		return registry.StateRunning
 	case "Stop":
 		if payloadBoolLocal(payload, "fullyIdle", "fully_idle") {
