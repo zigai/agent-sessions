@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/zigai/agent-sessions/pkg/registry"
 )
@@ -15,13 +17,18 @@ import (
 const (
 	agyPluginName         = "agent-sessions-state"
 	agyMarkerFileName     = ".agent-sessions-managed"
+	agyImportManifestName = "import_manifest.json"
+	agyImportSource       = "antigravity"
+	agyImportComponent    = "hooks"
 	agyIntegrationID      = "agy"
 	agyIntegrationVersion = 1
 	agyIntegrationSource  = "agy-hook"
 )
 
 func installAgy(options Options) (Result, error) {
-	dir := filepath.Join(agyCLIHome(), "plugins", agyPluginName)
+	configDir := agyConfigDir()
+	dir := filepath.Join(configDir, "plugins", agyPluginName)
+	manifestPath := filepath.Join(configDir, agyImportManifestName)
 	files, err := agyPluginFiles(options.Binary)
 	if err != nil {
 		return Result{}, err
@@ -36,9 +43,20 @@ func installAgy(options Options) (Result, error) {
 		return Result{}, err
 	}
 
+	manifest, manifestChanged, err := agyImportManifestWithPlugin(manifestPath, time.Now().UTC())
+	if err != nil {
+		return Result{}, err
+	}
+	changed = changed || manifestChanged
+
 	if changed && !options.DryRun {
 		if writeErr := writeAgyPluginFiles(dir, files); writeErr != nil {
 			return Result{}, writeErr
+		}
+		if manifestChanged {
+			if writeErr := writeAgyImportManifest(manifestPath, manifest); writeErr != nil {
+				return Result{}, writeErr
+			}
 		}
 	}
 
@@ -50,6 +68,118 @@ func installAgy(options Options) (Result, error) {
 		Snippet: agyPluginSnippet(files),
 		Error:   "",
 	}, nil
+}
+
+type agyImportManifest struct {
+	Imports []agyImport `json:"imports"`
+}
+
+type agyImport struct {
+	Name       string   `json:"name"`
+	Source     string   `json:"source"`
+	ImportedAt string   `json:"imported_at"`
+	Components []string `json:"components"`
+}
+
+func agyImportManifestWithPlugin(path string, now time.Time) (agyImportManifest, bool, error) {
+	manifest, err := readAgyImportManifest(path)
+	if err != nil {
+		return agyImportManifest{}, false, err
+	}
+
+	next, changed := upsertAgyImport(manifest, now)
+
+	return next, changed, nil
+}
+
+func readAgyImportManifest(path string) (agyImportManifest, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return agyImportManifest{
+				Imports: nil,
+			}, nil
+		}
+
+		return agyImportManifest{}, fmt.Errorf("reading agy import manifest: %w", err)
+	}
+
+	var manifest agyImportManifest
+	if unmarshalErr := json.Unmarshal(data, &manifest); unmarshalErr != nil {
+		return agyImportManifest{}, fmt.Errorf("parsing agy import manifest: %w", unmarshalErr)
+	}
+
+	return manifest, nil
+}
+
+func upsertAgyImport(manifest agyImportManifest, now time.Time) (agyImportManifest, bool) {
+	for index, item := range manifest.Imports {
+		if item.Name != agyPluginName {
+			continue
+		}
+
+		next := item
+		if next.Source != agyImportSource {
+			next.Source = agyImportSource
+		}
+		if next.ImportedAt == "" {
+			next.ImportedAt = now.Format(time.RFC3339)
+		}
+		if !stringSliceContains(next.Components, agyImportComponent) {
+			next.Components = append(next.Components, agyImportComponent)
+		}
+		if agyImportsEqual(item, next) {
+			return manifest, false
+		}
+
+		manifest.Imports[index] = next
+		return manifest, true
+	}
+
+	manifest.Imports = append(manifest.Imports, agyImport{
+		Name:       agyPluginName,
+		Source:     agyImportSource,
+		ImportedAt: now.Format(time.RFC3339),
+		Components: []string{agyImportComponent},
+	})
+
+	return manifest, true
+}
+
+func agyImportsEqual(left agyImport, right agyImport) bool {
+	if left.Name != right.Name || left.Source != right.Source || left.ImportedAt != right.ImportedAt {
+		return false
+	}
+
+	if len(left.Components) != len(right.Components) {
+		return false
+	}
+	for index := range left.Components {
+		if left.Components[index] != right.Components[index] {
+			return false
+		}
+	}
+
+	return true
+}
+
+func writeAgyImportManifest(path string, manifest agyImportManifest) error {
+	data, err := json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		return fmt.Errorf("encoding agy import manifest: %w", err)
+	}
+	data = append(data, '\n')
+
+	mkdirErr := os.MkdirAll(filepath.Dir(path), 0o700)
+	if mkdirErr != nil {
+		return fmt.Errorf("creating agy config directory: %w", mkdirErr)
+	}
+	writeErr := os.WriteFile(path, data, 0o600)
+	if writeErr != nil {
+		return fmt.Errorf("writing agy import manifest: %w", writeErr)
+	}
+
+	return nil
 }
 
 func ensureAgyPluginManaged(dir string, force bool) error {
@@ -211,16 +341,17 @@ func agyMarkerContent() string {
 	}, "\n")
 }
 
-func agyCLIHome() string {
-	if value := strings.TrimSpace(os.Getenv("AGY_CLI_HOME")); value != "" {
-		return value
-	}
-	if value := strings.TrimSpace(os.Getenv("ANTIGRAVITY_CLI_HOME")); value != "" {
+func stringSliceContains(values []string, target string) bool {
+	return slices.Contains(values, target)
+}
+
+func agyConfigDir() string {
+	if value := strings.TrimSpace(os.Getenv("AGY_CONFIG_HOME")); value != "" {
 		return value
 	}
 	if home := strings.TrimSpace(os.Getenv("HOME")); home != "" {
-		return filepath.Join(home, ".gemini", "antigravity-cli")
+		return filepath.Join(home, ".gemini", "config")
 	}
 
-	return filepath.Join(".gemini", "antigravity-cli")
+	return filepath.Join(".gemini", "config")
 }

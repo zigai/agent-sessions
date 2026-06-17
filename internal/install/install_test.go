@@ -469,8 +469,8 @@ const old = "old-agent-sessions";
 }
 
 func TestInstallAgyWritesPlugin(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("AGY_CLI_HOME", dir)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
 
 	result, err := Run(Options{
 		Harness:      registry.HarnessAgy,
@@ -486,13 +486,14 @@ func TestInstallAgyWritesPlugin(t *testing.T) {
 	if !result.Changed {
 		t.Fatal("expected agy install to report changed")
 	}
-	if result.Path != filepath.Join(dir, "plugins", agyPluginName) {
+	if result.Path != filepath.Join(home, ".gemini", "config", "plugins", agyPluginName) {
 		t.Fatalf("unexpected path %q", result.Path)
 	}
 	requireTextContainsAll(t, result.Snippet, []string{"agy-hook"}, "agy snippet")
 	requireAgyPluginManifest(t, result.Path)
 	requireAgyPluginHooks(t, result.Path)
 	requireAgyPluginMarker(t, result.Path)
+	requireAgyImportManifest(t, filepath.Join(home, ".gemini", "config", agyImportManifestName))
 
 	second, err := Run(Options{
 		Harness:      registry.HarnessAgy,
@@ -511,9 +512,9 @@ func TestInstallAgyWritesPlugin(t *testing.T) {
 }
 
 func TestInstallAgyRequiresForceForForeignPlugin(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("AGY_CLI_HOME", dir)
-	pluginDir := filepath.Join(dir, "plugins", agyPluginName)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	pluginDir := filepath.Join(home, ".gemini", "config", "plugins", agyPluginName)
 	if err := os.MkdirAll(pluginDir, 0o700); err != nil {
 		t.Fatalf("creating agy plugin dir: %v", err)
 	}
@@ -1012,4 +1013,37 @@ func requireAgyPluginMarker(t *testing.T, dir string) {
 	if !strings.Contains(string(marker), managedMarker) {
 		t.Fatalf("expected managed marker, got %q", marker)
 	}
+}
+
+func requireAgyImportManifest(t *testing.T, path string) {
+	t.Helper()
+
+	data := readTestFile(t, path, "reading agy import manifest")
+	manifest := decodeTestJSONObject(t, data, "agy import manifest")
+	imports, importsOK := manifest["imports"].([]any)
+	if !importsOK {
+		t.Fatalf("expected agy imports list, got %#v", manifest)
+	}
+
+	for _, importValue := range imports {
+		importItem, importOK := importValue.(map[string]any)
+		if !importOK || importItem["name"] != agyPluginName {
+			continue
+		}
+		if importItem["source"] != agyImportSource {
+			t.Fatalf("expected agy import source %q, got %#v", agyImportSource, importItem["source"])
+		}
+		components, componentsOK := importItem["components"].([]any)
+		if !componentsOK {
+			t.Fatalf("expected agy import components, got %#v", importItem["components"])
+		}
+		for _, component := range components {
+			if component == agyImportComponent {
+				return
+			}
+		}
+		t.Fatalf("expected agy import component %q, got %#v", agyImportComponent, components)
+	}
+
+	t.Fatalf("expected agy import for %q, got %#v", agyPluginName, imports)
 }
