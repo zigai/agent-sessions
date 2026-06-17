@@ -1,101 +1,76 @@
 # agent-sessions
-[![Release](https://img.shields.io/github/v/release/zigai/agent-sessions?sort=semver)](https://github.com/zigai/agent-sessions/releases)
-![Go version](https://img.shields.io/badge/go-1.25.6+-00ADD8.svg)
-[![License](https://img.shields.io/github/license/zigai/agent-sessions.svg)](https://github.com/zigai/agent-sessions/blob/master/LICENSE)
 
-A Go CLI project
+`agent-sessions` is a local registry for coding-agent sessions running on a
+machine. Harness hooks, wrappers, and scanners report into one state file so
+other tools can answer questions like:
 
-## Installation
+- which agent sessions are open
+- which harness owns each session
+- whether each session is idle, running, waiting, stale, or exited
+- which tmux session, window, and pane the agent belongs to
+- which command can resume the harness session
 
-```sh
-go install github.com/zigai/agent-sessions@latest
-```
+Supported harnesses: `codex`, `pi`, and `opencode`.
 
-### From Source
-
-```sh
-git clone https://github.com/zigai/agent-sessions.git
-cd agent-sessions
-go install .
-```
-
-### Releases
-
-Download prebuilt binaries and packages from [GitHub Releases](https://github.com/zigai/agent-sessions/releases).
-
-## Usage
+## CLI
 
 ```sh
 agent-sessions --help
 ```
 
-```sh
-agent-sessions --version
-```
-
-## Development
-
-### Requirements
-
-* Go 1.25.6
-* [just](https://github.com/casey/just)
-* [golangci-lint](https://golangci-lint.run/)
-* [GoReleaser](https://goreleaser.com/)
-
-### Commands
-
-```sh
-just check
-just test
-just lint
-just build
-```
-
-```sh
-just tidy
-just fix
-just clean
-```
-
-### Release Dry Run
-
-```sh
-just release-dry-run
-```
-
-Release helpers are available through `just release-patch`, `just release-minor`, and `just release-major`.
-
-## Project Layout
-
 ```text
-.
-├── main.go
-├── api/
-├── assets/
-├── build/
-├── cmd/
-├── configs/
-├── deployments/
-├── docs/
-├── examples/
-├── init/
-├── internal/
-│   └── cli/
-│       ├── root.go
-│       └── root_test.go
-├── pkg/
-├── scripts/
-├── test/
-├── tools/
-├── web/
-├── go.mod
-├── go.sum
-├── Justfile
-├── .goreleaser.yaml
-├── .golangci.yaml
-└── LICENSE
+Track local coding-agent sessions across harnesses and tmux panes
+
+Usage:
+  agent-sessions [flags]
+  agent-sessions [command]
+
+Available Commands:
+  gc            Mark old sessions stale and optionally delete stale/exited records
+  get           Get one session by registry id
+  help          Help about any command
+  install-hooks Install harness reporting hooks or shims
+  list          List known agent sessions
+  path          Print the registry state file path
+  report        Upsert a session report from a harness hook or wrapper
+  scan          Scan tmux panes for supported harness processes
+  summary       Summarize agent counts by tmux session
+
+Flags:
+  -h, --help           help for agent-sessions
+      --json           emit JSON
+      --store string   registry state file path
+  -v, --version        print version
+
+Use "agent-sessions [command] --help" for more information about a command
 ```
+
+## Hook Installation
+
+```sh
+agent-sessions install-hooks all
+agent-sessions install-hooks codex --dry-run
+agent-sessions install-hooks codex
+agent-sessions install-hooks pi
+agent-sessions install-hooks opencode
+```
+
+## Data Model
+
+Each session record stores:
+- registry id
+- harness: `codex`, `pi`, or `opencode`
+- normalized state: `idle`, `running`, `waiting`, `unknown`, `stale`, `exited`
+- harness session id and/or session path when known
+- resume command when a harness adapter can derive one from session id/path
+- cwd and project root
+- process ids and tty when reported
+- tmux session/window/pane ids, names, indexes, pane cwd, pane pid, and pane tty
+- source/confidence labels
+- last native harness event and event timestamp
+- extra attributes and optional raw JSON payload
+- created, updated, last-seen, state-changed, and ended timestamps
 
 ## License
 
-[Apache-2.0](https://github.com/zigai/agent-sessions/blob/master/LICENSE)
+[MIT](https://github.com/zigai/agent-sessions/blob/master/LICENSE)
