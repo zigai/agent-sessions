@@ -55,6 +55,13 @@ func TestResumeCommandFor(t *testing.T) {
 			sessionPath: "",
 			want:        []string{"opencode", "--session", testSessionID},
 		},
+		{
+			name:        "agy",
+			harness:     registry.HarnessAgy,
+			sessionID:   testSessionID,
+			sessionPath: "",
+			want:        []string{"agy", "--conversation", testSessionID},
+		},
 	}
 
 	for _, test := range tests {
@@ -84,6 +91,8 @@ func TestNormalize(t *testing.T) {
 		{name: "grok alias underscore", value: "grok_build", want: registry.HarnessGrok},
 		{name: "opencode alias hyphen", value: "open-code", want: registry.HarnessOpenCode},
 		{name: "opencode alias underscore", value: "open_code", want: registry.HarnessOpenCode},
+		{name: "agy alias", value: "antigravity-cli", want: registry.HarnessAgy},
+		{name: "agy google alias", value: "google_antigravity", want: registry.HarnessAgy},
 	}
 
 	for _, test := range tests {
@@ -104,7 +113,7 @@ func TestNormalize(t *testing.T) {
 func TestSupportedNames(t *testing.T) {
 	t.Parallel()
 
-	want := []string{"claude", codexCommand, "grok", "pi", "opencode"}
+	want := []string{"claude", codexCommand, "grok", "pi", "opencode", "agy"}
 	got := SupportedNames()
 	if !slices.Equal(got, want) {
 		t.Fatalf("expected %#v, got %#v", want, got)
@@ -169,6 +178,7 @@ func TestFromCommand(t *testing.T) {
 		{command: "grok-build", want: registry.HarnessGrok, wantOK: true},
 		{command: "pi", want: registry.HarnessPi, wantOK: true},
 		{command: "opencode", want: registry.HarnessOpenCode, wantOK: true},
+		{command: "agy", want: registry.HarnessAgy, wantOK: true},
 		{command: "zsh", want: "", wantOK: false},
 	}
 
@@ -234,6 +244,18 @@ func TestDefaultsFromPayload(t *testing.T) {
 			wantEvent:  "UserPromptSubmit",
 			wantAttr:   "grok_tool_name",
 			wantAttrKV: "run_terminal_command",
+		},
+		{
+			name:       "agy",
+			harness:    registry.HarnessAgy,
+			payload:    `{"conversationId":"agy-session","transcriptPath":"/repo/.gemini/antigravity/transcript.jsonl","workspacePaths":["/repo"],"event":"PreToolUse","toolCall":{"name":"run_command","args":{"Cwd":"/repo/subdir"}}}`,
+			wantID:     "agy-session",
+			wantPath:   "/repo/.gemini/antigravity/transcript.jsonl",
+			wantCWD:    "/repo/subdir",
+			wantRoot:   "/repo",
+			wantEvent:  "PreToolUse",
+			wantAttr:   "agy_tool_name",
+			wantAttrKV: "run_command",
 		},
 	}
 

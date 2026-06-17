@@ -337,6 +337,124 @@ func TestInstallOpenCodeWritesPlugin(t *testing.T) {
 	}
 }
 
+func TestInstallAgyWritesPlugin(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("AGY_CLI_HOME", dir)
+
+	result, err := Run(Options{
+		Harness:      registry.HarnessAgy,
+		Binary:       testInstallBinary,
+		TargetBinary: "",
+		DryRun:       false,
+		Force:        false,
+		UseShim:      false,
+	})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("expected agy install to report changed")
+	}
+	if result.Path != filepath.Join(dir, "plugins", agyPluginName) {
+		t.Fatalf("unexpected path %q", result.Path)
+	}
+	if !strings.Contains(result.Snippet, "agy-hook") {
+		t.Fatalf("expected agy hook command in snippet: %q", result.Snippet)
+	}
+
+	manifestData, err := os.ReadFile(filepath.Join(result.Path, "plugin.json"))
+	if err != nil {
+		t.Fatalf("reading plugin manifest: %v", err)
+	}
+	var manifest map[string]any
+	if err := json.Unmarshal(manifestData, &manifest); err != nil {
+		t.Fatalf("plugin manifest is not valid JSON: %v", err)
+	}
+	if manifest["name"] != agyPluginName {
+		t.Fatalf("expected plugin name %q, got %#v", agyPluginName, manifest["name"])
+	}
+
+	hooksData, err := os.ReadFile(filepath.Join(result.Path, "hooks.json"))
+	if err != nil {
+		t.Fatalf("reading agy hooks: %v", err)
+	}
+	var hooks map[string]any
+	if err := json.Unmarshal(hooksData, &hooks); err != nil {
+		t.Fatalf("agy hooks are not valid JSON: %v", err)
+	}
+	pluginHooks, ok := hooks[agyPluginName].(map[string]any)
+	if !ok {
+		t.Fatalf("expected %s hook namespace, got %#v", agyPluginName, hooks)
+	}
+	for _, event := range []string{"PreInvocation", "PostInvocation", "PreToolUse", "PostToolUse", "Stop"} {
+		if _, ok := pluginHooks[event]; !ok {
+			t.Fatalf("expected %s hook", event)
+		}
+	}
+
+	marker, err := os.ReadFile(filepath.Join(result.Path, agyMarkerFileName))
+	if err != nil {
+		t.Fatalf("reading agy marker: %v", err)
+	}
+	if !strings.Contains(string(marker), managedMarker) {
+		t.Fatalf("expected managed marker, got %q", marker)
+	}
+
+	second, err := Run(Options{
+		Harness:      registry.HarnessAgy,
+		Binary:       testInstallBinary,
+		TargetBinary: "",
+		DryRun:       false,
+		Force:        false,
+		UseShim:      false,
+	})
+	if err != nil {
+		t.Fatalf("second Run returned error: %v", err)
+	}
+	if second.Changed {
+		t.Fatal("expected second agy install to be idempotent")
+	}
+}
+
+func TestInstallAgyRequiresForceForForeignPlugin(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("AGY_CLI_HOME", dir)
+	pluginDir := filepath.Join(dir, "plugins", agyPluginName)
+	if err := os.MkdirAll(pluginDir, 0o700); err != nil {
+		t.Fatalf("creating agy plugin dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(pluginDir, "plugin.json"), []byte(`{"name":"foreign"}`), 0o600); err != nil {
+		t.Fatalf("writing foreign plugin manifest: %v", err)
+	}
+
+	_, err := Run(Options{
+		Harness:      registry.HarnessAgy,
+		Binary:       testInstallBinary,
+		TargetBinary: "",
+		DryRun:       false,
+		Force:        false,
+		UseShim:      false,
+	})
+	if err == nil {
+		t.Fatal("expected error for unmanaged agy plugin")
+	}
+
+	result, err := Run(Options{
+		Harness:      registry.HarnessAgy,
+		Binary:       testInstallBinary,
+		TargetBinary: "",
+		DryRun:       false,
+		Force:        true,
+		UseShim:      false,
+	})
+	if err != nil {
+		t.Fatalf("forced Run returned error: %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("expected forced agy install to report changed")
+	}
+}
+
 func TestInstallGrokWritesHooks(t *testing.T) {
 	t.Setenv("GROK_HOME", t.TempDir())
 
@@ -450,6 +568,7 @@ func TestRunAllInstallsEveryHarness(t *testing.T) {
 	t.Setenv("PI_CODING_AGENT_DIR", t.TempDir())
 	t.Setenv(registry.StateDirEnv, t.TempDir())
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("AGY_CLI_HOME", t.TempDir())
 
 	results, err := RunAll(Options{
 		Harness:      "",

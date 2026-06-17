@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -34,7 +35,7 @@ func TestReportHelpListsSupportedHarnesses(t *testing.T) {
 	}
 
 	got := output.String()
-	for _, harness := range []string{"codex", "grok", "pi", "opencode"} {
+	for _, harness := range []string{"codex", "grok", "pi", "opencode", "agy"} {
 		if !strings.Contains(got, harness) {
 			t.Fatalf("expected report help to include %s, got %q", harness, got)
 		}
@@ -333,6 +334,165 @@ func TestReportGrokHookPayloadQuiet(t *testing.T) {
 	}
 }
 
+func TestAgyHookPreInvocationReportsRunningSession(t *testing.T) {
+	t.Parallel()
+
+	storePath := filepath.Join(t.TempDir(), "state.json")
+	var output bytes.Buffer
+	cmd := NewRootCommand(&output, &bytes.Buffer{})
+	cmd.SetArgs([]string{
+		storeFlag, storePath,
+		"agy-hook",
+		"--event", "PreInvocation",
+	})
+	cmd.SetIn(strings.NewReader(`{"conversationId":"agy-session","transcriptPath":"/repo/.gemini/antigravity/transcript.jsonl","workspacePaths":["/repo"],"invocationNum":3}`))
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("agy-hook command failed: %v", err)
+	}
+
+	var response map[string]any
+	if err := json.Unmarshal(output.Bytes(), &response); err != nil {
+		t.Fatalf("agy-hook response is not valid JSON: %v", err)
+	}
+	if len(response) != 0 {
+		t.Fatalf("expected empty PreInvocation response, got %#v", response)
+	}
+
+	sessions := listTestSessions(t, storePath, registry.HarnessAgy)
+	if len(sessions) != 1 {
+		t.Fatalf("expected one agy session, got %d", len(sessions))
+	}
+	session := sessions[0]
+	if session.State != registry.StateRunning {
+		t.Fatalf("expected running state, got %q", session.State)
+	}
+	if session.SessionID != "agy-session" {
+		t.Fatalf("expected agy session id, got %q", session.SessionID)
+	}
+	if session.SessionPath != "/repo/.gemini/antigravity/transcript.jsonl" {
+		t.Fatalf("expected transcript path, got %q", session.SessionPath)
+	}
+	if session.CWD != "/repo" || session.ProjectRoot != "/repo" {
+		t.Fatalf("expected repo location, got cwd=%q root=%q", session.CWD, session.ProjectRoot)
+	}
+	if strings.Join(session.ResumeCommand, " ") != "agy --conversation agy-session" {
+		t.Fatalf("expected agy resume command, got %#v", session.ResumeCommand)
+	}
+	if session.Attributes["agy_hook_event"] != "PreInvocation" {
+		t.Fatalf("expected agy hook event attribute, got %#v", session.Attributes)
+	}
+}
+
+func TestAgyHookPreToolUsePermissionReportsWaiting(t *testing.T) {
+	t.Parallel()
+
+	storePath := filepath.Join(t.TempDir(), "state.json")
+	var output bytes.Buffer
+	cmd := NewRootCommand(&output, &bytes.Buffer{})
+	cmd.SetArgs([]string{
+		storeFlag, storePath,
+		"agy-hook",
+		"--event", "PreToolUse",
+	})
+	cmd.SetIn(strings.NewReader(`{"conversationId":"agy-session","transcriptPath":"/repo/.gemini/antigravity/transcript.jsonl","workspacePaths":["/repo"],"toolCall":{"name":"ask_permission","args":{"Cwd":"/repo/pkg"}}}`))
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("agy-hook command failed: %v", err)
+	}
+
+	var response map[string]string
+	if err := json.Unmarshal(output.Bytes(), &response); err != nil {
+		t.Fatalf("agy-hook response is not valid JSON: %v", err)
+	}
+	if response["decision"] != "allow" {
+		t.Fatalf("expected allow decision, got %#v", response)
+	}
+
+	sessions := listTestSessions(t, storePath, registry.HarnessAgy)
+	if len(sessions) != 1 {
+		t.Fatalf("expected one agy session, got %d", len(sessions))
+	}
+	session := sessions[0]
+	if session.State != registry.StateWaiting {
+		t.Fatalf("expected waiting state, got %q", session.State)
+	}
+	if session.CWD != "/repo/pkg" || session.ProjectRoot != "/repo" {
+		t.Fatalf("expected tool cwd and workspace root, got cwd=%q root=%q", session.CWD, session.ProjectRoot)
+	}
+	if session.Attributes["agy_tool_name"] != "ask_permission" {
+		t.Fatalf("expected agy tool attribute, got %#v", session.Attributes)
+	}
+}
+
+func TestAgyHookStopFullyIdleReportsIdle(t *testing.T) {
+	t.Parallel()
+
+	storePath := filepath.Join(t.TempDir(), "state.json")
+	var output bytes.Buffer
+	cmd := NewRootCommand(&output, &bytes.Buffer{})
+	cmd.SetArgs([]string{
+		storeFlag, storePath,
+		"agy-hook",
+		"--event", "Stop",
+	})
+	cmd.SetIn(strings.NewReader(`{"conversationId":"agy-session","transcriptPath":"/repo/.gemini/antigravity/transcript.jsonl","workspacePaths":["/repo"],"terminationReason":"model_stop","fullyIdle":true}`))
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("agy-hook command failed: %v", err)
+	}
+
+	var response map[string]string
+	if err := json.Unmarshal(output.Bytes(), &response); err != nil {
+		t.Fatalf("agy-hook response is not valid JSON: %v", err)
+	}
+	if response["decision"] != "" {
+		t.Fatalf("expected empty stop decision, got %#v", response)
+	}
+
+	sessions := listTestSessions(t, storePath, registry.HarnessAgy)
+	if len(sessions) != 1 {
+		t.Fatalf("expected one agy session, got %d", len(sessions))
+	}
+	session := sessions[0]
+	if session.State != registry.StateIdle {
+		t.Fatalf("expected idle state, got %q", session.State)
+	}
+	if session.Attributes["agy_fully_idle"] != "true" {
+		t.Fatalf("expected fully idle attribute, got %#v", session.Attributes)
+	}
+	if session.Attributes["agy_termination_reason"] != "model_stop" {
+		t.Fatalf("expected termination reason attribute, got %#v", session.Attributes)
+	}
+}
+
+func TestAgyHookMalformedPayloadStillReturnsJSON(t *testing.T) {
+	t.Parallel()
+
+	storePath := filepath.Join(t.TempDir(), "state.json")
+	var output bytes.Buffer
+	cmd := NewRootCommand(&output, &bytes.Buffer{})
+	cmd.SetArgs([]string{
+		storeFlag, storePath,
+		"agy-hook",
+		"--event", "PreToolUse",
+	})
+	cmd.SetIn(strings.NewReader(`not json`))
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("agy-hook command failed: %v", err)
+	}
+
+	var response map[string]string
+	if err := json.Unmarshal(output.Bytes(), &response); err != nil {
+		t.Fatalf("agy-hook response is not valid JSON: %v", err)
+	}
+	if response["decision"] != "allow" {
+		t.Fatalf("expected allow decision, got %#v", response)
+	}
+
+	sessions := listTestSessions(t, storePath, registry.HarnessAgy)
+	if len(sessions) != 0 {
+		t.Fatalf("expected malformed payload not to create sessions, got %d", len(sessions))
+	}
+}
+
 func TestDefaultInstallBinaryIsAbsolute(t *testing.T) {
 	t.Parallel()
 
@@ -343,11 +503,13 @@ func TestDefaultInstallBinaryIsAbsolute(t *testing.T) {
 }
 
 func TestInstallHooksAll(t *testing.T) {
+	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
 	t.Setenv("CODEX_HOME", t.TempDir())
 	t.Setenv("GROK_HOME", t.TempDir())
 	t.Setenv("PI_CODING_AGENT_DIR", t.TempDir())
 	t.Setenv("AGENT_SESSIONS_STATE_DIR", t.TempDir())
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("AGY_CLI_HOME", t.TempDir())
 
 	var output bytes.Buffer
 	cmd := NewRootCommand(&output, &bytes.Buffer{})
@@ -362,7 +524,7 @@ func TestInstallHooksAll(t *testing.T) {
 	}
 
 	got := output.String()
-	for _, harness := range []string{"codex", "grok", "pi", "opencode"} {
+	for _, harness := range []string{"claude", "codex", "grok", "pi", "opencode", "agy"} {
 		if !strings.Contains(got, harness) {
 			t.Fatalf("expected output to include %s, got %q", harness, got)
 		}
@@ -387,4 +549,20 @@ func TestInstallHooksUsesAbsoluteDefaultBinary(t *testing.T) {
 	if !strings.Contains(output.String(), want) {
 		t.Fatalf("expected dry-run output to include default binary %q, got %q", want, output.String())
 	}
+}
+
+func listTestSessions(t *testing.T, storePath string, harness registry.Harness) []registry.Session {
+	t.Helper()
+
+	sessions, err := registry.NewFileStore(storePath).List(context.Background(), registry.Filter{
+		Harness:     harness,
+		State:       "",
+		TmuxSession: "",
+		ActiveOnly:  false,
+	})
+	if err != nil {
+		t.Fatalf("listing sessions: %v", err)
+	}
+
+	return sessions
 }

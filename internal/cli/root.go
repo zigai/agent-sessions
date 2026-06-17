@@ -82,6 +82,7 @@ func NewRootCommand(stdout io.Writer, stderr io.Writer) *cobra.Command {
 		app.newGCCommand(),
 		app.newPathCommand(),
 		app.newInstallHooksCommand(),
+		app.newAgyHookCommand(),
 	)
 
 	return root

@@ -26,6 +26,7 @@ var installers = map[registry.Harness]installer{
 	registry.HarnessGrok:     installGrok,
 	registry.HarnessPi:       installPi,
 	registry.HarnessOpenCode: installOpenCode,
+	registry.HarnessAgy:      installAgy,
 }
 
 var AllHarnesses = installableHarnesses()
