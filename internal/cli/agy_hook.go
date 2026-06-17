@@ -15,7 +15,10 @@ import (
 	"github.com/zigai/agent-sessions/pkg/tmuxctx"
 )
 
-const agyHookSource = "agy-hook"
+const (
+	agyHookSource                  = "agy-hook"
+	agyHookAdditionalAttributeKeys = 2
+)
 
 type agyHookOptions struct {
 	event string
@@ -66,7 +69,7 @@ func reportAgyHook(
 		return
 	}
 
-	attributes := make(map[string]string, len(defaults.Attributes)+2)
+	attributes := make(map[string]string, len(defaults.Attributes)+agyHookAdditionalAttributeKeys)
 	maps.Copy(attributes, defaults.Attributes)
 	if event != "" {
 		attributes["agy_hook_event"] = event

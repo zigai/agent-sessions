@@ -358,7 +358,7 @@ func TestAgyHookPreInvocationReportsRunningSession(t *testing.T) {
 		t.Fatalf("expected empty PreInvocation response, got %#v", response)
 	}
 
-	sessions := listTestSessions(t, storePath, registry.HarnessAgy)
+	sessions := listAgyTestSessions(t, storePath)
 	if len(sessions) != 1 {
 		t.Fatalf("expected one agy session, got %d", len(sessions))
 	}
@@ -407,7 +407,7 @@ func TestAgyHookPreToolUsePermissionReportsWaiting(t *testing.T) {
 		t.Fatalf("expected allow decision, got %#v", response)
 	}
 
-	sessions := listTestSessions(t, storePath, registry.HarnessAgy)
+	sessions := listAgyTestSessions(t, storePath)
 	if len(sessions) != 1 {
 		t.Fatalf("expected one agy session, got %d", len(sessions))
 	}
@@ -447,7 +447,7 @@ func TestAgyHookStopFullyIdleReportsIdle(t *testing.T) {
 		t.Fatalf("expected empty stop decision, got %#v", response)
 	}
 
-	sessions := listTestSessions(t, storePath, registry.HarnessAgy)
+	sessions := listAgyTestSessions(t, storePath)
 	if len(sessions) != 1 {
 		t.Fatalf("expected one agy session, got %d", len(sessions))
 	}
@@ -487,7 +487,7 @@ func TestAgyHookMalformedPayloadStillReturnsJSON(t *testing.T) {
 		t.Fatalf("expected allow decision, got %#v", response)
 	}
 
-	sessions := listTestSessions(t, storePath, registry.HarnessAgy)
+	sessions := listAgyTestSessions(t, storePath)
 	if len(sessions) != 0 {
 		t.Fatalf("expected malformed payload not to create sessions, got %d", len(sessions))
 	}
@@ -609,11 +609,11 @@ func TestInstallHooksUsesAbsoluteDefaultBinary(t *testing.T) {
 	}
 }
 
-func listTestSessions(t *testing.T, storePath string, harness registry.Harness) []registry.Session {
+func listAgyTestSessions(t *testing.T, storePath string) []registry.Session {
 	t.Helper()
 
 	sessions, err := registry.NewFileStore(storePath).List(context.Background(), registry.Filter{
-		Harness:     harness,
+		Harness:     registry.HarnessAgy,
 		State:       "",
 		TmuxSession: "",
 		ActiveOnly:  false,
