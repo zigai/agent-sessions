@@ -18,10 +18,7 @@ const (
 func installGrok(options Options) (Result, error) {
 	path := filepath.Join(grokHome(), "hooks", grokHookFileName)
 
-	config, err := grokHookConfig(options.Binary)
-	if err != nil {
-		return Result{}, err
-	}
+	config := grokHookConfig(options.Binary)
 
 	data, err := json.MarshalIndent(config, "", "  ")
 	if err != nil {
@@ -71,7 +68,7 @@ type grokHookSpec struct {
 	command string
 }
 
-func grokHookConfig(binary string) (map[string]any, error) {
+func grokHookConfig(binary string) map[string]any {
 	specs := []grokHookSpec{
 		{
 			event:   "SessionStart",
@@ -114,7 +111,7 @@ func grokHookConfig(binary string) (map[string]any, error) {
 		hooks[spec.event] = append(existing, commandHookGroup(spec.command, spec.matcher, managedMarker))
 	}
 
-	return map[string]any{"hooks": hooks}, nil
+	return map[string]any{"hooks": hooks}
 }
 
 func grokHookCommand(binary string, state registry.State, event string) string {
