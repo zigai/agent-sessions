@@ -108,7 +108,6 @@ linters:
     - wastedassign
     - whitespace
     - wrapcheck
-    - wsl_v5
     - zerologlint
 
   settings:
@@ -180,6 +179,10 @@ linters:
         - -ST1000
         - -ST1016
         - -QF1008
+    tagliatelle:
+      case:
+        rules:
+          json: snake
     nolintlint:
       allow-no-explanation: [funlen, gocognit, golines]
       require-explanation: true
@@ -198,5 +201,5 @@ linters:
       - path: "main\\.go"
         linters: [mnd]
 
-      - path: "internal/cli/root\\.go"
+      - path: "internal/cli/.*\\.go"
         linters: [exhaustruct]
