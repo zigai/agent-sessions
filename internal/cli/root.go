@@ -49,15 +49,19 @@ const (
 	daysPerYear      = 365
 )
 
+const listSortUpdated = "updated"
+
 type application struct {
 	storePath  string
 	outputJSON bool
 	stdout     io.Writer
+	stderr     io.Writer
 }
 
 func NewRootCommand(stdout io.Writer, stderr io.Writer) *cobra.Command {
 	app := &application{
 		stdout: stdout,
+		stderr: stderr,
 	}
 
 	var showVersion bool
@@ -86,6 +90,7 @@ func NewRootCommand(stdout io.Writer, stderr io.Writer) *cobra.Command {
 		app.newListCommand(),
 		app.newGetCommand(),
 		app.newSummaryCommand(),
+		app.newWatchCommand(),
 		app.newScanCommand(),
 		app.newGCCommand(),
 		app.newPathCommand(),
@@ -756,7 +761,7 @@ type sessionCompareFunc func(registry.Session, registry.Session) int
 
 var listSortComparers = map[string]sessionCompareFunc{
 	"tmux":          compareSessionTmux,
-	"updated":       compareSessionUpdated,
+	listSortUpdated: compareSessionUpdated,
 	"state-changed": compareSessionStateChanged,
 	"created":       compareSessionCreated,
 	"ended":         compareSessionEnded,
@@ -784,8 +789,8 @@ func normalizeListSort(sortBy string) string {
 	switch normalized {
 	case "":
 		return "tmux"
-	case "time", "updated-at", "updated":
-		return "updated"
+	case "time", "updated-at", listSortUpdated:
+		return listSortUpdated
 	case "state-changed-at", "state-since", "state-changed":
 		return "state-changed"
 	case "created-at", "created":
