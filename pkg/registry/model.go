@@ -22,6 +22,7 @@ const (
 	HarnessGrok     Harness = "grok"
 	HarnessPi       Harness = "pi"
 	HarnessOpenCode Harness = "opencode"
+	HarnessKilo     Harness = "kilo"
 )
 
 var (
@@ -156,6 +157,8 @@ func NormalizeHarness(value string) (Harness, error) {
 		return HarnessPi, nil
 	case "opencode", "open-code", "open_code":
 		return HarnessOpenCode, nil
+	case "kilo", "kilocode", "kilo-code", "kilo_code":
+		return HarnessKilo, nil
 	default:
 		return "", fmt.Errorf("%w: %q", ErrUnknownHarness, value)
 	}

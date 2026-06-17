@@ -55,6 +55,13 @@ func TestResumeCommandFor(t *testing.T) {
 			sessionPath: "",
 			want:        []string{"opencode", "--session", testSessionID},
 		},
+		{
+			name:        "kilo",
+			harness:     registry.HarnessKilo,
+			sessionID:   testSessionID,
+			sessionPath: "",
+			want:        []string{"kilo", "--session", testSessionID},
+		},
 	}
 
 	for _, test := range tests {
@@ -84,6 +91,10 @@ func TestNormalize(t *testing.T) {
 		{name: "grok alias underscore", value: "grok_build", want: registry.HarnessGrok},
 		{name: "opencode alias hyphen", value: "open-code", want: registry.HarnessOpenCode},
 		{name: "opencode alias underscore", value: "open_code", want: registry.HarnessOpenCode},
+		{name: "kilo", value: "kilo", want: registry.HarnessKilo},
+		{name: "kilo alias command", value: "kilocode", want: registry.HarnessKilo},
+		{name: "kilo alias hyphen", value: "kilo-code", want: registry.HarnessKilo},
+		{name: "kilo alias underscore", value: "kilo_code", want: registry.HarnessKilo},
 	}
 
 	for _, test := range tests {
@@ -104,7 +115,7 @@ func TestNormalize(t *testing.T) {
 func TestSupportedNames(t *testing.T) {
 	t.Parallel()
 
-	want := []string{"claude", codexCommand, "grok", "pi", "opencode"}
+	want := []string{"claude", codexCommand, "grok", "pi", "opencode", "kilo"}
 	got := SupportedNames()
 	if !slices.Equal(got, want) {
 		t.Fatalf("expected %#v, got %#v", want, got)
@@ -130,6 +141,8 @@ func TestEnvNames(t *testing.T) {
 				"GROK_SESSION_ID",
 				"PI_SESSION_ID",
 				"OPENCODE_SESSION_ID",
+				"KILO_SESSION_ID",
+				"KILOCODE_SESSION_ID",
 			},
 		},
 		{
@@ -139,6 +152,8 @@ func TestEnvNames(t *testing.T) {
 				"AGENT_SESSIONS_EVENT",
 				"AGENT_EVENT",
 				"GROK_HOOK_EVENT",
+				"KILO_EVENT",
+				"KILOCODE_EVENT",
 			},
 		},
 	}
@@ -169,6 +184,10 @@ func TestFromCommand(t *testing.T) {
 		{command: "grok-build", want: registry.HarnessGrok, wantOK: true},
 		{command: "pi", want: registry.HarnessPi, wantOK: true},
 		{command: "opencode", want: registry.HarnessOpenCode, wantOK: true},
+		{command: "kilo", want: registry.HarnessKilo, wantOK: true},
+		{command: "kilocode", want: registry.HarnessKilo, wantOK: true},
+		{command: "kilo-code", want: registry.HarnessKilo, wantOK: true},
+		{command: "kilo_code", want: registry.HarnessKilo, wantOK: true},
 		{command: "zsh", want: "", wantOK: false},
 	}
 

@@ -6,4 +6,5 @@ var adapters = []Adapter{
 	grokAdapter(),
 	piAdapter(),
 	openCodeAdapter(),
+	kiloAdapter(),
 }

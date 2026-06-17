@@ -1,0 +1,217 @@
+"{{ .ManagedMarker }}";
+"AGENT_SESSIONS_INTEGRATION_ID={{ .IntegrationID }}";
+"AGENT_SESSIONS_INTEGRATION_VERSION={{ .IntegrationVersion }}";
+
+import { spawn } from "node:child_process";
+
+const agentSessionsBin = {{ .Binary }};
+const source = {{ .Source }};
+const disableSelfRefreshEnv = "AGENT_SESSIONS_DISABLE_KILO_SELF_REFRESH";
+
+let currentSessionId: string | undefined;
+let currentSessionPath: string | undefined;
+let currentCwd: string | undefined;
+let currentProjectRoot: string | undefined;
+let selfRefreshStarted = false;
+
+function selfRefresh(): void {
+  if (selfRefreshStarted || process.env[disableSelfRefreshEnv] === "1") {
+    return;
+  }
+  selfRefreshStarted = true;
+
+  try {
+    const child = spawn(agentSessionsBin, ["install-hooks", "kilo", "--binary", agentSessionsBin], {
+      detached: true,
+      stdio: "ignore",
+    });
+    child.unref();
+  } catch {
+    // Refresh is best-effort. Reporting still works with the loaded plugin.
+  }
+}
+
+function firstString(...values: unknown[]): string | undefined {
+  for (const value of values) {
+    if (typeof value === "string" && value.length > 0) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+function valueAt(value: any, path: string[]): unknown {
+  let current = value;
+  for (const part of path) {
+    if (current === undefined || current === null || typeof current !== "object") {
+      return undefined;
+    }
+    current = current[part];
+  }
+  return current;
+}
+
+function firstPathString(value: any, paths: string[][]): string | undefined {
+  return firstString(...paths.map((path) => valueAt(value, path)));
+}
+
+function normalizeStatus(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+
+  const status = value.toLowerCase();
+  if (["running", "busy", "streaming", "working", "active"].includes(status)) {
+    return "running";
+  }
+  if (["waiting", "blocked", "permission", "prompt"].includes(status)) {
+    return "waiting";
+  }
+  if (["idle", "ready", "done", "complete", "completed"].includes(status)) {
+    return "idle";
+  }
+  if (["deleted", "exited", "closed"].includes(status)) {
+    return "exited";
+  }
+
+  return undefined;
+}
+
+function stateForEvent(event: any): string | undefined {
+  switch (event?.type) {
+    case "session.created":
+      return "idle";
+    case "session.idle":
+      return "idle";
+    case "session.deleted":
+      return "exited";
+    case "session.error":
+      return "idle";
+    case "permission.asked":
+      return "waiting";
+    case "permission.replied":
+      return "running";
+    case "tool.execute.before":
+    case "tool.execute.after":
+      return "running";
+    case "session.status":
+    case "session.updated":
+      return normalizeStatus(firstPathString(event, [
+        ["status"],
+        ["properties", "status"],
+        ["session", "status"],
+      ])) ?? "unknown";
+    default:
+      return undefined;
+  }
+}
+
+function refreshSessionRef(ctx: any, event: any): void {
+  currentSessionId = firstPathString(event, [
+    ["sessionID"],
+    ["sessionId"],
+    ["session_id"],
+    ["properties", "sessionID"],
+    ["properties", "sessionId"],
+    ["properties", "session_id"],
+    ["session", "id"],
+    ["session", "sessionID"],
+    ["session", "sessionId"],
+  ]) ?? currentSessionId;
+
+  currentSessionPath = firstPathString(event, [
+    ["sessionPath"],
+    ["session_path"],
+    ["path"],
+    ["session", "path"],
+    ["session", "file"],
+  ]) ?? currentSessionPath;
+
+  currentCwd = firstString(
+    ctx?.directory,
+    ctx?.worktree,
+    event?.cwd,
+    event?.session?.cwd,
+    event?.properties?.cwd,
+  ) ?? currentCwd;
+
+  currentProjectRoot = firstString(ctx?.worktree, ctx?.project?.path, ctx?.project?.root) ?? currentProjectRoot;
+}
+
+function addAttribute(args: string[], key: string, value: unknown): void {
+  if (typeof value === "string" && value.length > 0) {
+    args.push("--attribute", `${key}=${value}`);
+  }
+}
+
+function addEvent(args: string[], value: unknown): void {
+  if (typeof value === "string" && value.length > 0) {
+    args.push("--event", value);
+  }
+}
+
+function report(state: string, ctx: any, event: any): void {
+  refreshSessionRef(ctx, event);
+
+  const args = ["report", "--harness", "kilo", "--state", state, "--source", source];
+  addEvent(args, event?.type);
+  if (currentSessionId) {
+    args.push("--session-id", currentSessionId);
+  }
+  if (currentSessionPath) {
+    args.push("--session-path", currentSessionPath);
+  }
+  if (currentCwd) {
+    args.push("--cwd", currentCwd);
+  }
+  if (currentProjectRoot) {
+    args.push("--project-root", currentProjectRoot);
+  }
+
+  addAttribute(args, "kilo_event", event?.type);
+  addAttribute(args, "kilo_status", firstPathString(event, [
+    ["status"],
+    ["properties", "status"],
+    ["session", "status"],
+  ]));
+  addAttribute(args, "agent_sessions_integration", "kilo-plugin");
+
+  try {
+    const child = spawn(agentSessionsBin, args, {
+      detached: true,
+      stdio: "ignore",
+    });
+    child.unref();
+  } catch {
+    // Session reporting must never break Kilo startup or turns.
+  }
+}
+
+const AgentSessionsPlugin = async (ctx: any) => {
+  selfRefresh();
+
+  return {
+    event: async ({ event }: any) => {
+      const state = stateForEvent(event);
+      if (state === undefined) {
+        return;
+      }
+
+      report(state, ctx, event);
+    },
+    "permission.asked": async (input: any) => {
+      report("waiting", ctx, { ...input, type: "permission.asked" });
+    },
+    "permission.replied": async (input: any) => {
+      report("running", ctx, { ...input, type: "permission.replied" });
+    },
+    "tool.execute.before": async (input: any) => {
+      report("running", ctx, { ...input, type: "tool.execute.before" });
+    },
+    "tool.execute.after": async (input: any) => {
+      report("running", ctx, { ...input, type: "tool.execute.after" });
+    },
+  };
+};
+
+export default { id: "agent-sessions-state", server: AgentSessionsPlugin };

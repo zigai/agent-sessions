@@ -337,6 +337,112 @@ func TestInstallOpenCodeWritesPlugin(t *testing.T) {
 	}
 }
 
+func TestInstallKiloWritesPlugin(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+
+	result, err := Run(Options{
+		Harness:      registry.HarnessKilo,
+		Binary:       testInstallBinary,
+		TargetBinary: "",
+		DryRun:       false,
+		Force:        false,
+		UseShim:      false,
+	})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("expected kilo install to report changed")
+	}
+	if result.Path != filepath.Join(dir, "kilo", "plugin", kiloPluginName) {
+		t.Fatalf("unexpected path %q", result.Path)
+	}
+	if !strings.Contains(result.Snippet, "AGENT_SESSIONS_INTEGRATION_ID=kilo") {
+		t.Fatalf("expected integration id in snippet: %q", result.Snippet)
+	}
+	if !strings.Contains(result.Snippet, `export default { id: "agent-sessions-state", server: AgentSessionsPlugin };`) {
+		t.Fatalf("expected kilo plugin default export in snippet: %q", result.Snippet)
+	}
+	if !strings.Contains(result.Snippet, `event: async ({ event }`) {
+		t.Fatalf("expected native event handler in snippet: %q", result.Snippet)
+	}
+	if !strings.Contains(result.Snippet, `"permission.asked"`) {
+		t.Fatalf("expected permission event mapping in snippet: %q", result.Snippet)
+	}
+	if !strings.Contains(result.Snippet, `case "session.status":`) ||
+		!strings.Contains(result.Snippet, `case "session.updated":`) {
+		t.Fatalf("expected session status mappings in snippet: %q", result.Snippet)
+	}
+	if !strings.Contains(result.Snippet, `install-hooks", "kilo"`) {
+		t.Fatalf("expected self-refresh install command in snippet: %q", result.Snippet)
+	}
+	if !strings.Contains(result.Snippet, `"--harness", "kilo"`) {
+		t.Fatalf("expected kilo report command in snippet: %q", result.Snippet)
+	}
+	if !strings.Contains(result.Snippet, `"kilo_status"`) ||
+		!strings.Contains(result.Snippet, `"agent_sessions_integration", "kilo-plugin"`) {
+		t.Fatalf("expected kilo attributes in snippet: %q", result.Snippet)
+	}
+}
+
+func TestInstallKiloReplacesManagedPlugin(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	path := filepath.Join(dir, "kilo", "plugin", kiloPluginName)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatalf("creating kilo plugin dir: %v", err)
+	}
+	oldPlugin := `"agent-sessions managed integration";
+const old = "old-agent-sessions";
+`
+	if err := os.WriteFile(path, []byte(oldPlugin), 0o600); err != nil {
+		t.Fatalf("writing old plugin: %v", err)
+	}
+
+	result, err := Run(Options{
+		Harness:      registry.HarnessKilo,
+		Binary:       testInstallBinary,
+		TargetBinary: "",
+		DryRun:       false,
+		Force:        false,
+		UseShim:      false,
+	})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("expected kilo install to replace old managed plugin")
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading installed plugin: %v", err)
+	}
+	text := string(data)
+	if strings.Contains(text, "old-agent-sessions") {
+		t.Fatalf("expected old managed plugin to be removed: %s", text)
+	}
+	if !strings.Contains(text, `install-hooks", "kilo"`) {
+		t.Fatalf("expected self-refresh install command in plugin: %s", text)
+	}
+
+	second, err := Run(Options{
+		Harness:      registry.HarnessKilo,
+		Binary:       testInstallBinary,
+		TargetBinary: "",
+		DryRun:       false,
+		Force:        false,
+		UseShim:      false,
+	})
+	if err != nil {
+		t.Fatalf("second Run returned error: %v", err)
+	}
+	if second.Changed {
+		t.Fatal("expected second kilo install to be idempotent")
+	}
+}
+
 func TestInstallGrokWritesHooks(t *testing.T) {
 	t.Setenv("GROK_HOME", t.TempDir())
 
