@@ -1,9 +1,6 @@
 package install
 
 import (
-	"encoding/json"
-	"fmt"
-	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,53 +11,17 @@ import (
 const claudeIntegrationSource = "claude-hook"
 
 func installClaude(options Options) (Result, error) {
-	path := filepath.Join(claudeConfigDir(), "settings.json")
-
-	config, err := readJSONObject(path)
-	if err != nil {
-		return Result{}, err
-	}
-
-	changed := false
-	for _, hook := range claudeHooks(options.Binary) {
-		updated := upsertClaudeHook(config, hook.event, hook.matcher, hook.command)
-		changed = changed || updated
-	}
-
-	data, err := json.MarshalIndent(config, "", "  ")
-	if err != nil {
-		return Result{}, fmt.Errorf("encoding claude hooks: %w", err)
-	}
-	data = append(data, '\n')
-
-	if changed && !options.DryRun {
-		mkdirErr := os.MkdirAll(filepath.Dir(path), 0o700)
-		if mkdirErr != nil {
-			return Result{}, fmt.Errorf("creating claude config directory: %w", mkdirErr)
-		}
-
-		writeErr := os.WriteFile(path, data, 0o600)
-		if writeErr != nil {
-			return Result{}, fmt.Errorf("writing claude hooks: %w", writeErr)
-		}
-	}
-
-	message := "claude hooks already installed"
-	if changed {
-		message = "claude hooks installed"
-	}
-	if options.DryRun {
-		message = "dry run: claude hooks not written"
-	}
-
-	return Result{
-		Harness: string(options.Harness),
-		Path:    path,
-		Changed: changed,
-		Message: message,
-		Snippet: string(data),
-		Error:   "",
-	}, nil
+	return installJSONHookFile(options, jsonHookFileInstall{
+		Harness:                 registry.HarnessClaude,
+		Path:                    filepath.Join(claudeConfigDir(), "settings.json"),
+		Apply:                   applyClaudeHooks(options.Binary),
+		EncodeError:             "encoding claude hooks",
+		CreateDirError:          "creating claude config directory",
+		WriteError:              "writing claude hooks",
+		InstalledMessage:        "claude hooks installed",
+		AlreadyInstalledMessage: "claude hooks already installed",
+		DryRunMessage:           "dry run: claude hooks not written",
+	})
 }
 
 type claudeHook struct {
@@ -72,9 +33,9 @@ type claudeHook struct {
 func claudeHooks(binary string) []claudeHook {
 	return []claudeHook{
 		{
-			event:   "SessionStart",
+			event:   hookEventSessionStart,
 			matcher: "startup|resume|clear|compact",
-			command: claudeSessionStartCommand(binary, registry.StateIdle, "SessionStart"),
+			command: claudeSessionStartCommand(binary, registry.StateIdle, hookEventSessionStart),
 		},
 		{
 			event:   "UserPromptSubmit",
@@ -87,9 +48,9 @@ func claudeHooks(binary string) []claudeHook {
 			command: claudeHookCommand(binary, registry.StateWaiting, "Notification"),
 		},
 		{
-			event:   "Stop",
+			event:   hookEventStop,
 			matcher: "",
-			command: claudeHookCommand(binary, registry.StateIdle, "Stop"),
+			command: claudeHookCommand(binary, registry.StateIdle, hookEventStop),
 		},
 		{
 			event:   "SessionEnd",
@@ -114,101 +75,23 @@ func claudeSessionStartCommand(binary string, state registry.State, event string
 	return selfRefresh + " " + claudeHookCommand(binary, state, event)
 }
 
-func upsertClaudeHook(config map[string]any, event string, matcher string, command string) bool {
-	hooks, ok := config["hooks"].(map[string]any)
-	if !ok {
-		hooks = make(map[string]any)
-		config["hooks"] = hooks
+func applyClaudeHooks(binary string) func(map[string]any) bool {
+	return func(config map[string]any) bool {
+		changed := false
+		for _, hook := range claudeHooks(binary) {
+			updated := upsertManagedCommandHookGroup(
+				config,
+				hook.event,
+				hook.matcher,
+				hook.command,
+				managedMarker,
+				isManagedClaudeHookCommand,
+			)
+			changed = changed || updated
+		}
+
+		return changed
 	}
-
-	groups, ok := hooks[event].([]any)
-	if !ok {
-		groups = nil
-	}
-
-	managedCount, exactCount := countManagedClaudeHooks(groups, command)
-	if managedCount == 1 && exactCount == 1 {
-		return false
-	}
-
-	groups, _ = removeManagedClaudeHooks(groups)
-	hooks[event] = append(groups, commandHookGroup(command, matcher, managedMarker))
-
-	return true
-}
-
-func countManagedClaudeHooks(groups []any, command string) (int, int) {
-	managedCount := 0
-	exactCount := 0
-	for _, groupValue := range groups {
-		group, ok := groupValue.(map[string]any)
-		if !ok {
-			continue
-		}
-		hookValues, ok := group["hooks"].([]any)
-		if !ok {
-			continue
-		}
-		for _, hookValue := range hookValues {
-			hook, hookOK := hookValue.(map[string]any)
-			if !hookOK {
-				continue
-			}
-			hookCommand, commandOK := hook["command"].(string)
-			if !commandOK || !isManagedClaudeHookCommand(hookCommand) {
-				continue
-			}
-			managedCount++
-			if hookCommand == command {
-				exactCount++
-			}
-		}
-	}
-
-	return managedCount, exactCount
-}
-
-func removeManagedClaudeHooks(groups []any) ([]any, bool) {
-	cleanedGroups := make([]any, 0, len(groups))
-	removed := false
-	for _, groupValue := range groups {
-		group, ok := groupValue.(map[string]any)
-		if !ok {
-			cleanedGroups = append(cleanedGroups, groupValue)
-			continue
-		}
-		hookValues, ok := group["hooks"].([]any)
-		if !ok {
-			cleanedGroups = append(cleanedGroups, groupValue)
-			continue
-		}
-
-		cleanedHooks := make([]any, 0, len(hookValues))
-		for _, hookValue := range hookValues {
-			hook, hookOK := hookValue.(map[string]any)
-			if !hookOK {
-				cleanedHooks = append(cleanedHooks, hookValue)
-				continue
-			}
-			hookCommand, commandOK := hook["command"].(string)
-			if commandOK && isManagedClaudeHookCommand(hookCommand) {
-				removed = true
-				continue
-			}
-			cleanedHooks = append(cleanedHooks, hookValue)
-		}
-		if len(cleanedHooks) == 0 {
-			removed = true
-			continue
-		}
-
-		cleanedGroup := make(map[string]any, len(group))
-		maps.Copy(cleanedGroup, group)
-		cleanedGroup["hooks"] = cleanedHooks
-		cleanedGroups = append(cleanedGroups, cleanedGroup)
-	}
-
-	return cleanedGroups, removed
 }
 
 func isManagedClaudeHookCommand(command string) bool {

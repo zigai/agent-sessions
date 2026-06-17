@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,53 +15,17 @@ import (
 const hookTimeoutSeconds = 5
 
 func installCodex(options Options) (Result, error) {
-	path := filepath.Join(codexHome(), "hooks.json")
-
-	config, err := readJSONObject(path)
-	if err != nil {
-		return Result{}, err
-	}
-
-	changed := false
-	for _, hook := range codexHooks(options.Binary) {
-		updated := upsertCodexHook(config, hook.event, hook.matcher, hook.command)
-		changed = changed || updated
-	}
-
-	data, err := json.MarshalIndent(config, "", "  ")
-	if err != nil {
-		return Result{}, fmt.Errorf("encoding codex hooks: %w", err)
-	}
-	data = append(data, '\n')
-
-	if changed && !options.DryRun {
-		mkdirErr := os.MkdirAll(filepath.Dir(path), 0o700)
-		if mkdirErr != nil {
-			return Result{}, fmt.Errorf("creating codex config directory: %w", mkdirErr)
-		}
-
-		writeErr := os.WriteFile(path, data, 0o600)
-		if writeErr != nil {
-			return Result{}, fmt.Errorf("writing codex hooks: %w", writeErr)
-		}
-	}
-
-	message := "codex hooks already installed"
-	if changed {
-		message = "codex hooks installed"
-	}
-	if options.DryRun {
-		message = "dry run: codex hooks not written"
-	}
-
-	return Result{
-		Harness: string(options.Harness),
-		Path:    path,
-		Changed: changed,
-		Message: message,
-		Snippet: string(data),
-		Error:   "",
-	}, nil
+	return installJSONHookFile(options, jsonHookFileInstall{
+		Harness:                 registry.HarnessCodex,
+		Path:                    filepath.Join(codexHome(), "hooks.json"),
+		Apply:                   applyCodexHooks(options.Binary),
+		EncodeError:             "encoding codex hooks",
+		CreateDirError:          "creating codex config directory",
+		WriteError:              "writing codex hooks",
+		InstalledMessage:        "codex hooks installed",
+		AlreadyInstalledMessage: "codex hooks already installed",
+		DryRunMessage:           "dry run: codex hooks not written",
+	})
 }
 
 type codexHook struct {
@@ -74,9 +37,9 @@ type codexHook struct {
 func codexHooks(binary string) []codexHook {
 	return []codexHook{
 		{
-			event:   "SessionStart",
+			event:   hookEventSessionStart,
 			matcher: "startup|resume|clear|compact",
-			command: codexHookCommand(binary, registry.StateIdle, "SessionStart"),
+			command: codexHookCommand(binary, registry.StateIdle, hookEventSessionStart),
 		},
 		{
 			event:   "UserPromptSubmit",
@@ -89,9 +52,9 @@ func codexHooks(binary string) []codexHook {
 			command: codexHookCommand(binary, registry.StateWaiting, "PermissionRequest"),
 		},
 		{
-			event:   "Stop",
+			event:   hookEventStop,
 			matcher: "",
-			command: codexHookCommand(binary, registry.StateIdle, "Stop"),
+			command: codexHookCommand(binary, registry.StateIdle, hookEventStop),
 		},
 	}
 }
@@ -100,101 +63,23 @@ func codexHookCommand(binary string, state registry.State, event string) string 
 	return reportHookCommand(binary, registry.HarnessCodex, state, event, "codex-hook")
 }
 
-func upsertCodexHook(config map[string]any, event string, matcher string, command string) bool {
-	hooks, ok := config["hooks"].(map[string]any)
-	if !ok {
-		hooks = make(map[string]any)
-		config["hooks"] = hooks
+func applyCodexHooks(binary string) func(map[string]any) bool {
+	return func(config map[string]any) bool {
+		changed := false
+		for _, hook := range codexHooks(binary) {
+			updated := upsertManagedCommandHookGroup(
+				config,
+				hook.event,
+				hook.matcher,
+				hook.command,
+				"Recording agent session",
+				isManagedCodexHookCommand,
+			)
+			changed = changed || updated
+		}
+
+		return changed
 	}
-
-	groups, ok := hooks[event].([]any)
-	if !ok {
-		groups = nil
-	}
-
-	managedCount, exactCount := countManagedCodexHooks(groups, command)
-	if managedCount == 1 && exactCount == 1 {
-		return false
-	}
-
-	groups, _ = removeManagedCodexHooks(groups)
-	hooks[event] = append(groups, commandHookGroup(command, matcher, "Recording agent session"))
-
-	return true
-}
-
-func countManagedCodexHooks(groups []any, command string) (int, int) {
-	managedCount := 0
-	exactCount := 0
-	for _, groupValue := range groups {
-		group, ok := groupValue.(map[string]any)
-		if !ok {
-			continue
-		}
-		hookValues, ok := group["hooks"].([]any)
-		if !ok {
-			continue
-		}
-		for _, hookValue := range hookValues {
-			hook, hookOK := hookValue.(map[string]any)
-			if !hookOK {
-				continue
-			}
-			hookCommand, commandOK := hook["command"].(string)
-			if !commandOK || !isManagedCodexHookCommand(hookCommand) {
-				continue
-			}
-			managedCount++
-			if hookCommand == command {
-				exactCount++
-			}
-		}
-	}
-
-	return managedCount, exactCount
-}
-
-func removeManagedCodexHooks(groups []any) ([]any, bool) {
-	cleanedGroups := make([]any, 0, len(groups))
-	removed := false
-	for _, groupValue := range groups {
-		group, ok := groupValue.(map[string]any)
-		if !ok {
-			cleanedGroups = append(cleanedGroups, groupValue)
-			continue
-		}
-		hookValues, ok := group["hooks"].([]any)
-		if !ok {
-			cleanedGroups = append(cleanedGroups, groupValue)
-			continue
-		}
-
-		cleanedHooks := make([]any, 0, len(hookValues))
-		for _, hookValue := range hookValues {
-			hook, hookOK := hookValue.(map[string]any)
-			if !hookOK {
-				cleanedHooks = append(cleanedHooks, hookValue)
-				continue
-			}
-			hookCommand, commandOK := hook["command"].(string)
-			if commandOK && isManagedCodexHookCommand(hookCommand) {
-				removed = true
-				continue
-			}
-			cleanedHooks = append(cleanedHooks, hookValue)
-		}
-		if len(cleanedHooks) == 0 {
-			removed = true
-			continue
-		}
-
-		cleanedGroup := make(map[string]any, len(group))
-		maps.Copy(cleanedGroup, group)
-		cleanedGroup["hooks"] = cleanedHooks
-		cleanedGroups = append(cleanedGroups, cleanedGroup)
-	}
-
-	return cleanedGroups, removed
 }
 
 func isManagedCodexHookCommand(command string) bool {

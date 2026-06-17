@@ -1,8 +1,6 @@
 package install
 
 import (
-	"encoding/json"
-	"fmt"
 	"maps"
 	"os"
 	"path/filepath"
@@ -14,53 +12,17 @@ import (
 const cursorIntegrationSource = "cursor-hook"
 
 func installCursor(options Options) (Result, error) {
-	path := filepath.Join(cursorHome(), "hooks.json")
-
-	config, err := readJSONObject(path)
-	if err != nil {
-		return Result{}, err
-	}
-
-	changed := ensureCursorVersion(config)
-	for _, hook := range cursorHooks(options.Binary) {
-		updated := upsertCursorHook(config, hook.event, hook.command)
-		changed = changed || updated
-	}
-
-	data, err := json.MarshalIndent(config, "", "  ")
-	if err != nil {
-		return Result{}, fmt.Errorf("encoding cursor hooks: %w", err)
-	}
-	data = append(data, '\n')
-
-	if changed && !options.DryRun {
-		mkdirErr := os.MkdirAll(filepath.Dir(path), 0o700)
-		if mkdirErr != nil {
-			return Result{}, fmt.Errorf("creating cursor config directory: %w", mkdirErr)
-		}
-
-		writeErr := os.WriteFile(path, data, 0o600)
-		if writeErr != nil {
-			return Result{}, fmt.Errorf("writing cursor hooks: %w", writeErr)
-		}
-	}
-
-	message := "cursor hooks already installed"
-	if changed {
-		message = "cursor hooks installed"
-	}
-	if options.DryRun {
-		message = "dry run: cursor hooks not written"
-	}
-
-	return Result{
-		Harness: string(registry.HarnessCursor),
-		Path:    path,
-		Changed: changed,
-		Message: message,
-		Snippet: string(data),
-		Error:   "",
-	}, nil
+	return installJSONHookFile(options, jsonHookFileInstall{
+		Harness:                 registry.HarnessCursor,
+		Path:                    filepath.Join(cursorHome(), "hooks.json"),
+		Apply:                   applyCursorHooks(options.Binary),
+		EncodeError:             "encoding cursor hooks",
+		CreateDirError:          "creating cursor config directory",
+		WriteError:              "writing cursor hooks",
+		InstalledMessage:        "cursor hooks installed",
+		AlreadyInstalledMessage: "cursor hooks already installed",
+		DryRunMessage:           "dry run: cursor hooks not written",
+	})
 }
 
 type cursorHook struct {
@@ -121,6 +83,18 @@ func ensureCursorVersion(config map[string]any) bool {
 	config["version"] = float64(1)
 
 	return true
+}
+
+func applyCursorHooks(binary string) func(map[string]any) bool {
+	return func(config map[string]any) bool {
+		changed := ensureCursorVersion(config)
+		for _, hook := range cursorHooks(binary) {
+			updated := upsertCursorHook(config, hook.event, hook.command)
+			changed = changed || updated
+		}
+
+		return changed
+	}
 }
 
 func upsertCursorHook(config map[string]any, event string, command string) bool {

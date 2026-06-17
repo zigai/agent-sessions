@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/zigai/agent-sessions/pkg/registry"
@@ -26,12 +27,8 @@ func installAgy(options Options) (Result, error) {
 		return Result{}, err
 	}
 
-	managed, err := agyPluginManaged(dir)
-	if err != nil {
-		return Result{}, err
-	}
-	if !managed && !options.Force {
-		return Result{}, fmt.Errorf("%w: %s; pass --force to replace it", errForeignFile, dir)
+	if guardErr := ensureAgyPluginManaged(dir, options.Force); guardErr != nil {
+		return Result{}, guardErr
 	}
 
 	changed, err := agyPluginNeedsUpdate(dir, files)
@@ -40,36 +37,57 @@ func installAgy(options Options) (Result, error) {
 	}
 
 	if changed && !options.DryRun {
-		mkdirErr := os.MkdirAll(dir, 0o700)
-		if mkdirErr != nil {
-			return Result{}, fmt.Errorf("creating agy plugin directory: %w", mkdirErr)
+		if writeErr := writeAgyPluginFiles(dir, files); writeErr != nil {
+			return Result{}, writeErr
 		}
-
-		for name, content := range files {
-			path := filepath.Join(dir, name)
-			writeErr := os.WriteFile(path, []byte(content), 0o600)
-			if writeErr != nil {
-				return Result{}, fmt.Errorf("writing agy plugin file %s: %w", path, writeErr)
-			}
-		}
-	}
-
-	message := "agy plugin installed"
-	if !changed {
-		message = "agy plugin already installed"
-	}
-	if options.DryRun {
-		message = "dry run: agy plugin not written"
 	}
 
 	return Result{
 		Harness: string(registry.HarnessAgy),
 		Path:    dir,
 		Changed: changed,
-		Message: message,
+		Message: agyInstallMessage(changed, options.DryRun),
 		Snippet: agyPluginSnippet(files),
 		Error:   "",
 	}, nil
+}
+
+func ensureAgyPluginManaged(dir string, force bool) error {
+	managed, err := agyPluginManaged(dir)
+	if err != nil {
+		return err
+	}
+	if !managed && !force {
+		return fmt.Errorf("%w: %s; pass --force to replace it", errForeignFile, dir)
+	}
+
+	return nil
+}
+
+func writeAgyPluginFiles(dir string, files map[string]string) error {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("creating agy plugin directory: %w", err)
+	}
+
+	for name, content := range files {
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			return fmt.Errorf("writing agy plugin file %s: %w", path, err)
+		}
+	}
+
+	return nil
+}
+
+func agyInstallMessage(changed bool, dryRun bool) string {
+	if dryRun {
+		return "dry run: agy plugin not written"
+	}
+	if !changed {
+		return "agy plugin already installed"
+	}
+
+	return "agy plugin installed"
 }
 
 func agyPluginFiles(binary string) (map[string]string, error) {
@@ -99,7 +117,7 @@ func agyHookConfig(binary string) map[string]any {
 			"PostInvocation": []any{agyHookHandler(binary, "PostInvocation")},
 			"PreToolUse":     []any{agyToolHookGroup(binary, "PreToolUse")},
 			"PostToolUse":    []any{agyToolHookGroup(binary, "PostToolUse")},
-			"Stop":           []any{agyHookHandler(binary, "Stop")},
+			hookEventStop:    []any{agyHookHandler(binary, hookEventStop)},
 		},
 	}
 }
@@ -187,7 +205,7 @@ func agyMarkerContent() string {
 	return strings.Join([]string{
 		managedMarker,
 		"AGENT_SESSIONS_INTEGRATION_ID=" + agyIntegrationID,
-		"AGENT_SESSIONS_INTEGRATION_VERSION=" + fmt.Sprint(agyIntegrationVersion),
+		"AGENT_SESSIONS_INTEGRATION_VERSION=" + strconv.Itoa(agyIntegrationVersion),
 		"AGENT_SESSIONS_SOURCE=" + agyIntegrationSource,
 		"",
 	}, "\n")

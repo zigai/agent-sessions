@@ -68,15 +68,15 @@ type kimiCodeHookSpec struct {
 func kimiCodeHookBlock(binary string) string {
 	specs := []kimiCodeHookSpec{
 		{
-			event:   "SessionStart",
+			event:   hookEventSessionStart,
 			matcher: "startup|resume",
 			command: kimiCodeSelfRefreshCommand(binary),
 			timeout: hookTimeoutSeconds,
 		},
 		{
-			event:   "SessionStart",
+			event:   hookEventSessionStart,
 			matcher: "startup|resume",
-			command: kimiCodeHookCommand(binary, registry.StateIdle, "SessionStart"),
+			command: kimiCodeHookCommand(binary, registry.StateIdle, hookEventSessionStart),
 			timeout: hookTimeoutSeconds,
 		},
 		{
@@ -98,9 +98,9 @@ func kimiCodeHookBlock(binary string) string {
 			timeout: hookTimeoutSeconds,
 		},
 		{
-			event:   "Stop",
+			event:   hookEventStop,
 			matcher: "",
-			command: kimiCodeHookCommand(binary, registry.StateIdle, "Stop"),
+			command: kimiCodeHookCommand(binary, registry.StateIdle, hookEventStop),
 			timeout: hookTimeoutSeconds,
 		},
 		{

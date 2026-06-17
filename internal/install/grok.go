@@ -71,14 +71,14 @@ type grokHookSpec struct {
 func grokHookConfig(binary string) map[string]any {
 	specs := []grokHookSpec{
 		{
-			event:   "SessionStart",
+			event:   hookEventSessionStart,
 			matcher: "",
 			command: grokSelfRefreshCommand(binary),
 		},
 		{
-			event:   "SessionStart",
+			event:   hookEventSessionStart,
 			matcher: "",
-			command: grokHookCommand(binary, registry.StateIdle, "SessionStart"),
+			command: grokHookCommand(binary, registry.StateIdle, hookEventSessionStart),
 		},
 		{
 			event:   "UserPromptSubmit",
@@ -91,9 +91,9 @@ func grokHookConfig(binary string) map[string]any {
 			command: grokHookCommand(binary, registry.StateWaiting, "Notification"),
 		},
 		{
-			event:   "Stop",
+			event:   hookEventStop,
 			matcher: "",
-			command: grokHookCommand(binary, registry.StateIdle, "Stop"),
+			command: grokHookCommand(binary, registry.StateIdle, hookEventStop),
 		},
 		{
 			event:   "SessionEnd",

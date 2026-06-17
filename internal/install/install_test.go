@@ -46,7 +46,7 @@ func TestInstallCodexMergesHooks(t *testing.T) {
 	if !hooksOK {
 		t.Fatal("expected hooks object")
 	}
-	_, hasSessionStart := hooks["SessionStart"]
+	_, hasSessionStart := hooks[hookEventSessionStart]
 	if !hasSessionStart {
 		t.Fatal("expected SessionStart hook")
 	}
@@ -68,47 +68,14 @@ func TestInstallCodexReplacesManagedHooks(t *testing.T) {
 		t.Fatalf("writing old hooks: %v", err)
 	}
 
-	result, err := Run(Options{
-		Harness:      registry.HarnessCodex,
-		Binary:       testInstallBinary,
-		TargetBinary: "",
-		DryRun:       false,
-		Force:        false,
-		UseShim:      false,
+	requireManagedReplacement(t, managedReplacementCase{
+		Harness:              registry.HarnessCodex,
+		Path:                 path,
+		RemovedText:          "old-agent-sessions",
+		RequiredText:         []string{"--raw-stdin", "--quiet"},
+		FirstChangeMessage:   "expected codex install to replace old managed hook",
+		SecondChangedMessage: "expected second codex install to be idempotent",
 	})
-	if err != nil {
-		t.Fatalf("Run returned error: %v", err)
-	}
-	if !result.Changed {
-		t.Fatal("expected codex install to replace old managed hook")
-	}
-
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("reading installed hooks: %v", err)
-	}
-	text := string(data)
-	if strings.Contains(text, "old-agent-sessions") {
-		t.Fatalf("expected old managed hook to be removed: %s", text)
-	}
-	if !strings.Contains(text, "--raw-stdin") || !strings.Contains(text, "--quiet") {
-		t.Fatalf("expected stdin-aware quiet codex hook: %s", text)
-	}
-
-	second, err := Run(Options{
-		Harness:      registry.HarnessCodex,
-		Binary:       testInstallBinary,
-		TargetBinary: "",
-		DryRun:       false,
-		Force:        false,
-		UseShim:      false,
-	})
-	if err != nil {
-		t.Fatalf("second Run returned error: %v", err)
-	}
-	if second.Changed {
-		t.Fatal("expected second codex install to be idempotent")
-	}
 }
 
 func TestInstallClaudeWritesHooks(t *testing.T) {
@@ -144,7 +111,7 @@ func TestInstallClaudeWritesHooks(t *testing.T) {
 	if !hooksOK {
 		t.Fatal("expected hooks object")
 	}
-	for _, event := range []string{"SessionStart", "UserPromptSubmit", "Notification", "Stop", "SessionEnd"} {
+	for _, event := range []string{hookEventSessionStart, "UserPromptSubmit", "Notification", hookEventStop, "SessionEnd"} {
 		if _, ok := hooks[event]; !ok {
 			t.Fatalf("expected %s hook", event)
 		}
@@ -174,47 +141,14 @@ func TestInstallClaudeReplacesManagedHooks(t *testing.T) {
 		t.Fatalf("writing old hooks: %v", err)
 	}
 
-	result, err := Run(Options{
-		Harness:      registry.HarnessClaude,
-		Binary:       testInstallBinary,
-		TargetBinary: "",
-		DryRun:       false,
-		Force:        false,
-		UseShim:      false,
+	requireManagedReplacement(t, managedReplacementCase{
+		Harness:              registry.HarnessClaude,
+		Path:                 path,
+		RemovedText:          "old-agent-sessions",
+		RequiredText:         []string{"install-hooks", "claude"},
+		FirstChangeMessage:   "expected claude install to replace old managed hook",
+		SecondChangedMessage: "expected second claude install to be idempotent",
 	})
-	if err != nil {
-		t.Fatalf("Run returned error: %v", err)
-	}
-	if !result.Changed {
-		t.Fatal("expected claude install to replace old managed hook")
-	}
-
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("reading installed hooks: %v", err)
-	}
-	text := string(data)
-	if strings.Contains(text, "old-agent-sessions") {
-		t.Fatalf("expected old managed hook to be removed: %s", text)
-	}
-	if !strings.Contains(text, "install-hooks") || !strings.Contains(text, "claude") {
-		t.Fatalf("expected self-refresh hook in snippet: %s", text)
-	}
-
-	second, err := Run(Options{
-		Harness:      registry.HarnessClaude,
-		Binary:       testInstallBinary,
-		TargetBinary: "",
-		DryRun:       false,
-		Force:        false,
-		UseShim:      false,
-	})
-	if err != nil {
-		t.Fatalf("second Run returned error: %v", err)
-	}
-	if second.Changed {
-		t.Fatal("expected second claude install to be idempotent")
-	}
 }
 
 func TestInstallCursorWritesHooks(t *testing.T) {
@@ -239,39 +173,31 @@ func TestInstallCursorWritesHooks(t *testing.T) {
 		t.Fatalf("unexpected path %q", result.Path)
 	}
 
-	data, err := os.ReadFile(result.Path)
-	if err != nil {
-		t.Fatalf("reading installed hooks: %v", err)
-	}
-
-	var config map[string]any
-	unmarshalErr := json.Unmarshal(data, &config)
-	if unmarshalErr != nil {
-		t.Fatalf("installed hooks are not valid JSON: %v", unmarshalErr)
-	}
+	data := readTestFile(t, result.Path, "reading installed hooks")
+	config := decodeTestJSONObject(t, data, "installed hooks")
 	if config["version"] != float64(1) {
 		t.Fatalf("expected cursor hooks version 1, got %#v", config["version"])
 	}
 
-	hooks, hooksOK := config["hooks"].(map[string]any)
-	if !hooksOK {
-		t.Fatal("expected hooks object")
-	}
-	for _, event := range []string{"sessionStart", "beforeSubmitPrompt", "beforeShellExecution", "afterShellExecution", "stop", "sessionEnd"} {
-		if _, ok := hooks[event]; !ok {
-			t.Fatalf("expected %s hook", event)
-		}
-	}
+	hooks := requireTestHooks(t, config)
+	requireTestHookEvents(t, hooks, []string{
+		"sessionStart",
+		"beforeSubmitPrompt",
+		"beforeShellExecution",
+		"afterShellExecution",
+		"stop",
+		"sessionEnd",
+	})
 
 	text := string(data)
-	if !strings.Contains(text, "--raw-stdin-defaults-only") || strings.Contains(text, "--raw-stdin ") {
+	requireTextContainsAll(t, text, []string{
+		"--raw-stdin-defaults-only",
+		"agent_sessions_integration=cursor-hook",
+		"continue",
+		"permission",
+	}, "cursor hooks")
+	if strings.Contains(text, "--raw-stdin ") {
 		t.Fatalf("expected defaults-only cursor hook commands: %s", text)
-	}
-	if !strings.Contains(text, "agent_sessions_integration=cursor-hook") {
-		t.Fatalf("expected managed cursor hook marker: %s", text)
-	}
-	if !strings.Contains(text, "continue") || !strings.Contains(text, "permission") {
-		t.Fatalf("expected non-blocking cursor hook responses: %s", text)
 	}
 }
 
@@ -471,32 +397,18 @@ func TestInstallKiloWritesPlugin(t *testing.T) {
 	if result.Path != filepath.Join(dir, "kilo", "plugin", kiloPluginName) {
 		t.Fatalf("unexpected path %q", result.Path)
 	}
-	if !strings.Contains(result.Snippet, "AGENT_SESSIONS_INTEGRATION_ID=kilo") {
-		t.Fatalf("expected integration id in snippet: %q", result.Snippet)
-	}
-	if !strings.Contains(result.Snippet, `export default { id: "agent-sessions-state", server: AgentSessionsPlugin };`) {
-		t.Fatalf("expected kilo plugin default export in snippet: %q", result.Snippet)
-	}
-	if !strings.Contains(result.Snippet, `event: async ({ event }`) {
-		t.Fatalf("expected native event handler in snippet: %q", result.Snippet)
-	}
-	if !strings.Contains(result.Snippet, `"permission.asked"`) {
-		t.Fatalf("expected permission event mapping in snippet: %q", result.Snippet)
-	}
-	if !strings.Contains(result.Snippet, `case "session.status":`) ||
-		!strings.Contains(result.Snippet, `case "session.updated":`) {
-		t.Fatalf("expected session status mappings in snippet: %q", result.Snippet)
-	}
-	if !strings.Contains(result.Snippet, `install-hooks", "kilo"`) {
-		t.Fatalf("expected self-refresh install command in snippet: %q", result.Snippet)
-	}
-	if !strings.Contains(result.Snippet, `"--harness", "kilo"`) {
-		t.Fatalf("expected kilo report command in snippet: %q", result.Snippet)
-	}
-	if !strings.Contains(result.Snippet, `"kilo_status"`) ||
-		!strings.Contains(result.Snippet, `"agent_sessions_integration", "kilo-plugin"`) {
-		t.Fatalf("expected kilo attributes in snippet: %q", result.Snippet)
-	}
+	requireTextContainsAll(t, result.Snippet, []string{
+		"AGENT_SESSIONS_INTEGRATION_ID=kilo",
+		`export default { id: "agent-sessions-state", server: AgentSessionsPlugin };`,
+		`event: async ({ event }`,
+		`"permission.asked"`,
+		`case "session.status":`,
+		`case "session.updated":`,
+		`install-hooks", "kilo"`,
+		`"--harness", "kilo"`,
+		`"kilo_status"`,
+		`"agent_sessions_integration", "kilo-plugin"`,
+	}, "kilo snippet")
 }
 
 func TestInstallKiloReplacesManagedPlugin(t *testing.T) {
@@ -577,47 +489,10 @@ func TestInstallAgyWritesPlugin(t *testing.T) {
 	if result.Path != filepath.Join(dir, "plugins", agyPluginName) {
 		t.Fatalf("unexpected path %q", result.Path)
 	}
-	if !strings.Contains(result.Snippet, "agy-hook") {
-		t.Fatalf("expected agy hook command in snippet: %q", result.Snippet)
-	}
-
-	manifestData, err := os.ReadFile(filepath.Join(result.Path, "plugin.json"))
-	if err != nil {
-		t.Fatalf("reading plugin manifest: %v", err)
-	}
-	var manifest map[string]any
-	if err := json.Unmarshal(manifestData, &manifest); err != nil {
-		t.Fatalf("plugin manifest is not valid JSON: %v", err)
-	}
-	if manifest["name"] != agyPluginName {
-		t.Fatalf("expected plugin name %q, got %#v", agyPluginName, manifest["name"])
-	}
-
-	hooksData, err := os.ReadFile(filepath.Join(result.Path, "hooks.json"))
-	if err != nil {
-		t.Fatalf("reading agy hooks: %v", err)
-	}
-	var hooks map[string]any
-	if err := json.Unmarshal(hooksData, &hooks); err != nil {
-		t.Fatalf("agy hooks are not valid JSON: %v", err)
-	}
-	pluginHooks, ok := hooks[agyPluginName].(map[string]any)
-	if !ok {
-		t.Fatalf("expected %s hook namespace, got %#v", agyPluginName, hooks)
-	}
-	for _, event := range []string{"PreInvocation", "PostInvocation", "PreToolUse", "PostToolUse", "Stop"} {
-		if _, ok := pluginHooks[event]; !ok {
-			t.Fatalf("expected %s hook", event)
-		}
-	}
-
-	marker, err := os.ReadFile(filepath.Join(result.Path, agyMarkerFileName))
-	if err != nil {
-		t.Fatalf("reading agy marker: %v", err)
-	}
-	if !strings.Contains(string(marker), managedMarker) {
-		t.Fatalf("expected managed marker, got %q", marker)
-	}
+	requireTextContainsAll(t, result.Snippet, []string{"agy-hook"}, "agy snippet")
+	requireAgyPluginManifest(t, result.Path)
+	requireAgyPluginHooks(t, result.Path)
+	requireAgyPluginMarker(t, result.Path)
 
 	second, err := Run(Options{
 		Harness:      registry.HarnessAgy,
@@ -702,11 +577,11 @@ func TestInstallKimiCodeWritesHooks(t *testing.T) {
 	}
 	text := string(data)
 	for _, event := range []string{
-		"SessionStart",
+		hookEventSessionStart,
 		"UserPromptSubmit",
 		"PermissionRequest",
 		"PermissionResult",
-		"Stop",
+		hookEventStop,
 		"StopFailure",
 		"Interrupt",
 		"SessionEnd",
@@ -753,7 +628,7 @@ func TestInstallKimiCodeReplacesManagedBlockAndPreservesConfig(t *testing.T) {
 		"",
 		kimiCodeManagedStart,
 		"[[hooks]]",
-		`event = "SessionStart"`,
+		`event = "` + hookEventSessionStart + `"`,
 		`command = "old-agent-sessions report --harness kimi-code --source kimi-code-hook"`,
 		kimiCodeManagedEnd,
 		"",
@@ -828,10 +703,10 @@ func TestInstallKimiCodeDryRunDoesNotWrite(t *testing.T) {
 	if !result.Changed {
 		t.Fatal("expected kimi-code dry-run to report changed")
 	}
-	if !strings.Contains(result.Snippet, `event = "SessionStart"`) {
+	if !strings.Contains(result.Snippet, `event = "`+hookEventSessionStart+`"`) {
 		t.Fatalf("expected dry-run snippet to include Kimi hooks: %s", result.Snippet)
 	}
-	if _, err := os.Stat(result.Path); err == nil {
+	if _, statErr := os.Stat(result.Path); statErr == nil {
 		t.Fatalf("expected dry-run not to write %s", result.Path)
 	}
 }
@@ -869,7 +744,7 @@ func TestInstallGrokWritesHooks(t *testing.T) {
 	if !hooksOK {
 		t.Fatal("expected hooks object")
 	}
-	for _, event := range []string{"SessionStart", "UserPromptSubmit", "Stop", "SessionEnd", "Notification"} {
+	for _, event := range []string{hookEventSessionStart, "UserPromptSubmit", hookEventStop, "SessionEnd", "Notification"} {
 		if _, ok := hooks[event]; !ok {
 			t.Fatalf("expected %s hook", event)
 		}
@@ -1002,5 +877,139 @@ func TestInstallersMatchHarnessCatalog(t *testing.T) {
 		if _, ok := installers[harness]; !ok {
 			t.Fatalf("AllHarnesses contains %q without installer", harness)
 		}
+	}
+}
+
+type managedReplacementCase struct {
+	Harness              registry.Harness
+	Path                 string
+	RemovedText          string
+	RequiredText         []string
+	FirstChangeMessage   string
+	SecondChangedMessage string
+}
+
+func requireManagedReplacement(t *testing.T, test managedReplacementCase) {
+	t.Helper()
+
+	result, err := Run(Options{
+		Harness:      test.Harness,
+		Binary:       testInstallBinary,
+		TargetBinary: "",
+		DryRun:       false,
+		Force:        false,
+		UseShim:      false,
+	})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if !result.Changed {
+		t.Fatal(test.FirstChangeMessage)
+	}
+
+	text := string(readTestFile(t, test.Path, "reading installed hooks"))
+	if strings.Contains(text, test.RemovedText) {
+		t.Fatalf("expected old managed hook to be removed: %s", text)
+	}
+	requireTextContainsAll(t, text, test.RequiredText, "installed hooks")
+
+	second, err := Run(Options{
+		Harness:      test.Harness,
+		Binary:       testInstallBinary,
+		TargetBinary: "",
+		DryRun:       false,
+		Force:        false,
+		UseShim:      false,
+	})
+	if err != nil {
+		t.Fatalf("second Run returned error: %v", err)
+	}
+	if second.Changed {
+		t.Fatal(test.SecondChangedMessage)
+	}
+}
+
+func readTestFile(t *testing.T, path string, context string) []byte {
+	t.Helper()
+
+	data, readErr := os.ReadFile(path)
+	if readErr != nil {
+		t.Fatalf("%s: %v", context, readErr)
+	}
+
+	return data
+}
+
+func decodeTestJSONObject(t *testing.T, data []byte, context string) map[string]any {
+	t.Helper()
+
+	var config map[string]any
+	unmarshalErr := json.Unmarshal(data, &config)
+	if unmarshalErr != nil {
+		t.Fatalf("invalid JSON for %s: %v", context, unmarshalErr)
+	}
+
+	return config
+}
+
+func requireTestHooks(t *testing.T, config map[string]any) map[string]any {
+	t.Helper()
+
+	hooks, hooksOK := config["hooks"].(map[string]any)
+	if !hooksOK {
+		t.Fatal("expected hooks object")
+	}
+
+	return hooks
+}
+
+func requireTestHookEvents(t *testing.T, hooks map[string]any, events []string) {
+	t.Helper()
+
+	for _, event := range events {
+		if _, hasEvent := hooks[event]; !hasEvent {
+			t.Fatalf("expected %s hook", event)
+		}
+	}
+}
+
+func requireTextContainsAll(t *testing.T, text string, values []string, context string) {
+	t.Helper()
+
+	for _, value := range values {
+		if !strings.Contains(text, value) {
+			t.Fatalf("expected %q in %s: %s", value, context, text)
+		}
+	}
+}
+
+func requireAgyPluginManifest(t *testing.T, dir string) {
+	t.Helper()
+
+	manifestData := readTestFile(t, filepath.Join(dir, "plugin.json"), "reading plugin manifest")
+	manifest := decodeTestJSONObject(t, manifestData, "plugin manifest")
+	if manifest["name"] != agyPluginName {
+		t.Fatalf("expected plugin name %q, got %#v", agyPluginName, manifest["name"])
+	}
+}
+
+func requireAgyPluginHooks(t *testing.T, dir string) {
+	t.Helper()
+
+	hooksData := readTestFile(t, filepath.Join(dir, "hooks.json"), "reading agy hooks")
+	hooks := decodeTestJSONObject(t, hooksData, "agy hooks")
+	pluginHooks, hooksOK := hooks[agyPluginName].(map[string]any)
+	if !hooksOK {
+		t.Fatalf("expected %s hook namespace, got %#v", agyPluginName, hooks)
+	}
+	requireTestHookEvents(t, pluginHooks, []string{"PreInvocation", "PostInvocation", "PreToolUse", "PostToolUse", hookEventStop})
+}
+
+func requireAgyPluginMarker(t *testing.T, dir string) {
+	t.Helper()
+
+	marker := readTestFile(t, filepath.Join(dir, agyMarkerFileName), "reading agy marker")
+	if !strings.Contains(string(marker), managedMarker) {
+		t.Fatalf("expected managed marker, got %q", marker)
 	}
 }
