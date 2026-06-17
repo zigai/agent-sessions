@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 
+	harnesspkg "github.com/zigai/agent-sessions/pkg/harness"
 	"github.com/zigai/agent-sessions/pkg/registry"
 )
 
@@ -17,11 +18,16 @@ var (
 	errInstallFailed      = errors.New("one or more integrations failed to install")
 )
 
-var AllHarnesses = []registry.Harness{
-	registry.HarnessCodex,
-	registry.HarnessPi,
-	registry.HarnessOpenCode,
+type installer func(Options) (Result, error)
+
+var installers = map[registry.Harness]installer{
+	registry.HarnessCodex:    installCodex,
+	registry.HarnessGrok:     installGrok,
+	registry.HarnessPi:       installPi,
+	registry.HarnessOpenCode: installOpenCode,
 }
+
+var AllHarnesses = installableHarnesses()
 
 type Options struct {
 	Harness      registry.Harness
@@ -46,16 +52,12 @@ func Run(options Options) (Result, error) {
 		options.Binary = "agent-sessions"
 	}
 
-	switch options.Harness {
-	case registry.HarnessCodex:
-		return installCodex(options)
-	case registry.HarnessPi:
-		return installPi(options)
-	case registry.HarnessOpenCode:
-		return installOpenCode(options)
-	default:
+	installer, ok := installers[options.Harness]
+	if !ok {
 		return Result{}, fmt.Errorf("%w: %q", errUnsupportedHarness, options.Harness)
 	}
+
+	return installer(options)
 }
 
 func RunAll(options Options) ([]Result, error) {
@@ -87,6 +89,20 @@ func RunAll(options Options) ([]Result, error) {
 	}
 
 	return results, nil
+}
+
+func installableHarnesses() []registry.Harness {
+	harnesses := make([]registry.Harness, 0, len(installers))
+	for _, adapter := range harnesspkg.All() {
+		if !adapter.Installable {
+			continue
+		}
+		if _, ok := installers[adapter.ID]; ok {
+			harnesses = append(harnesses, adapter.ID)
+		}
+	}
+
+	return harnesses
 }
 
 func fileNeedsUpdate(path string, content string, force bool) (bool, error) {

@@ -97,17 +97,7 @@ func codexHooks(binary string) []codexHook {
 }
 
 func codexHookCommand(binary string, state registry.State, event string) string {
-	return strings.Join([]string{
-		shellQuote(binary),
-		"report",
-		"--harness", shellQuote(string(registry.HarnessCodex)),
-		"--state", shellQuote(string(state)),
-		"--event", shellQuote(event),
-		"--source", "codex-hook",
-		"--attribute", "agent_sessions_integration=codex-hook",
-		"--raw-stdin",
-		"--quiet",
-	}, " ")
+	return reportHookCommand(binary, registry.HarnessCodex, state, event, "codex-hook")
 }
 
 func upsertCodexHook(config map[string]any, event string, matcher string, command string) bool {
@@ -128,20 +118,7 @@ func upsertCodexHook(config map[string]any, event string, matcher string, comman
 	}
 
 	groups, _ = removeManagedCodexHooks(groups)
-	group := map[string]any{
-		"hooks": []any{
-			map[string]any{
-				"type":          "command",
-				"command":       command,
-				"timeout":       float64(hookTimeoutSeconds),
-				"statusMessage": "Recording agent session",
-			},
-		},
-	}
-	if matcher != "" {
-		group["matcher"] = matcher
-	}
-	hooks[event] = append(groups, group)
+	hooks[event] = append(groups, commandHookGroup(command, matcher, "Recording agent session"))
 
 	return true
 }

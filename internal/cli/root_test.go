@@ -21,6 +21,24 @@ func TestRootCommandHasUse(t *testing.T) {
 	}
 }
 
+func TestReportHelpListsSupportedHarnesses(t *testing.T) {
+	t.Parallel()
+
+	var output bytes.Buffer
+	cmd := NewRootCommand(&output, &bytes.Buffer{})
+	cmd.SetArgs([]string{"report", "--help"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("help command failed: %v", err)
+	}
+
+	got := output.String()
+	for _, harness := range []string{"codex", "grok", "pi", "opencode"} {
+		if !strings.Contains(got, harness) {
+			t.Fatalf("expected report help to include %s, got %q", harness, got)
+		}
+	}
+}
+
 func TestReportAndList(t *testing.T) {
 	t.Parallel()
 
@@ -257,6 +275,62 @@ func TestReportCodexHookPayloadQuiet(t *testing.T) {
 	}
 }
 
+func TestReportGrokHookPayloadQuiet(t *testing.T) {
+	t.Parallel()
+
+	storePath := filepath.Join(t.TempDir(), "state.json")
+	var reportOut bytes.Buffer
+	cmd := NewRootCommand(&reportOut, &bytes.Buffer{})
+	cmd.SetArgs([]string{
+		"--store", storePath,
+		"report",
+		"--harness", "grok",
+		"--state", "running",
+		"--source", "grok-hook",
+		"--raw-stdin",
+		"--quiet",
+		"--no-tmux",
+	})
+	cmd.SetIn(strings.NewReader(`{"sessionId":"grok-session","cwd":"/tmp","workspaceRoot":"/tmp","hookEventName":"UserPromptSubmit","toolName":"run_terminal_command"}`))
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("report command failed: %v", err)
+	}
+	if reportOut.String() != "" {
+		t.Fatalf("expected quiet report to suppress output, got %q", reportOut.String())
+	}
+
+	sessions, err := registry.NewFileStore(storePath).List(context.Background(), registry.Filter{
+		Harness:     registry.HarnessGrok,
+		State:       "",
+		TmuxSession: "",
+		ActiveOnly:  false,
+	})
+	if err != nil {
+		t.Fatalf("listing sessions: %v", err)
+	}
+	if len(sessions) != 1 {
+		t.Fatalf("expected one session, got %d", len(sessions))
+	}
+	if sessions[0].SessionID != "grok-session" {
+		t.Fatalf("expected grok session id, got %q", sessions[0].SessionID)
+	}
+	if sessions[0].CWD != "/tmp" {
+		t.Fatalf("expected grok cwd, got %q", sessions[0].CWD)
+	}
+	if sessions[0].Attributes["grok_hook_event"] != "UserPromptSubmit" {
+		t.Fatalf("expected grok hook event attribute, got %#v", sessions[0].Attributes)
+	}
+	if sessions[0].Attributes["grok_tool_name"] != "run_terminal_command" {
+		t.Fatalf("expected grok tool name attribute, got %#v", sessions[0].Attributes)
+	}
+	if sessions[0].LastEvent != "UserPromptSubmit" {
+		t.Fatalf("expected grok last event, got %q", sessions[0].LastEvent)
+	}
+	if sessions[0].LastEventAt.IsZero() || sessions[0].StateChangedAt.IsZero() {
+		t.Fatalf("expected event and state timestamps, got event_at=%s state_changed_at=%s", sessions[0].LastEventAt, sessions[0].StateChangedAt)
+	}
+}
+
 func TestDefaultInstallBinaryIsAbsolute(t *testing.T) {
 	t.Parallel()
 
@@ -268,6 +342,7 @@ func TestDefaultInstallBinaryIsAbsolute(t *testing.T) {
 
 func TestInstallHooksAll(t *testing.T) {
 	t.Setenv("CODEX_HOME", t.TempDir())
+	t.Setenv("GROK_HOME", t.TempDir())
 	t.Setenv("PI_CODING_AGENT_DIR", t.TempDir())
 	t.Setenv("AGENT_SESSIONS_STATE_DIR", t.TempDir())
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
@@ -285,7 +360,7 @@ func TestInstallHooksAll(t *testing.T) {
 	}
 
 	got := output.String()
-	for _, harness := range []string{"codex", "pi", "opencode"} {
+	for _, harness := range []string{"codex", "grok", "pi", "opencode"} {
 		if !strings.Contains(got, harness) {
 			t.Fatalf("expected output to include %s, got %q", harness, got)
 		}

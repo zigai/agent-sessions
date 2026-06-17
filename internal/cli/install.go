@@ -9,7 +9,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/zigai/agent-sessions/internal/install"
-	"github.com/zigai/agent-sessions/pkg/registry"
+	harnesspkg "github.com/zigai/agent-sessions/pkg/harness"
 )
 
 func (app *application) newInstallHooksCommand() *cobra.Command {
@@ -32,7 +32,7 @@ func (app *application) newInstallHooksCommand() *cobra.Command {
 				return app.runInstallAll(binary, targetBinary, dryRun, force, useShim)
 			}
 
-			harness, err := registry.NormalizeHarness(args[0])
+			harness, err := harnesspkg.Normalize(args[0])
 			if err != nil {
 				return fmt.Errorf("normalizing harness: %w", err)
 			}

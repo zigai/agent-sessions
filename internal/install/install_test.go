@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	harnesspkg "github.com/zigai/agent-sessions/pkg/harness"
 	"github.com/zigai/agent-sessions/pkg/registry"
 )
 
@@ -228,8 +229,115 @@ func TestInstallOpenCodeWritesPlugin(t *testing.T) {
 	}
 }
 
+func TestInstallGrokWritesHooks(t *testing.T) {
+	t.Setenv("GROK_HOME", t.TempDir())
+
+	result, err := Run(Options{
+		Harness:      registry.HarnessGrok,
+		Binary:       "agent-sessions",
+		TargetBinary: "",
+		DryRun:       false,
+		Force:        false,
+		UseShim:      false,
+	})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("expected grok install to report changed")
+	}
+
+	data, err := os.ReadFile(result.Path)
+	if err != nil {
+		t.Fatalf("reading installed hooks: %v", err)
+	}
+
+	var config map[string]any
+	unmarshalErr := json.Unmarshal(data, &config)
+	if unmarshalErr != nil {
+		t.Fatalf("installed hooks are not valid JSON: %v", unmarshalErr)
+	}
+
+	hooks, hooksOK := config["hooks"].(map[string]any)
+	if !hooksOK {
+		t.Fatal("expected hooks object")
+	}
+	for _, event := range []string{"SessionStart", "UserPromptSubmit", "Stop", "SessionEnd", "Notification"} {
+		if _, ok := hooks[event]; !ok {
+			t.Fatalf("expected %s hook", event)
+		}
+	}
+
+	text := string(data)
+	if !strings.Contains(text, "--raw-stdin") || !strings.Contains(text, "--quiet") {
+		t.Fatalf("expected stdin-aware quiet grok hook: %s", text)
+	}
+	if !strings.Contains(text, "agent_sessions_integration=grok-hook") {
+		t.Fatalf("expected managed grok hook marker: %s", text)
+	}
+	if !strings.Contains(text, managedMarker) {
+		t.Fatalf("expected managed marker in grok hooks: %s", text)
+	}
+}
+
+func TestInstallGrokReplacesManagedHooks(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("GROK_HOME", dir)
+	path := filepath.Join(dir, "hooks", grokHookFileName)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatalf("creating grok dir: %v", err)
+	}
+	oldConfig := `{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"old-agent-sessions report --harness grok --state idle --source grok-hook --attribute agent_sessions_integration=grok-hook","statusMessage":"agent-sessions managed integration"}]}]}}`
+	if err := os.WriteFile(path, []byte(oldConfig), 0o600); err != nil {
+		t.Fatalf("writing old hooks: %v", err)
+	}
+
+	result, err := Run(Options{
+		Harness:      registry.HarnessGrok,
+		Binary:       "/usr/local/bin/agent-sessions",
+		TargetBinary: "",
+		DryRun:       false,
+		Force:        false,
+		UseShim:      false,
+	})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("expected grok install to replace old managed hook")
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading installed hooks: %v", err)
+	}
+	text := string(data)
+	if strings.Contains(text, "old-agent-sessions") {
+		t.Fatalf("expected old managed hook to be removed: %s", text)
+	}
+	if !strings.Contains(text, "install-hooks") || !strings.Contains(text, "grok") {
+		t.Fatalf("expected self-refresh hook in snippet: %s", text)
+	}
+
+	second, err := Run(Options{
+		Harness:      registry.HarnessGrok,
+		Binary:       "/usr/local/bin/agent-sessions",
+		TargetBinary: "",
+		DryRun:       false,
+		Force:        false,
+		UseShim:      false,
+	})
+	if err != nil {
+		t.Fatalf("second Run returned error: %v", err)
+	}
+	if second.Changed {
+		t.Fatal("expected second grok install to be idempotent")
+	}
+}
+
 func TestRunAllInstallsEveryHarness(t *testing.T) {
 	t.Setenv("CODEX_HOME", t.TempDir())
+	t.Setenv("GROK_HOME", t.TempDir())
 	t.Setenv("PI_CODING_AGENT_DIR", t.TempDir())
 	t.Setenv(registry.StateDirEnv, t.TempDir())
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
@@ -255,6 +363,33 @@ func TestRunAllInstallsEveryHarness(t *testing.T) {
 		}
 		if result.Path == "" {
 			t.Fatalf("expected path for %s", result.Harness)
+		}
+	}
+}
+
+func TestInstallersMatchHarnessCatalog(t *testing.T) {
+	t.Parallel()
+
+	catalog := make(map[registry.Harness]bool)
+	for _, adapter := range harnesspkg.All() {
+		catalog[adapter.ID] = true
+		if !adapter.Installable {
+			continue
+		}
+		if _, ok := installers[adapter.ID]; !ok {
+			t.Fatalf("installable harness %q has no installer", adapter.ID)
+		}
+	}
+
+	for harness := range installers {
+		if !catalog[harness] {
+			t.Fatalf("installer %q is not present in harness catalog", harness)
+		}
+	}
+
+	for _, harness := range AllHarnesses {
+		if _, ok := installers[harness]; !ok {
+			t.Fatalf("AllHarnesses contains %q without installer", harness)
 		}
 	}
 }

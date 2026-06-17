@@ -170,17 +170,17 @@ func (app *application) newReportCommand() *cobra.Command {
 	options := reportOptions{
 		harness:     firstEnv("AGENT_SESSIONS_HARNESS", "AGENT_HARNESS"),
 		state:       firstEnv("AGENT_SESSIONS_STATE", "AGENT_STATE"),
-		sessionID:   firstEnv("AGENT_SESSIONS_SESSION_ID", "AGENT_SESSION_ID", "CODEX_SESSION_ID", "OPENCODE_SESSION_ID", "PI_SESSION_ID"),
-		sessionPath: firstEnv("AGENT_SESSIONS_SESSION_PATH", "AGENT_SESSION_PATH", "CODEX_SESSION_PATH", "OPENCODE_SESSION_PATH", "PI_SESSION_PATH"),
+		sessionID:   firstEnv(harnesspkg.EnvNames(harnesspkg.EnvSessionID)...),
+		sessionPath: firstEnv(harnesspkg.EnvNames(harnesspkg.EnvSessionPath)...),
 		cwd:         defaultCWD(),
 		cwdAuto:     true,
-		projectRoot: firstEnv("AGENT_SESSIONS_PROJECT_ROOT", "PROJECT_ROOT"),
-		pid:         firstEnvInt("AGENT_SESSIONS_PID", "AGENT_PID", "CODEX_PID", "OPENCODE_PID", "PI_PID"),
+		projectRoot: firstEnv(harnesspkg.EnvNames(harnesspkg.EnvProjectRoot)...),
+		pid:         firstEnvInt(harnesspkg.EnvNames(harnesspkg.EnvPID)...),
 		ppid:        firstEnvInt("AGENT_SESSIONS_PPID", "AGENT_PPID"),
 		tty:         firstEnv("AGENT_SESSIONS_TTY", "TTY"),
 		source:      firstEnv("AGENT_SESSIONS_SOURCE"),
 		confidence:  firstEnv("AGENT_SESSIONS_CONFIDENCE"),
-		event:       firstEnv("AGENT_SESSIONS_EVENT", "AGENT_EVENT"),
+		event:       firstEnv(harnesspkg.EnvNames(harnesspkg.EnvEvent)...),
 	}
 	if options.projectRoot == "" {
 		options.projectRoot = findProjectRoot(options.cwd)
@@ -205,7 +205,7 @@ func (app *application) newReportCommand() *cobra.Command {
 			return app.runReport(cmd.Context(), cmd.InOrStdin(), options)
 		},
 	}
-	cmd.Flags().StringVar(&options.harness, "harness", options.harness, "harness name: codex, pi, opencode")
+	cmd.Flags().StringVar(&options.harness, "harness", options.harness, "harness name: "+strings.Join(harnesspkg.SupportedNames(), ", "))
 	cmd.Flags().StringVar(&options.state, "state", options.state, "state: idle, running, waiting, unknown, exited, stale")
 	cmd.Flags().StringVar(&options.sessionID, "session-id", options.sessionID, "harness session id")
 	cmd.Flags().StringVar(&options.sessionPath, "session-path", options.sessionPath, "harness session file path")
@@ -227,7 +227,7 @@ func (app *application) newReportCommand() *cobra.Command {
 }
 
 func (app *application) runReport(ctx context.Context, stdin io.Reader, options reportOptions) error {
-	harness, err := registry.NormalizeHarness(options.harness)
+	harness, err := harnesspkg.Normalize(options.harness)
 	if err != nil {
 		return fmt.Errorf("normalizing harness: %w", err)
 	}
@@ -254,7 +254,7 @@ func (app *application) runReport(ctx context.Context, stdin io.Reader, options 
 	if err != nil {
 		return err
 	}
-	applyHookPayloadDefaults(harness, &options, attributes, rawPayload)
+	applyPayloadDefaults(&options, attributes, harnesspkg.DefaultsFromPayload(harness, rawPayload))
 
 	source := options.source
 	if source == "" {
@@ -504,7 +504,7 @@ func (app *application) runScan(ctx context.Context, options scanOptions) error 
 
 	sessions := make([]registry.Session, 0, len(panes))
 	for _, pane := range panes {
-		harness, ok := harnessFromCommand(pane.CurrentCommand)
+		harness, ok := harnesspkg.FromCommand(pane.CurrentCommand)
 		if !ok {
 			continue
 		}
@@ -566,7 +566,7 @@ func buildFilter(options listOptions) (registry.Filter, error) {
 	}
 
 	if options.harness != "" {
-		harness, err := registry.NormalizeHarness(options.harness)
+		harness, err := harnesspkg.Normalize(options.harness)
 		if err != nil {
 			return registry.Filter{}, fmt.Errorf("normalizing harness filter: %w", err)
 		}
@@ -853,93 +853,33 @@ func readRawPayload(stdin io.Reader, enabled bool) (json.RawMessage, error) {
 	return json.RawMessage(wrapped), nil
 }
 
-func applyHookPayloadDefaults(
-	harness registry.Harness,
+func applyPayloadDefaults(
 	options *reportOptions,
 	attributes map[string]string,
-	rawPayload json.RawMessage,
+	defaults harnesspkg.PayloadDefaults,
 ) {
-	if harness != registry.HarnessCodex || len(rawPayload) == 0 {
-		return
+	if options.sessionID == "" && defaults.SessionID != "" {
+		options.sessionID = defaults.SessionID
 	}
-
-	var payload map[string]any
-	if err := json.Unmarshal(rawPayload, &payload); err != nil {
-		return
+	if options.sessionPath == "" && defaults.SessionPath != "" {
+		options.sessionPath = defaults.SessionPath
 	}
-
-	applyCodexIdentityDefaults(options, payload)
-	applyCodexEventDefaults(options, payload)
-	applyCodexCWDDefaults(options, payload)
-	applyCodexAttributes(attributes, payload)
-}
-
-func applyCodexIdentityDefaults(options *reportOptions, payload map[string]any) {
-	if sessionID := payloadString(payload, "session_id"); options.sessionID == "" && sessionID != "" {
-		options.sessionID = sessionID
+	if options.event == "" && defaults.Event != "" {
+		options.event = defaults.Event
 	}
-	if sessionPath := payloadString(payload, "transcript_path"); options.sessionPath == "" && sessionPath != "" {
-		options.sessionPath = sessionPath
-	}
-}
-
-func applyCodexEventDefaults(options *reportOptions, payload map[string]any) {
-	if options.event == "" {
-		options.event = payloadString(payload, "hook_event_name")
-	}
-}
-
-func applyCodexCWDDefaults(options *reportOptions, payload map[string]any) {
-	if cwd := payloadString(payload, "cwd"); cwd != "" && (options.cwd == "" || options.cwdAuto) {
-		options.cwd = cwd
+	if defaults.CWD != "" && (options.cwd == "" || options.cwdAuto) {
+		options.cwd = defaults.CWD
 		if options.projectRoot == "" || options.projectRootAuto {
-			options.projectRoot = findProjectRoot(cwd)
+			options.projectRoot = findProjectRoot(defaults.CWD)
 			options.projectRootAuto = true
 		}
 	}
-}
-
-func applyCodexAttributes(attributes map[string]string, payload map[string]any) {
-	addAttributeString(attributes, "codex_hook_event", payloadString(payload, "hook_event_name"))
-	addAttributeString(attributes, "codex_start_source", payloadString(payload, "source"))
-	addAttributeString(attributes, "codex_permission_mode", payloadString(payload, "permission_mode"))
-	addAttributeString(attributes, "codex_model", payloadString(payload, "model"))
-	addAttributeString(attributes, "codex_turn_id", payloadString(payload, "turn_id"))
-}
-
-func payloadString(payload map[string]any, key string) string {
-	value, ok := payload[key]
-	if !ok {
-		return ""
+	if defaults.ProjectRoot != "" && (options.projectRoot == "" || options.projectRootAuto) {
+		options.projectRoot = defaults.ProjectRoot
+		options.projectRootAuto = true
 	}
-
-	text, ok := value.(string)
-	if !ok {
-		return ""
-	}
-
-	return strings.TrimSpace(text)
-}
-
-func addAttributeString(attributes map[string]string, key string, value string) {
-	if value == "" {
-		return
-	}
-
-	attributes[key] = value
-}
-
-func harnessFromCommand(command string) (registry.Harness, bool) {
-	normalized := strings.TrimSpace(strings.ToLower(filepath.Base(command)))
-	switch normalized {
-	case string(registry.HarnessCodex):
-		return registry.HarnessCodex, true
-	case string(registry.HarnessPi):
-		return registry.HarnessPi, true
-	case string(registry.HarnessOpenCode):
-		return registry.HarnessOpenCode, true
-	default:
-		return "", false
+	for key, value := range defaults.Attributes {
+		attributes[key] = value
 	}
 }
 
