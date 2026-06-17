@@ -66,14 +66,6 @@ Flags:
 Use "agent-sessions [command] --help" for more information about a command
 ```
 
-Watch the registry for read-only, inferred session events:
-
-```sh
-agent-sessions watch                    # aligned table output
-agent-sessions watch --format plain     # compact one-line events
-agent-sessions --json watch --no-snapshot # newline-delimited JSON
-```
-
 ## Hook Installation
 
 ```sh
