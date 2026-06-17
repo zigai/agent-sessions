@@ -34,7 +34,7 @@ func TestReportHelpListsSupportedHarnesses(t *testing.T) {
 	}
 
 	got := output.String()
-	for _, harness := range []string{"codex", "grok", "pi", "opencode"} {
+	for _, harness := range []string{"codex", "kimi-code", "grok", "pi", "opencode"} {
 		if !strings.Contains(got, harness) {
 			t.Fatalf("expected report help to include %s, got %q", harness, got)
 		}
@@ -343,8 +343,10 @@ func TestDefaultInstallBinaryIsAbsolute(t *testing.T) {
 }
 
 func TestInstallHooksAll(t *testing.T) {
+	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
 	t.Setenv("CODEX_HOME", t.TempDir())
 	t.Setenv("GROK_HOME", t.TempDir())
+	t.Setenv("KIMI_CODE_HOME", t.TempDir())
 	t.Setenv("PI_CODING_AGENT_DIR", t.TempDir())
 	t.Setenv("AGENT_SESSIONS_STATE_DIR", t.TempDir())
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
@@ -362,7 +364,7 @@ func TestInstallHooksAll(t *testing.T) {
 	}
 
 	got := output.String()
-	for _, harness := range []string{"codex", "grok", "pi", "opencode"} {
+	for _, harness := range []string{"codex", "kimi-code", "grok", "pi", "opencode"} {
 		if !strings.Contains(got, harness) {
 			t.Fatalf("expected output to include %s, got %q", harness, got)
 		}
