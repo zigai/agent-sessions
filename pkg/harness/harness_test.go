@@ -2,6 +2,8 @@ package harness
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"slices"
 	"testing"
 
@@ -40,6 +42,13 @@ func TestResumeCommandFor(t *testing.T) {
 			sessionID:   testSessionID,
 			sessionPath: "",
 			want:        []string{cursorCommand, "--resume", testSessionID},
+		},
+		{
+			name:        kimiCommand,
+			harness:     registry.HarnessKimiCode,
+			sessionID:   testSessionID,
+			sessionPath: "",
+			want:        []string{kimiCommand, "--session", testSessionID},
 		},
 		{
 			name:        "grok",
@@ -97,6 +106,10 @@ func TestNormalize(t *testing.T) {
 		{name: "cursor alias cli underscore", value: "cursor_cli", want: registry.HarnessCursor},
 		{name: "claude alias hyphen", value: "claude-code", want: registry.HarnessClaude},
 		{name: "claude alias underscore", value: "claude_code", want: registry.HarnessClaude},
+		{name: "kimi-code", value: "kimi-code", want: registry.HarnessKimiCode},
+		{name: "kimi alias", value: "kimi", want: registry.HarnessKimiCode},
+		{name: "kimi alias underscore", value: "kimi_code", want: registry.HarnessKimiCode},
+		{name: "kimi alias compact", value: "kimicode", want: registry.HarnessKimiCode},
 		{name: "grok alias hyphen", value: "grok-build", want: registry.HarnessGrok},
 		{name: "grok alias underscore", value: "grok_build", want: registry.HarnessGrok},
 		{name: "opencode alias hyphen", value: "open-code", want: registry.HarnessOpenCode},
@@ -123,7 +136,7 @@ func TestNormalize(t *testing.T) {
 func TestSupportedNames(t *testing.T) {
 	t.Parallel()
 
-	want := []string{"claude", codexCommand, "cursor", "grok", "pi", "opencode", "agy"}
+	want := []string{"claude", codexCommand, "cursor", "kimi-code", "grok", "pi", "opencode", "agy"}
 	got := SupportedNames()
 	if !slices.Equal(got, want) {
 		t.Fatalf("expected %#v, got %#v", want, got)
@@ -210,6 +223,7 @@ func TestFromCommand(t *testing.T) {
 		{command: "/usr/local/bin/cursor-agent", want: registry.HarnessCursor, wantOK: true},
 		{command: "agent", want: registry.HarnessCursor, wantOK: true},
 		{command: "claude", want: registry.HarnessClaude, wantOK: true},
+		{command: "kimi", want: registry.HarnessKimiCode, wantOK: true},
 		{command: "grok", want: registry.HarnessGrok, wantOK: true},
 		{command: "grok-build", want: registry.HarnessGrok, wantOK: true},
 		{command: "pi", want: registry.HarnessPi, wantOK: true},
@@ -294,6 +308,18 @@ func TestDefaultsFromPayload(t *testing.T) {
 			wantAttrKV: "gpt-5.2",
 		},
 		{
+			name:       kimiCommand,
+			harness:    registry.HarnessKimiCode,
+			payload:    `{"session_id":"kimi-payload-session-no-index","cwd":"/tmp","hook_event_name":"PermissionRequest","tool_name":"Bash","turn_id":7}`,
+			wantID:     "kimi-payload-session-no-index",
+			wantPath:   "",
+			wantCWD:    "/tmp",
+			wantRoot:   "",
+			wantEvent:  "PermissionRequest",
+			wantAttr:   "kimi_code_tool_name",
+			wantAttrKV: "Bash",
+		},
+		{
 			name:       "agy",
 			harness:    registry.HarnessAgy,
 			payload:    `{"conversationId":"agy-session","transcriptPath":"/repo/.gemini/antigravity/transcript.jsonl","workspacePaths":["/repo"],"event":"PreToolUse","toolCall":{"name":"run_command","args":{"Cwd":"/repo/subdir"}}}`,
@@ -324,4 +350,40 @@ func TestDefaultsFromPayload(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestKimiDefaultsFromPayloadUsesSessionIndex(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("KIMI_CODE_HOME", home)
+
+	sessionDir := filepath.Join(home, "sessions", "wd_repo_abc", "kimi-index-session")
+	index := `{"sessionId":"other","sessionDir":"/tmp/other","workDir":"/tmp"}` + "\n" +
+		`{"sessionId":"kimi-index-session","sessionDir":` + strconvQuoteForTest(sessionDir) + `,"workDir":"/repo"}` + "\n"
+	if err := os.WriteFile(filepath.Join(home, "session_index.jsonl"), []byte(index), 0o600); err != nil {
+		t.Fatalf("writing session index: %v", err)
+	}
+
+	got := DefaultsFromPayload(
+		registry.HarnessKimiCode,
+		json.RawMessage(`{"session_id":"kimi-index-session","cwd":"/repo","hook_event_name":"SessionStart","source":"startup"}`),
+	)
+
+	if got.SessionID != "kimi-index-session" ||
+		got.SessionPath != sessionDir ||
+		got.CWD != "/repo" ||
+		got.Event != "SessionStart" {
+		t.Fatalf("unexpected defaults: %#v", got)
+	}
+	if got.Attributes["kimi_code_start_source"] != "startup" {
+		t.Fatalf("expected kimi_code_start_source=startup, got %#v", got.Attributes)
+	}
+}
+
+func strconvQuoteForTest(value string) string {
+	data, err := json.Marshal(value)
+	if err != nil {
+		panic(err)
+	}
+
+	return string(data)
 }
