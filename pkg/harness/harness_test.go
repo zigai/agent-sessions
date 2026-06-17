@@ -8,6 +8,8 @@ import (
 	"github.com/zigai/agent-sessions/pkg/registry"
 )
 
+const testSessionID = "abc"
+
 func TestResumeCommandFor(t *testing.T) {
 	t.Parallel()
 
@@ -19,32 +21,39 @@ func TestResumeCommandFor(t *testing.T) {
 		want        []string
 	}{
 		{
-			name:        "codex",
-			harness:     registry.HarnessCodex,
-			sessionID:   "abc",
+			name:        "claude",
+			harness:     registry.HarnessClaude,
+			sessionID:   testSessionID,
 			sessionPath: "",
-			want:        []string{"codex", "resume", "abc"},
+			want:        []string{"claude", "--resume", testSessionID},
+		},
+		{
+			name:        codexCommand,
+			harness:     registry.HarnessCodex,
+			sessionID:   testSessionID,
+			sessionPath: "",
+			want:        []string{codexCommand, "resume", testSessionID},
 		},
 		{
 			name:        "grok",
 			harness:     registry.HarnessGrok,
-			sessionID:   "abc",
+			sessionID:   testSessionID,
 			sessionPath: "",
-			want:        []string{"grok", "--resume", "abc"},
+			want:        []string{"grok", "--resume", testSessionID},
 		},
 		{
 			name:        "pi path",
 			harness:     registry.HarnessPi,
-			sessionID:   "abc",
+			sessionID:   testSessionID,
 			sessionPath: "/tmp/session.jsonl",
 			want:        []string{"pi", "--session", "/tmp/session.jsonl"},
 		},
 		{
 			name:        "opencode",
 			harness:     registry.HarnessOpenCode,
-			sessionID:   "abc",
+			sessionID:   testSessionID,
 			sessionPath: "",
-			want:        []string{"opencode", "--session", "abc"},
+			want:        []string{"opencode", "--session", testSessionID},
 		},
 	}
 
@@ -68,7 +77,9 @@ func TestNormalize(t *testing.T) {
 		value string
 		want  registry.Harness
 	}{
-		{name: "codex", value: "codex", want: registry.HarnessCodex},
+		{name: codexCommand, value: codexCommand, want: registry.HarnessCodex},
+		{name: "claude alias hyphen", value: "claude-code", want: registry.HarnessClaude},
+		{name: "claude alias underscore", value: "claude_code", want: registry.HarnessClaude},
 		{name: "grok alias hyphen", value: "grok-build", want: registry.HarnessGrok},
 		{name: "grok alias underscore", value: "grok_build", want: registry.HarnessGrok},
 		{name: "opencode alias hyphen", value: "open-code", want: registry.HarnessOpenCode},
@@ -93,7 +104,7 @@ func TestNormalize(t *testing.T) {
 func TestSupportedNames(t *testing.T) {
 	t.Parallel()
 
-	want := []string{"codex", "grok", "pi", "opencode"}
+	want := []string{"claude", codexCommand, "grok", "pi", "opencode"}
 	got := SupportedNames()
 	if !slices.Equal(got, want) {
 		t.Fatalf("expected %#v, got %#v", want, got)
@@ -114,6 +125,7 @@ func TestEnvNames(t *testing.T) {
 			want: []string{
 				"AGENT_SESSIONS_SESSION_ID",
 				"AGENT_SESSION_ID",
+				"CLAUDE_SESSION_ID",
 				"CODEX_SESSION_ID",
 				"GROK_SESSION_ID",
 				"PI_SESSION_ID",
@@ -152,6 +164,7 @@ func TestFromCommand(t *testing.T) {
 		wantOK  bool
 	}{
 		{command: "/usr/bin/codex", want: registry.HarnessCodex, wantOK: true},
+		{command: "claude", want: registry.HarnessClaude, wantOK: true},
 		{command: "grok", want: registry.HarnessGrok, wantOK: true},
 		{command: "grok-build", want: registry.HarnessGrok, wantOK: true},
 		{command: "pi", want: registry.HarnessPi, wantOK: true},
@@ -187,12 +200,25 @@ func TestDefaultsFromPayload(t *testing.T) {
 		wantAttrKV string
 	}{
 		{
-			name:       "codex",
+			name:       "claude",
+			harness:    registry.HarnessClaude,
+			payload:    `{"session_id":"claude-session","transcript_path":"/tmp/claude.jsonl","cwd":"/tmp","hook_event_name":"SessionStart","source":"startup","model":"claude-sonnet-4-6"}`,
+			wantID:     "claude-session",
+			wantPath:   "/tmp/claude.jsonl",
+			wantCWD:    "/tmp",
+			wantRoot:   "",
+			wantEvent:  "SessionStart",
+			wantAttr:   "claude_model",
+			wantAttrKV: "claude-sonnet-4-6",
+		},
+		{
+			name:       codexCommand,
 			harness:    registry.HarnessCodex,
 			payload:    `{"session_id":"codex-session","transcript_path":"/tmp/codex.jsonl","cwd":"/tmp","hook_event_name":"UserPromptSubmit","model":"gpt-5-codex"}`,
 			wantID:     "codex-session",
 			wantPath:   "/tmp/codex.jsonl",
 			wantCWD:    "/tmp",
+			wantRoot:   "",
 			wantEvent:  "UserPromptSubmit",
 			wantAttr:   "codex_model",
 			wantAttrKV: "gpt-5-codex",
@@ -202,6 +228,7 @@ func TestDefaultsFromPayload(t *testing.T) {
 			harness:    registry.HarnessGrok,
 			payload:    `{"sessionId":"grok-session","cwd":"/tmp","workspaceRoot":"/repo","hookEventName":"UserPromptSubmit","toolName":"run_terminal_command"}`,
 			wantID:     "grok-session",
+			wantPath:   "",
 			wantCWD:    "/tmp",
 			wantRoot:   "/repo",
 			wantEvent:  "UserPromptSubmit",

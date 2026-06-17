@@ -17,6 +17,7 @@ import (
 type Harness string
 
 const (
+	HarnessClaude   Harness = "claude"
 	HarnessCodex    Harness = "codex"
 	HarnessGrok     Harness = "grok"
 	HarnessPi       Harness = "pi"
@@ -145,6 +146,8 @@ type SummaryOptions struct {
 
 func NormalizeHarness(value string) (Harness, error) {
 	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "claude", "claude-code", "claude_code":
+		return HarnessClaude, nil
 	case string(HarnessCodex):
 		return HarnessCodex, nil
 	case string(HarnessGrok), "grok-build", "grok_build":

@@ -11,6 +11,8 @@ import (
 	"github.com/zigai/agent-sessions/pkg/registry"
 )
 
+const testInstallBinary = "/usr/local/bin/agent-sessions"
+
 func TestInstallCodexMergesHooks(t *testing.T) {
 	t.Setenv("CODEX_HOME", t.TempDir())
 
@@ -68,7 +70,7 @@ func TestInstallCodexReplacesManagedHooks(t *testing.T) {
 
 	result, err := Run(Options{
 		Harness:      registry.HarnessCodex,
-		Binary:       "/usr/local/bin/agent-sessions",
+		Binary:       testInstallBinary,
 		TargetBinary: "",
 		DryRun:       false,
 		Force:        false,
@@ -95,7 +97,7 @@ func TestInstallCodexReplacesManagedHooks(t *testing.T) {
 
 	second, err := Run(Options{
 		Harness:      registry.HarnessCodex,
-		Binary:       "/usr/local/bin/agent-sessions",
+		Binary:       testInstallBinary,
 		TargetBinary: "",
 		DryRun:       false,
 		Force:        false,
@@ -106,6 +108,112 @@ func TestInstallCodexReplacesManagedHooks(t *testing.T) {
 	}
 	if second.Changed {
 		t.Fatal("expected second codex install to be idempotent")
+	}
+}
+
+func TestInstallClaudeWritesHooks(t *testing.T) {
+	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
+
+	result, err := Run(Options{
+		Harness:      registry.HarnessClaude,
+		Binary:       "agent-sessions",
+		TargetBinary: "",
+		DryRun:       false,
+		Force:        false,
+		UseShim:      false,
+	})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("expected claude install to report changed")
+	}
+
+	data, err := os.ReadFile(result.Path)
+	if err != nil {
+		t.Fatalf("reading installed hooks: %v", err)
+	}
+
+	var config map[string]any
+	unmarshalErr := json.Unmarshal(data, &config)
+	if unmarshalErr != nil {
+		t.Fatalf("installed hooks are not valid JSON: %v", unmarshalErr)
+	}
+
+	hooks, hooksOK := config["hooks"].(map[string]any)
+	if !hooksOK {
+		t.Fatal("expected hooks object")
+	}
+	for _, event := range []string{"SessionStart", "UserPromptSubmit", "Notification", "Stop", "SessionEnd"} {
+		if _, ok := hooks[event]; !ok {
+			t.Fatalf("expected %s hook", event)
+		}
+	}
+
+	text := string(data)
+	if !strings.Contains(text, "--raw-stdin") || !strings.Contains(text, "--quiet") {
+		t.Fatalf("expected stdin-aware quiet claude hook: %s", text)
+	}
+	if !strings.Contains(text, "agent_sessions_integration=claude-hook") {
+		t.Fatalf("expected managed claude hook marker: %s", text)
+	}
+	if !strings.Contains(text, managedMarker) {
+		t.Fatalf("expected managed marker in claude hooks: %s", text)
+	}
+}
+
+func TestInstallClaudeReplacesManagedHooks(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", dir)
+	path := filepath.Join(dir, "settings.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatalf("creating claude dir: %v", err)
+	}
+	oldConfig := `{"hooks":{"SessionStart":[{"matcher":"startup|resume","hooks":[{"type":"command","command":"old-agent-sessions report --harness claude --state idle --source claude-hook --attribute agent_sessions_integration=claude-hook","statusMessage":"agent-sessions managed integration"}]}]}}`
+	if err := os.WriteFile(path, []byte(oldConfig), 0o600); err != nil {
+		t.Fatalf("writing old hooks: %v", err)
+	}
+
+	result, err := Run(Options{
+		Harness:      registry.HarnessClaude,
+		Binary:       testInstallBinary,
+		TargetBinary: "",
+		DryRun:       false,
+		Force:        false,
+		UseShim:      false,
+	})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("expected claude install to replace old managed hook")
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading installed hooks: %v", err)
+	}
+	text := string(data)
+	if strings.Contains(text, "old-agent-sessions") {
+		t.Fatalf("expected old managed hook to be removed: %s", text)
+	}
+	if !strings.Contains(text, "install-hooks") || !strings.Contains(text, "claude") {
+		t.Fatalf("expected self-refresh hook in snippet: %s", text)
+	}
+
+	second, err := Run(Options{
+		Harness:      registry.HarnessClaude,
+		Binary:       testInstallBinary,
+		TargetBinary: "",
+		DryRun:       false,
+		Force:        false,
+		UseShim:      false,
+	})
+	if err != nil {
+		t.Fatalf("second Run returned error: %v", err)
+	}
+	if second.Changed {
+		t.Fatal("expected second claude install to be idempotent")
 	}
 }
 
@@ -165,7 +273,7 @@ func TestInstallPiWritesExtension(t *testing.T) {
 
 	result, err := Run(Options{
 		Harness:      registry.HarnessPi,
-		Binary:       "/usr/local/bin/agent-sessions",
+		Binary:       testInstallBinary,
 		TargetBinary: "",
 		DryRun:       false,
 		Force:        false,
@@ -203,7 +311,7 @@ func TestInstallOpenCodeWritesPlugin(t *testing.T) {
 
 	result, err := Run(Options{
 		Harness:      registry.HarnessOpenCode,
-		Binary:       "/usr/local/bin/agent-sessions",
+		Binary:       testInstallBinary,
 		TargetBinary: "",
 		DryRun:       false,
 		Force:        false,
@@ -294,7 +402,7 @@ func TestInstallGrokReplacesManagedHooks(t *testing.T) {
 
 	result, err := Run(Options{
 		Harness:      registry.HarnessGrok,
-		Binary:       "/usr/local/bin/agent-sessions",
+		Binary:       testInstallBinary,
 		TargetBinary: "",
 		DryRun:       false,
 		Force:        false,
@@ -321,7 +429,7 @@ func TestInstallGrokReplacesManagedHooks(t *testing.T) {
 
 	second, err := Run(Options{
 		Harness:      registry.HarnessGrok,
-		Binary:       "/usr/local/bin/agent-sessions",
+		Binary:       testInstallBinary,
 		TargetBinary: "",
 		DryRun:       false,
 		Force:        false,
@@ -336,6 +444,7 @@ func TestInstallGrokReplacesManagedHooks(t *testing.T) {
 }
 
 func TestRunAllInstallsEveryHarness(t *testing.T) {
+	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
 	t.Setenv("CODEX_HOME", t.TempDir())
 	t.Setenv("GROK_HOME", t.TempDir())
 	t.Setenv("PI_CODING_AGENT_DIR", t.TempDir())

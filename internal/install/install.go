@@ -21,6 +21,7 @@ var (
 type installer func(Options) (Result, error)
 
 var installers = map[registry.Harness]installer{
+	registry.HarnessClaude:   installClaude,
 	registry.HarnessCodex:    installCodex,
 	registry.HarnessGrok:     installGrok,
 	registry.HarnessPi:       installPi,
@@ -52,12 +53,12 @@ func Run(options Options) (Result, error) {
 		options.Binary = "agent-sessions"
 	}
 
-	installer, ok := installers[options.Harness]
+	runInstaller, ok := installers[options.Harness]
 	if !ok {
 		return Result{}, fmt.Errorf("%w: %q", errUnsupportedHarness, options.Harness)
 	}
 
-	return installer(options)
+	return runInstaller(options)
 }
 
 func RunAll(options Options) ([]Result, error) {
