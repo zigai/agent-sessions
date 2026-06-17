@@ -29,9 +29,17 @@ var (
 
 	errInvalidAttribute = errors.New("invalid attribute")
 	errInvalidListSort  = errors.New("invalid list sort")
+
+	errInvalidReportArguments = errors.New("invalid report arguments")
+	errUnexpectedReportArg    = errors.New("unexpected report argument")
+	errMissingReportHarness   = errors.New("missing harness: pass --harness <name> or use `agent-sessions report <harness> <state>`")
+	errMissingReportIdentity  = errors.New("missing report identity: provide --state <state>, --session-id, or --session-path")
 )
 
-const tabPadding = 2
+const (
+	tabPadding    = 2
+	maxReportArgs = 2
+)
 
 const (
 	secondsPerMinute = 60
@@ -191,12 +199,17 @@ func (app *application) newReportCommand() *cobra.Command {
 	}
 
 	cmd := &cobra.Command{
-		Use:   "report",
+		Use:   "report [harness] [state]",
 		Short: "Upsert a session report from a harness hook or wrapper",
-		Args:  cobra.MaximumNArgs(1),
+		Example: strings.Join([]string{
+			"  agent-sessions report pi running",
+			"  agent-sessions report running --harness pi",
+			"  agent-sessions report --harness codex --state waiting --session-id abc",
+		}, "\n"),
+		Args: cobra.MaximumNArgs(maxReportArgs),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if len(args) == 1 && options.state == "" {
-				options.state = args[0]
+			if err := applyReportArgs(args, &options); err != nil {
+				return err
 			}
 			if cmd.Flags().Changed("cwd") {
 				options.cwdAuto = false
@@ -230,25 +243,100 @@ func (app *application) newReportCommand() *cobra.Command {
 	return cmd
 }
 
-func (app *application) runReport(ctx context.Context, stdin io.Reader, options reportOptions) error {
-	harness, err := harnesspkg.Normalize(options.harness)
-	if err != nil {
-		return fmt.Errorf("normalizing harness: %w", err)
+func applyReportArgs(args []string, options *reportOptions) error {
+	switch len(args) {
+	case 0:
+		return nil
+	case 1:
+		return applySingleReportArg(args[0], options)
+	case maxReportArgs:
+		return applyReportHarnessStateArgs(args[0], args[1], options)
+	default:
+		return nil
 	}
+}
 
-	state, err := registry.NormalizeState(options.state)
-	if err != nil {
-		return fmt.Errorf("normalizing state: %w", err)
-	}
+func applySingleReportArg(arg string, options *reportOptions) error {
+	if options.harness == "" {
+		if _, err := harnesspkg.Normalize(arg); err == nil {
+			options.harness = arg
 
-	tmux := registry.TmuxContext{}
-	if !options.noTmux {
-		collected, tmuxErr := tmuxctx.Current(ctx)
-		if tmuxErr == nil {
-			tmux = collected
+			return nil
 		}
 	}
+	if options.state == "" {
+		options.state = arg
 
+		return nil
+	}
+
+	return fmt.Errorf("%w: %q; state is already set to %q", errUnexpectedReportArg, arg, options.state)
+}
+
+func applyReportHarnessStateArgs(first string, second string, options *reportOptions) error {
+	firstArg := classifyReportArg(first)
+	secondArg := classifyReportArg(second)
+
+	if options.harness == "" && options.state == "" && applyReportArgPair(firstArg, secondArg, options) {
+		return nil
+	}
+	if options.harness == "" && firstArg.harnessOK {
+		options.harness = string(firstArg.harness)
+
+		return applySingleReportArg(second, options)
+	}
+	if options.state == "" && secondArg.stateOK {
+		options.state = string(secondArg.state)
+
+		return applySingleReportArg(first, options)
+	}
+
+	return fmt.Errorf("%w: %q %q; use --harness and --state explicitly", errInvalidReportArguments, first, second)
+}
+
+func applyReportArgPair(first reportArgClassification, second reportArgClassification, options *reportOptions) bool {
+	if first.harnessOK && second.stateOK {
+		options.harness = string(first.harness)
+		options.state = string(second.state)
+
+		return true
+	}
+	if first.stateOK && second.harnessOK {
+		options.harness = string(second.harness)
+		options.state = string(first.state)
+
+		return true
+	}
+
+	return false
+}
+
+type reportArgClassification struct {
+	harness   registry.Harness
+	harnessOK bool
+	state     registry.State
+	stateOK   bool
+}
+
+func classifyReportArg(arg string) reportArgClassification {
+	harness, harnessErr := harnesspkg.Normalize(arg)
+	state, stateErr := registry.NormalizeState(arg)
+
+	return reportArgClassification{
+		harness:   harness,
+		harnessOK: harnessErr == nil,
+		state:     state,
+		stateOK:   stateErr == nil && state != "",
+	}
+}
+
+func (app *application) runReport(ctx context.Context, stdin io.Reader, options reportOptions) error {
+	harness, state, err := normalizeReportHarnessAndState(options)
+	if err != nil {
+		return err
+	}
+
+	tmux := reportTmuxContext(ctx, options.noTmux)
 	attributes, err := parseAttributes(options.attributes)
 	if err != nil {
 		return err
@@ -259,6 +347,9 @@ func (app *application) runReport(ctx context.Context, stdin io.Reader, options 
 		return err
 	}
 	applyPayloadDefaults(&options, attributes, harnesspkg.DefaultsFromPayload(harness, defaultsPayload))
+	if identityErr := requireReportIdentity(state, options); identityErr != nil {
+		return identityErr
+	}
 
 	source := options.source
 	if source == "" {
@@ -302,6 +393,44 @@ func (app *application) runReport(ctx context.Context, stdin io.Reader, options 
 	}
 
 	return app.writef("%s\t%s\t%s\n", session.ID, session.Harness, session.State)
+}
+
+func normalizeReportHarnessAndState(options reportOptions) (registry.Harness, registry.State, error) {
+	if strings.TrimSpace(options.harness) == "" {
+		return "", "", errMissingReportHarness
+	}
+	harness, err := harnesspkg.Normalize(options.harness)
+	if err != nil {
+		return "", "", fmt.Errorf("normalizing harness: %w", err)
+	}
+
+	state, err := registry.NormalizeState(options.state)
+	if err != nil {
+		return "", "", fmt.Errorf("normalizing state: %w", err)
+	}
+
+	return harness, state, nil
+}
+
+func reportTmuxContext(ctx context.Context, noTmux bool) registry.TmuxContext {
+	if noTmux {
+		return registry.TmuxContext{}
+	}
+
+	collected, err := tmuxctx.Current(ctx)
+	if err != nil {
+		return registry.TmuxContext{}
+	}
+
+	return collected
+}
+
+func requireReportIdentity(state registry.State, options reportOptions) error {
+	if state == "" && options.sessionID == "" && options.sessionPath == "" {
+		return errMissingReportIdentity
+	}
+
+	return nil
 }
 
 type listOptions struct {

@@ -13,7 +13,10 @@ import (
 	"github.com/zigai/agent-sessions/pkg/registry"
 )
 
-const storeFlag = "--store"
+const (
+	storeFlag     = "--store"
+	reportCommand = "report"
+)
 
 func TestRootCommandHasUse(t *testing.T) {
 	t.Parallel()
@@ -29,7 +32,7 @@ func TestReportHelpListsSupportedHarnesses(t *testing.T) {
 
 	var output bytes.Buffer
 	cmd := NewRootCommand(&output, &bytes.Buffer{})
-	cmd.SetArgs([]string{"report", "--help"})
+	cmd.SetArgs([]string{reportCommand, "--help"})
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("help command failed: %v", err)
 	}
@@ -42,6 +45,49 @@ func TestReportHelpListsSupportedHarnesses(t *testing.T) {
 	}
 }
 
+func TestReportRequiresHarness(t *testing.T) {
+	t.Parallel()
+
+	var output bytes.Buffer
+	cmd := NewRootCommand(&output, &bytes.Buffer{})
+	cmd.SetArgs([]string{reportCommand})
+
+	err := cmd.Execute()
+	if err == nil || !strings.Contains(err.Error(), "missing harness") {
+		t.Fatalf("expected missing harness error, got %v", err)
+	}
+}
+
+func TestReportHarnessArgumentRequiresStateOrIdentity(t *testing.T) {
+	t.Parallel()
+
+	var output bytes.Buffer
+	cmd := NewRootCommand(&output, &bytes.Buffer{})
+	cmd.SetArgs([]string{reportCommand, "pi", "--no-tmux"})
+
+	err := cmd.Execute()
+	if err == nil || !strings.Contains(err.Error(), "missing report identity") {
+		t.Fatalf("expected missing report identity error, got %v", err)
+	}
+}
+
+func TestReportAcceptsHarnessAndStateArguments(t *testing.T) {
+	t.Parallel()
+
+	storePath := filepath.Join(t.TempDir(), "state.json")
+	var output bytes.Buffer
+	cmd := NewRootCommand(&output, &bytes.Buffer{})
+	cmd.SetArgs([]string{storeFlag, storePath, reportCommand, "pi", "running", "--no-tmux"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("report command failed: %v", err)
+	}
+
+	got := output.String()
+	if !strings.Contains(got, "\tpi\trunning") {
+		t.Fatalf("expected positional report output to include pi running, got %q", got)
+	}
+}
+
 func TestReportAndList(t *testing.T) {
 	t.Parallel()
 
@@ -50,7 +96,7 @@ func TestReportAndList(t *testing.T) {
 	reportCmd := NewRootCommand(&reportOut, &bytes.Buffer{})
 	reportCmd.SetArgs([]string{
 		storeFlag, storePath,
-		"report",
+		reportCommand,
 		"--harness", "codex",
 		"--state", "running",
 		"--session-id", "abc",
@@ -90,7 +136,7 @@ func TestListAbsoluteTime(t *testing.T) {
 	reportCmd := NewRootCommand(&reportOut, &bytes.Buffer{})
 	reportCmd.SetArgs([]string{
 		storeFlag, storePath,
-		"report",
+		reportCommand,
 		"--harness", "codex",
 		"--state", "running",
 		"--session-id", "abc",
@@ -233,7 +279,7 @@ func TestReportCodexHookPayloadQuiet(t *testing.T) {
 	cmd := NewRootCommand(&reportOut, &bytes.Buffer{})
 	cmd.SetArgs([]string{
 		storeFlag, storePath,
-		"report",
+		reportCommand,
 		"--harness", "codex",
 		"--state", "running",
 		"--source", "codex-hook",
@@ -286,7 +332,7 @@ func TestReportGrokHookPayloadQuiet(t *testing.T) {
 	cmd := NewRootCommand(&reportOut, &bytes.Buffer{})
 	cmd.SetArgs([]string{
 		storeFlag, storePath,
-		"report",
+		reportCommand,
 		"--harness", "grok",
 		"--state", "running",
 		"--source", "grok-hook",
@@ -501,7 +547,7 @@ func TestReportCursorHookDefaultsOnlyQuiet(t *testing.T) {
 	cmd := NewRootCommand(&reportOut, &bytes.Buffer{})
 	cmd.SetArgs([]string{
 		storeFlag, storePath,
-		"report",
+		reportCommand,
 		"--harness", "cursor",
 		"--state", "running",
 		"--source", "cursor-hook",
