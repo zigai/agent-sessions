@@ -44,7 +44,7 @@ func Current(ctx context.Context) (registry.TmuxContext, error) {
 		"#{pane_tty}",
 		"#{client_tty}",
 	}, fieldSeparator)
-	output, err := runTmux(ctx, "display-message", "-p", "-F", format)
+	output, err := runTmux(ctx, currentDisplayMessageArgs(format, os.Getenv("TMUX_PANE"))...)
 	if err != nil {
 		if paneID := os.Getenv("TMUX_PANE"); paneID != "" {
 			return registry.TmuxContext{
@@ -67,6 +67,15 @@ func Current(ctx context.Context) (registry.TmuxContext, error) {
 	}
 
 	return ParseCurrent(output)
+}
+
+func currentDisplayMessageArgs(format string, paneID string) []string {
+	args := []string{"display-message", "-p"}
+	if paneID != "" {
+		args = append(args, "-t", paneID)
+	}
+
+	return append(args, "-F", format)
 }
 
 func ListPanes(ctx context.Context) ([]Pane, error) {

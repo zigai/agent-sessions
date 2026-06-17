@@ -1,6 +1,7 @@
 package tmuxctx
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -34,6 +35,22 @@ func TestParseCurrent(t *testing.T) {
 
 	if ctx.PaneTTY != "/dev/pts/5" {
 		t.Fatalf("expected pane tty, got %q", ctx.PaneTTY)
+	}
+}
+
+func TestCurrentDisplayMessageArgsTargetsTmuxPane(t *testing.T) {
+	got := currentDisplayMessageArgs("format", "%12")
+	want := []string{"display-message", "-p", "-t", "%12", "-F", "format"}
+	if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
+		t.Fatalf("unexpected args: got %#v want %#v", got, want)
+	}
+}
+
+func TestCurrentDisplayMessageArgsWithoutPane(t *testing.T) {
+	got := currentDisplayMessageArgs("format", "")
+	want := []string{"display-message", "-p", "-F", "format"}
+	if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
+		t.Fatalf("unexpected args: got %#v want %#v", got, want)
 	}
 }
 
