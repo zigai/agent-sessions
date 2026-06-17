@@ -55,6 +55,7 @@ Available Commands:
   report        Upsert a session report from a harness hook or wrapper
   scan          Scan tmux panes for supported harness processes
   summary       Summarize agent counts by tmux session
+  watch         Watch registry state changes
 
 Flags:
   -h, --help           help for agent-sessions
@@ -63,6 +64,14 @@ Flags:
   -v, --version        print version
 
 Use "agent-sessions [command] --help" for more information about a command
+```
+
+Watch the registry for read-only, inferred session events:
+
+```sh
+agent-sessions watch                    # aligned table output
+agent-sessions watch --format plain     # compact one-line events
+agent-sessions --json watch --no-snapshot # newline-delimited JSON
 ```
 
 ## Hook Installation
