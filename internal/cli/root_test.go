@@ -12,6 +12,8 @@ import (
 	"github.com/zigai/agent-sessions/pkg/registry"
 )
 
+const storeFlag = "--store"
+
 func TestRootCommandHasUse(t *testing.T) {
 	t.Parallel()
 
@@ -46,7 +48,7 @@ func TestReportAndList(t *testing.T) {
 	var reportOut bytes.Buffer
 	reportCmd := NewRootCommand(&reportOut, &bytes.Buffer{})
 	reportCmd.SetArgs([]string{
-		"--store", storePath,
+		storeFlag, storePath,
 		"report",
 		"--harness", "codex",
 		"--state", "running",
@@ -59,7 +61,7 @@ func TestReportAndList(t *testing.T) {
 
 	var listOut bytes.Buffer
 	listCmd := NewRootCommand(&listOut, &bytes.Buffer{})
-	listCmd.SetArgs([]string{"--store", storePath, "list"})
+	listCmd.SetArgs([]string{storeFlag, storePath, "list"})
 	if err := listCmd.Execute(); err != nil {
 		t.Fatalf("list command failed: %v", err)
 	}
@@ -86,7 +88,7 @@ func TestListAbsoluteTime(t *testing.T) {
 	var reportOut bytes.Buffer
 	reportCmd := NewRootCommand(&reportOut, &bytes.Buffer{})
 	reportCmd.SetArgs([]string{
-		"--store", storePath,
+		storeFlag, storePath,
 		"report",
 		"--harness", "codex",
 		"--state", "running",
@@ -99,7 +101,7 @@ func TestListAbsoluteTime(t *testing.T) {
 
 	var listOut bytes.Buffer
 	listCmd := NewRootCommand(&listOut, &bytes.Buffer{})
-	listCmd.SetArgs([]string{"--store", storePath, "list", "--absolute-time"})
+	listCmd.SetArgs([]string{storeFlag, storePath, "list", "--absolute-time"})
 	if err := listCmd.Execute(); err != nil {
 		t.Fatalf("list command failed: %v", err)
 	}
@@ -137,7 +139,7 @@ func TestListSortUpdatedDesc(t *testing.T) {
 
 	var listOut bytes.Buffer
 	listCmd := NewRootCommand(&listOut, &bytes.Buffer{})
-	listCmd.SetArgs([]string{"--store", storePath, "list", "--sort", "updated", "--desc", "--absolute-time"})
+	listCmd.SetArgs([]string{storeFlag, storePath, "list", "--sort", "updated", "--desc", "--absolute-time"})
 	executeErr := listCmd.Execute()
 	if executeErr != nil {
 		t.Fatalf("list command failed: %v", executeErr)
@@ -160,7 +162,7 @@ func TestListSortRejectsUnknownField(t *testing.T) {
 	var listOut bytes.Buffer
 	var listErr bytes.Buffer
 	listCmd := NewRootCommand(&listOut, &listErr)
-	listCmd.SetArgs([]string{"--store", filepath.Join(t.TempDir(), "state.json"), "list", "--sort", "nope"})
+	listCmd.SetArgs([]string{storeFlag, filepath.Join(t.TempDir(), "state.json"), "list", "--sort", "nope"})
 	err := listCmd.Execute()
 	if err == nil {
 		t.Fatal("expected invalid sort error")
@@ -229,7 +231,7 @@ func TestReportCodexHookPayloadQuiet(t *testing.T) {
 	var reportOut bytes.Buffer
 	cmd := NewRootCommand(&reportOut, &bytes.Buffer{})
 	cmd.SetArgs([]string{
-		"--store", storePath,
+		storeFlag, storePath,
 		"report",
 		"--harness", "codex",
 		"--state", "running",
@@ -282,7 +284,7 @@ func TestReportGrokHookPayloadQuiet(t *testing.T) {
 	var reportOut bytes.Buffer
 	cmd := NewRootCommand(&reportOut, &bytes.Buffer{})
 	cmd.SetArgs([]string{
-		"--store", storePath,
+		storeFlag, storePath,
 		"report",
 		"--harness", "grok",
 		"--state", "running",

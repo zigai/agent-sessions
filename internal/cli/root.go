@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"sort"
@@ -858,29 +859,43 @@ func applyPayloadDefaults(
 	attributes map[string]string,
 	defaults harnesspkg.PayloadDefaults,
 ) {
-	if options.sessionID == "" && defaults.SessionID != "" {
-		options.sessionID = defaults.SessionID
+	applyStringDefault(&options.sessionID, defaults.SessionID)
+	applyStringDefault(&options.sessionPath, defaults.SessionPath)
+	applyStringDefault(&options.event, defaults.Event)
+	applyCWDDefault(options, defaults.CWD)
+	applyProjectRootDefault(options, defaults.ProjectRoot)
+	maps.Copy(attributes, defaults.Attributes)
+}
+
+func applyStringDefault(target *string, value string) {
+	if *target != "" || value == "" {
+		return
 	}
-	if options.sessionPath == "" && defaults.SessionPath != "" {
-		options.sessionPath = defaults.SessionPath
+
+	*target = value
+}
+
+func applyCWDDefault(options *reportOptions, cwd string) {
+	if cwd == "" || (options.cwd != "" && !options.cwdAuto) {
+		return
 	}
-	if options.event == "" && defaults.Event != "" {
-		options.event = defaults.Event
+
+	options.cwd = cwd
+	if options.projectRoot != "" && !options.projectRootAuto {
+		return
 	}
-	if defaults.CWD != "" && (options.cwd == "" || options.cwdAuto) {
-		options.cwd = defaults.CWD
-		if options.projectRoot == "" || options.projectRootAuto {
-			options.projectRoot = findProjectRoot(defaults.CWD)
-			options.projectRootAuto = true
-		}
+
+	options.projectRoot = findProjectRoot(cwd)
+	options.projectRootAuto = true
+}
+
+func applyProjectRootDefault(options *reportOptions, projectRoot string) {
+	if projectRoot == "" || (options.projectRoot != "" && !options.projectRootAuto) {
+		return
 	}
-	if defaults.ProjectRoot != "" && (options.projectRoot == "" || options.projectRootAuto) {
-		options.projectRoot = defaults.ProjectRoot
-		options.projectRootAuto = true
-	}
-	for key, value := range defaults.Attributes {
-		attributes[key] = value
-	}
+
+	options.projectRoot = projectRoot
+	options.projectRootAuto = true
 }
 
 func tmuxSessionLabel(ctx registry.TmuxContext) string {
