@@ -20,3 +20,4 @@ extension, hook, or plugin documentation. Before adding or changing a harness:
   instead of duplicating it.
 - Add tests for the installed hook/plugin shape and for the state transitions
   expected from the documented lifecycle events.
+- Do not edit the "Hook Installation" section in the readme when adding new harnesses.
