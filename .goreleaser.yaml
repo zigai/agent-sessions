@@ -44,7 +44,7 @@ nfpms:
     homepage: https://github.com/zigai/agent-sessions
     maintainer: zigai
     description: A Go CLI project
-    license: Apache-2.0
+    license: MIT
     formats:
       - deb
       - rpm
