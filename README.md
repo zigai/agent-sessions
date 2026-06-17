@@ -71,7 +71,6 @@ Use "agent-sessions [command] --help" for more information about a command
 agent-sessions install-hooks <harness>
 agent-sessions install-hooks all
 agent-sessions install-hooks codex --dry-run
-agent-sessions install-hooks grok
 ```
 
 `<harness>` is a supported harness name from the list above.
