@@ -9,7 +9,9 @@ func grokAdapter() Adapter {
 		ProcessNames: []string{"grok", "grok-build"},
 		Env: EnvKeys{
 			SessionID:   []string{"GROK_SESSION_ID"},
+			SessionPath: nil,
 			ProjectRoot: []string{"GROK_WORKSPACE_ROOT"},
+			PID:         nil,
 			Event:       []string{"GROK_HOOK_EVENT"},
 		},
 		Installable: true,
@@ -37,6 +39,7 @@ func grokPayloadDefaults(payload map[string]any) PayloadDefaults {
 
 	return PayloadDefaults{
 		SessionID:   payloadStringAny(payload, "sessionId", "session_id"),
+		SessionPath: "",
 		CWD:         payloadString(payload, "cwd"),
 		ProjectRoot: payloadStringAny(payload, "workspaceRoot", "workspace_root"),
 		Event:       payloadStringAny(payload, "hookEventName", "hook_event_name"),

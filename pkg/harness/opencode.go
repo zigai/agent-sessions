@@ -10,7 +10,9 @@ func openCodeAdapter() Adapter {
 		Env: EnvKeys{
 			SessionID:   []string{"OPENCODE_SESSION_ID"},
 			SessionPath: []string{"OPENCODE_SESSION_PATH"},
+			ProjectRoot: nil,
 			PID:         []string{"OPENCODE_PID"},
+			Event:       nil,
 		},
 		Installable: true,
 		ResumeCommand: func(sessionID string, _ string) []string {
@@ -20,5 +22,6 @@ func openCodeAdapter() Adapter {
 
 			return []string{"opencode", "--session", sessionID}
 		},
+		PayloadDefaults: nil,
 	}
 }

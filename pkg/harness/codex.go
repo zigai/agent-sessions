@@ -2,14 +2,19 @@ package harness
 
 import "github.com/zigai/agent-sessions/pkg/registry"
 
+const codexCommand = "codex"
+
 func codexAdapter() Adapter {
 	return Adapter{
 		ID:           registry.HarnessCodex,
-		ProcessNames: []string{"codex"},
+		Aliases:      nil,
+		ProcessNames: []string{codexCommand},
 		Env: EnvKeys{
 			SessionID:   []string{"CODEX_SESSION_ID"},
 			SessionPath: []string{"CODEX_SESSION_PATH"},
+			ProjectRoot: nil,
 			PID:         []string{"CODEX_PID"},
+			Event:       nil,
 		},
 		Installable: true,
 		ResumeCommand: func(sessionID string, _ string) []string {
@@ -17,7 +22,7 @@ func codexAdapter() Adapter {
 				return nil
 			}
 
-			return []string{"codex", "resume", sessionID}
+			return []string{codexCommand, "resume", sessionID}
 		},
 		PayloadDefaults: codexPayloadDefaults,
 	}
@@ -35,6 +40,7 @@ func codexPayloadDefaults(payload map[string]any) PayloadDefaults {
 		SessionID:   payloadString(payload, "session_id"),
 		SessionPath: payloadString(payload, "transcript_path"),
 		CWD:         payloadString(payload, "cwd"),
+		ProjectRoot: "",
 		Event:       payloadString(payload, "hook_event_name"),
 		Attributes:  attributes,
 	}

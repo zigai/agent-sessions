@@ -62,7 +62,7 @@ func Find(harness registry.Harness) (Adapter, bool) {
 		}
 	}
 
-	return Adapter{}, false
+	return emptyAdapter(), false
 }
 
 func Normalize(value string) (registry.Harness, error) {
@@ -114,17 +114,17 @@ func FromCommand(command string) (registry.Harness, bool) {
 
 func DefaultsFromPayload(harness registry.Harness, rawPayload json.RawMessage) PayloadDefaults {
 	if len(rawPayload) == 0 {
-		return PayloadDefaults{}
+		return emptyPayloadDefaults()
 	}
 
 	adapter, ok := Find(harness)
 	if !ok || adapter.PayloadDefaults == nil {
-		return PayloadDefaults{}
+		return emptyPayloadDefaults()
 	}
 
 	var payload map[string]any
 	if err := json.Unmarshal(rawPayload, &payload); err != nil {
-		return PayloadDefaults{}
+		return emptyPayloadDefaults()
 	}
 
 	return adapter.PayloadDefaults(payload)
@@ -153,6 +153,39 @@ func cloneAdapter(adapter Adapter) Adapter {
 	adapter.Env = cloneEnvKeys(adapter.Env)
 
 	return adapter
+}
+
+func emptyAdapter() Adapter {
+	return Adapter{
+		ID:              "",
+		Aliases:         nil,
+		ProcessNames:    nil,
+		Env:             emptyEnvKeys(),
+		Installable:     false,
+		ResumeCommand:   nil,
+		PayloadDefaults: nil,
+	}
+}
+
+func emptyPayloadDefaults() PayloadDefaults {
+	return PayloadDefaults{
+		SessionID:   "",
+		SessionPath: "",
+		CWD:         "",
+		ProjectRoot: "",
+		Event:       "",
+		Attributes:  nil,
+	}
+}
+
+func emptyEnvKeys() EnvKeys {
+	return EnvKeys{
+		SessionID:   nil,
+		SessionPath: nil,
+		ProjectRoot: nil,
+		PID:         nil,
+		Event:       nil,
+	}
 }
 
 func cloneEnvKeys(keys EnvKeys) EnvKeys {

@@ -5,11 +5,14 @@ import "github.com/zigai/agent-sessions/pkg/registry"
 func piAdapter() Adapter {
 	return Adapter{
 		ID:           registry.HarnessPi,
+		Aliases:      nil,
 		ProcessNames: []string{"pi"},
 		Env: EnvKeys{
 			SessionID:   []string{"PI_SESSION_ID"},
 			SessionPath: []string{"PI_SESSION_PATH"},
+			ProjectRoot: nil,
 			PID:         []string{"PI_PID"},
+			Event:       nil,
 		},
 		Installable: true,
 		ResumeCommand: func(sessionID string, sessionPath string) []string {
@@ -22,5 +25,6 @@ func piAdapter() Adapter {
 
 			return nil
 		},
+		PayloadDefaults: nil,
 	}
 }
