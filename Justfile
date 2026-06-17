@@ -1,46 +1,35 @@
 @_:
   just --list
 
-# Run all tests
 test:
     go test ./...
 
-# Update Go module files
 tidy:
     go mod tidy
 
-# Run golangci-lint with --fix
 fix:
     golangci-lint run --fix
 
-# Run golangci-lint without --fix
 lint:
     golangci-lint run
 
-# Run all quality checks
 check: test lint
 
-# Build the binary
 build:
     go build -o agent-sessions .
 
-# Install the binary
 install:
     go install .
 
-# Remove build artifacts
 clean:
     rm -rf agent-sessions agent-sessions.exe dist/
 
-# Build with version info (local dev)
 build-dev:
     go build -ldflags "-X github.com/zigai/agent-sessions/internal/cli.version=dev -X github.com/zigai/agent-sessions/internal/cli.commit=$(git rev-parse --short HEAD) -X github.com/zigai/agent-sessions/internal/cli.date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" -o agent-sessions .
 
-# Test goreleaser locally
 release-dry-run:
     goreleaser release --snapshot --clean
 
-# Pre-release safety checks
 _release-check:
     #!/usr/bin/env sh
     set -e
@@ -69,7 +58,6 @@ _release-check:
         fi
     fi
 
-# Release a new patch version (eg. v1.0.0 -> v1.0.1)
 release-patch: _release-check
     #!/usr/bin/env sh
     set -e
@@ -82,7 +70,6 @@ release-patch: _release-check
     git tag "$new"
     git push origin "$new"
 
-# Release a new minor version (eg. v1.0.0 -> v1.1.0)
 release-minor: _release-check
     #!/usr/bin/env sh
     set -e
@@ -94,7 +81,6 @@ release-minor: _release-check
     git tag "$new"
     git push origin "$new"
 
-# Release a new major version (eg. v1.0.0 -> v2.0.0)
 release-major: _release-check
     #!/usr/bin/env sh
     set -e
