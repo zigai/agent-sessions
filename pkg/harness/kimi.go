@@ -13,6 +13,11 @@ import (
 
 const kimiCommand = "kimi"
 
+const (
+	kimiCodeSessionIndexInitialBufferSize = 64 * 1024
+	kimiCodeSessionIndexMaxBufferSize     = 1024 * 1024
+)
+
 func kimiCodeAdapter() Adapter {
 	return Adapter{
 		ID:           registry.HarnessKimiCode,
@@ -25,7 +30,7 @@ func kimiCodeAdapter() Adapter {
 				return nil
 			}
 
-			return []string{kimiCommand, "--session", sessionID}
+			return []string{kimiCommand, sessionFlag, sessionID}
 		},
 		PayloadDefaults: kimiCodePayloadDefaults,
 	}
@@ -70,11 +75,6 @@ func payloadScalarString(payload map[string]any, key string) string {
 	}
 }
 
-type kimiCodeSessionIndexEntry struct {
-	SessionID  string `json:"sessionId"`
-	SessionDir string `json:"sessionDir"`
-}
-
 func kimiCodeSessionPath(sessionID string) string {
 	if sessionID == "" {
 		return ""
@@ -89,14 +89,15 @@ func kimiCodeSessionPath(sessionID string) string {
 	}()
 
 	scanner := bufio.NewScanner(file)
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	scanner.Buffer(make([]byte, 0, kimiCodeSessionIndexInitialBufferSize), kimiCodeSessionIndexMaxBufferSize)
 	for scanner.Scan() {
-		var entry kimiCodeSessionIndexEntry
-		if err := json.Unmarshal([]byte(strings.TrimSpace(scanner.Text())), &entry); err != nil {
+		var entry map[string]any
+		if unmarshalErr := json.Unmarshal([]byte(strings.TrimSpace(scanner.Text())), &entry); unmarshalErr != nil {
 			continue
 		}
-		if entry.SessionID == sessionID && strings.TrimSpace(entry.SessionDir) != "" {
-			return strings.TrimSpace(entry.SessionDir)
+		sessionDir := payloadString(entry, "sessionDir")
+		if payloadString(entry, "sessionId") == sessionID && sessionDir != "" {
+			return sessionDir
 		}
 	}
 

@@ -95,8 +95,8 @@ func firstArrayString(payload map[string]any, keys ...string) string {
 			continue
 		}
 		for _, item := range items {
-			text, ok := item.(string)
-			if ok && strings.TrimSpace(text) != "" {
+			text, textOK := item.(string)
+			if textOK && strings.TrimSpace(text) != "" {
 				return strings.TrimSpace(text)
 			}
 		}

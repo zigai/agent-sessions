@@ -19,6 +19,8 @@ const (
 	EnvEvent       EnvField = "event"
 )
 
+const sessionFlag = "--session"
+
 type EnvKeys struct {
 	SessionID   []string
 	SessionPath []string

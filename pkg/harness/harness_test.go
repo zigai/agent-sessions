@@ -48,7 +48,7 @@ func TestResumeCommandFor(t *testing.T) {
 			harness:     registry.HarnessKimiCode,
 			sessionID:   testSessionID,
 			sessionPath: "",
-			want:        []string{kimiCommand, "--session", testSessionID},
+			want:        []string{kimiCommand, sessionFlag, testSessionID},
 		},
 		{
 			name:        "grok",
@@ -62,14 +62,14 @@ func TestResumeCommandFor(t *testing.T) {
 			harness:     registry.HarnessPi,
 			sessionID:   testSessionID,
 			sessionPath: "/tmp/session.jsonl",
-			want:        []string{"pi", "--session", "/tmp/session.jsonl"},
+			want:        []string{"pi", sessionFlag, "/tmp/session.jsonl"},
 		},
 		{
 			name:        "opencode",
 			harness:     registry.HarnessOpenCode,
 			sessionID:   testSessionID,
 			sessionPath: "",
-			want:        []string{"opencode", "--session", testSessionID},
+			want:        []string{"opencode", sessionFlag, testSessionID},
 		},
 		{
 			name:        "agy",
@@ -79,11 +79,11 @@ func TestResumeCommandFor(t *testing.T) {
 			want:        []string{"agy", "--conversation", testSessionID},
 		},
 		{
-			name:        "kilo",
+			name:        kiloCommand,
 			harness:     registry.HarnessKilo,
 			sessionID:   testSessionID,
 			sessionPath: "",
-			want:        []string{"kilo", "--session", testSessionID},
+			want:        []string{kiloCommand, sessionFlag, testSessionID},
 		},
 	}
 
@@ -123,7 +123,7 @@ func TestNormalize(t *testing.T) {
 		{name: "opencode alias underscore", value: "open_code", want: registry.HarnessOpenCode},
 		{name: "agy alias", value: "antigravity-cli", want: registry.HarnessAgy},
 		{name: "agy google alias", value: "google_antigravity", want: registry.HarnessAgy},
-		{name: "kilo", value: "kilo", want: registry.HarnessKilo},
+		{name: kiloCommand, value: kiloCommand, want: registry.HarnessKilo},
 		{name: "kilo alias command", value: "kilocode", want: registry.HarnessKilo},
 		{name: "kilo alias hyphen", value: "kilo-code", want: registry.HarnessKilo},
 		{name: "kilo alias underscore", value: "kilo_code", want: registry.HarnessKilo},
@@ -147,7 +147,7 @@ func TestNormalize(t *testing.T) {
 func TestSupportedNames(t *testing.T) {
 	t.Parallel()
 
-	want := []string{"claude", codexCommand, "cursor", "kimi-code", "grok", "pi", "opencode", "agy", "kilo"}
+	want := []string{"claude", codexCommand, "cursor", "kimi-code", "grok", "pi", "opencode", "agy", kiloCommand}
 	got := SupportedNames()
 	if !slices.Equal(got, want) {
 		t.Fatalf("expected %#v, got %#v", want, got)
@@ -248,7 +248,7 @@ func TestFromCommand(t *testing.T) {
 		{command: "pi", want: registry.HarnessPi, wantOK: true},
 		{command: "opencode", want: registry.HarnessOpenCode, wantOK: true},
 		{command: "agy", want: registry.HarnessAgy, wantOK: true},
-		{command: "kilo", want: registry.HarnessKilo, wantOK: true},
+		{command: kiloCommand, want: registry.HarnessKilo, wantOK: true},
 		{command: "kilocode", want: registry.HarnessKilo, wantOK: true},
 		{command: "kilo-code", want: registry.HarnessKilo, wantOK: true},
 		{command: "kilo_code", want: registry.HarnessKilo, wantOK: true},

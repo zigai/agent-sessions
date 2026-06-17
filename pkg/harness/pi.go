@@ -17,10 +17,10 @@ func piAdapter() Adapter {
 		Installable: true,
 		ResumeCommand: func(sessionID string, sessionPath string) []string {
 			if sessionPath != "" {
-				return []string{"pi", "--session", sessionPath}
+				return []string{"pi", sessionFlag, sessionPath}
 			}
 			if sessionID != "" {
-				return []string{"pi", "--session", sessionID}
+				return []string{"pi", sessionFlag, sessionID}
 			}
 
 			return nil
