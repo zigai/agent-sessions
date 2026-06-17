@@ -12,6 +12,26 @@ other tools can answer questions like:
 
 Supported harnesses: `codex`, `pi`, and `opencode`.
 
+## Installation
+
+### Go install
+
+```bash
+go install github.com/zigai/agent-sessions@latest
+```
+
+### Prebuilt binaries
+
+Download release archives and Linux `.deb`/`.rpm` packages from the [GitHub Releases page](https://github.com/zigai/agent-sessions/releases/latest).
+
+### Build from source
+
+```bash
+git clone https://github.com/zigai/agent-sessions.git
+cd agent-sessions
+go build -o agent-sessions .
+```
+
 ## CLI
 
 ```sh
