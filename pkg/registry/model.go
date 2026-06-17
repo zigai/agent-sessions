@@ -19,9 +19,12 @@ type Harness string
 const (
 	HarnessClaude   Harness = "claude"
 	HarnessCodex    Harness = "codex"
+	HarnessCursor   Harness = "cursor"
+	HarnessKimiCode Harness = "kimi-code"
 	HarnessGrok     Harness = "grok"
 	HarnessPi       Harness = "pi"
 	HarnessOpenCode Harness = "opencode"
+	HarnessAgy      Harness = "agy"
 	HarnessKilo     Harness = "kilo"
 )
 
@@ -151,12 +154,18 @@ func NormalizeHarness(value string) (Harness, error) {
 		return HarnessClaude, nil
 	case string(HarnessCodex):
 		return HarnessCodex, nil
+	case string(HarnessCursor), "cursor-agent", "cursor_agent", "cursor-cli", "cursor_cli":
+		return HarnessCursor, nil
+	case string(HarnessKimiCode), "kimi", "kimi_code", "kimicode":
+		return HarnessKimiCode, nil
 	case string(HarnessGrok), "grok-build", "grok_build":
 		return HarnessGrok, nil
 	case string(HarnessPi):
 		return HarnessPi, nil
 	case "opencode", "open-code", "open_code":
 		return HarnessOpenCode, nil
+	case "agy", "antigravity", "antigravity-cli", "antigravity_cli", "google-antigravity", "google_antigravity":
+		return HarnessAgy, nil
 	case "kilo", "kilocode", "kilo-code", "kilo_code":
 		return HarnessKilo, nil
 	default:

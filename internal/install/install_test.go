@@ -217,6 +217,119 @@ func TestInstallClaudeReplacesManagedHooks(t *testing.T) {
 	}
 }
 
+func TestInstallCursorWritesHooks(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	result, err := Run(Options{
+		Harness:      registry.HarnessCursor,
+		Binary:       testInstallBinary,
+		TargetBinary: "",
+		DryRun:       false,
+		Force:        false,
+		UseShim:      false,
+	})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("expected cursor install to report changed")
+	}
+	if result.Path != filepath.Join(home, ".cursor", "hooks.json") {
+		t.Fatalf("unexpected path %q", result.Path)
+	}
+
+	data, err := os.ReadFile(result.Path)
+	if err != nil {
+		t.Fatalf("reading installed hooks: %v", err)
+	}
+
+	var config map[string]any
+	unmarshalErr := json.Unmarshal(data, &config)
+	if unmarshalErr != nil {
+		t.Fatalf("installed hooks are not valid JSON: %v", unmarshalErr)
+	}
+	if config["version"] != float64(1) {
+		t.Fatalf("expected cursor hooks version 1, got %#v", config["version"])
+	}
+
+	hooks, hooksOK := config["hooks"].(map[string]any)
+	if !hooksOK {
+		t.Fatal("expected hooks object")
+	}
+	for _, event := range []string{"sessionStart", "beforeSubmitPrompt", "beforeShellExecution", "afterShellExecution", "stop", "sessionEnd"} {
+		if _, ok := hooks[event]; !ok {
+			t.Fatalf("expected %s hook", event)
+		}
+	}
+
+	text := string(data)
+	if !strings.Contains(text, "--raw-stdin-defaults-only") || strings.Contains(text, "--raw-stdin ") {
+		t.Fatalf("expected defaults-only cursor hook commands: %s", text)
+	}
+	if !strings.Contains(text, "agent_sessions_integration=cursor-hook") {
+		t.Fatalf("expected managed cursor hook marker: %s", text)
+	}
+	if !strings.Contains(text, "continue") || !strings.Contains(text, "permission") {
+		t.Fatalf("expected non-blocking cursor hook responses: %s", text)
+	}
+}
+
+func TestInstallCursorReplacesManagedHooks(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	path := filepath.Join(home, ".cursor", "hooks.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatalf("creating cursor dir: %v", err)
+	}
+	oldConfig := `{"version":1,"hooks":{"sessionStart":[{"command":"./user-hook.sh"},{"command":"old-agent-sessions report --harness cursor --state idle --source cursor-hook --attribute agent_sessions_integration=cursor-hook"}]}}`
+	if err := os.WriteFile(path, []byte(oldConfig), 0o600); err != nil {
+		t.Fatalf("writing old hooks: %v", err)
+	}
+
+	result, err := Run(Options{
+		Harness:      registry.HarnessCursor,
+		Binary:       testInstallBinary,
+		TargetBinary: "",
+		DryRun:       false,
+		Force:        false,
+		UseShim:      false,
+	})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("expected cursor install to replace old managed hook")
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading installed hooks: %v", err)
+	}
+	text := string(data)
+	if strings.Contains(text, "old-agent-sessions") {
+		t.Fatalf("expected old managed hook to be removed: %s", text)
+	}
+	if !strings.Contains(text, "./user-hook.sh") {
+		t.Fatalf("expected user hook to be preserved: %s", text)
+	}
+
+	second, err := Run(Options{
+		Harness:      registry.HarnessCursor,
+		Binary:       testInstallBinary,
+		TargetBinary: "",
+		DryRun:       false,
+		Force:        false,
+		UseShim:      false,
+	})
+	if err != nil {
+		t.Fatalf("second Run returned error: %v", err)
+	}
+	if second.Changed {
+		t.Fatal("expected second cursor install to be idempotent")
+	}
+}
+
 func TestInstallShimRequiresForceForForeignFile(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv(registry.StateDirEnv, dir)
@@ -443,6 +556,286 @@ const old = "old-agent-sessions";
 	}
 }
 
+func TestInstallAgyWritesPlugin(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("AGY_CLI_HOME", dir)
+
+	result, err := Run(Options{
+		Harness:      registry.HarnessAgy,
+		Binary:       testInstallBinary,
+		TargetBinary: "",
+		DryRun:       false,
+		Force:        false,
+		UseShim:      false,
+	})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("expected agy install to report changed")
+	}
+	if result.Path != filepath.Join(dir, "plugins", agyPluginName) {
+		t.Fatalf("unexpected path %q", result.Path)
+	}
+	if !strings.Contains(result.Snippet, "agy-hook") {
+		t.Fatalf("expected agy hook command in snippet: %q", result.Snippet)
+	}
+
+	manifestData, err := os.ReadFile(filepath.Join(result.Path, "plugin.json"))
+	if err != nil {
+		t.Fatalf("reading plugin manifest: %v", err)
+	}
+	var manifest map[string]any
+	if err := json.Unmarshal(manifestData, &manifest); err != nil {
+		t.Fatalf("plugin manifest is not valid JSON: %v", err)
+	}
+	if manifest["name"] != agyPluginName {
+		t.Fatalf("expected plugin name %q, got %#v", agyPluginName, manifest["name"])
+	}
+
+	hooksData, err := os.ReadFile(filepath.Join(result.Path, "hooks.json"))
+	if err != nil {
+		t.Fatalf("reading agy hooks: %v", err)
+	}
+	var hooks map[string]any
+	if err := json.Unmarshal(hooksData, &hooks); err != nil {
+		t.Fatalf("agy hooks are not valid JSON: %v", err)
+	}
+	pluginHooks, ok := hooks[agyPluginName].(map[string]any)
+	if !ok {
+		t.Fatalf("expected %s hook namespace, got %#v", agyPluginName, hooks)
+	}
+	for _, event := range []string{"PreInvocation", "PostInvocation", "PreToolUse", "PostToolUse", "Stop"} {
+		if _, ok := pluginHooks[event]; !ok {
+			t.Fatalf("expected %s hook", event)
+		}
+	}
+
+	marker, err := os.ReadFile(filepath.Join(result.Path, agyMarkerFileName))
+	if err != nil {
+		t.Fatalf("reading agy marker: %v", err)
+	}
+	if !strings.Contains(string(marker), managedMarker) {
+		t.Fatalf("expected managed marker, got %q", marker)
+	}
+
+	second, err := Run(Options{
+		Harness:      registry.HarnessAgy,
+		Binary:       testInstallBinary,
+		TargetBinary: "",
+		DryRun:       false,
+		Force:        false,
+		UseShim:      false,
+	})
+	if err != nil {
+		t.Fatalf("second Run returned error: %v", err)
+	}
+	if second.Changed {
+		t.Fatal("expected second agy install to be idempotent")
+	}
+}
+
+func TestInstallAgyRequiresForceForForeignPlugin(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("AGY_CLI_HOME", dir)
+	pluginDir := filepath.Join(dir, "plugins", agyPluginName)
+	if err := os.MkdirAll(pluginDir, 0o700); err != nil {
+		t.Fatalf("creating agy plugin dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(pluginDir, "plugin.json"), []byte(`{"name":"foreign"}`), 0o600); err != nil {
+		t.Fatalf("writing foreign plugin manifest: %v", err)
+	}
+
+	_, err := Run(Options{
+		Harness:      registry.HarnessAgy,
+		Binary:       testInstallBinary,
+		TargetBinary: "",
+		DryRun:       false,
+		Force:        false,
+		UseShim:      false,
+	})
+	if err == nil {
+		t.Fatal("expected error for unmanaged agy plugin")
+	}
+
+	result, err := Run(Options{
+		Harness:      registry.HarnessAgy,
+		Binary:       testInstallBinary,
+		TargetBinary: "",
+		DryRun:       false,
+		Force:        true,
+		UseShim:      false,
+	})
+	if err != nil {
+		t.Fatalf("forced Run returned error: %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("expected forced agy install to report changed")
+	}
+}
+
+func TestInstallKimiCodeWritesHooks(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("KIMI_CODE_HOME", dir)
+
+	result, err := Run(Options{
+		Harness:      registry.HarnessKimiCode,
+		Binary:       testInstallBinary,
+		TargetBinary: "",
+		DryRun:       false,
+		Force:        false,
+		UseShim:      false,
+	})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("expected kimi-code install to report changed")
+	}
+	if result.Path != filepath.Join(dir, "config.toml") {
+		t.Fatalf("unexpected path %q", result.Path)
+	}
+
+	data, err := os.ReadFile(result.Path)
+	if err != nil {
+		t.Fatalf("reading installed hooks: %v", err)
+	}
+	text := string(data)
+	for _, event := range []string{
+		"SessionStart",
+		"UserPromptSubmit",
+		"PermissionRequest",
+		"PermissionResult",
+		"Stop",
+		"StopFailure",
+		"Interrupt",
+		"SessionEnd",
+	} {
+		if !strings.Contains(text, `event = "`+event+`"`) {
+			t.Fatalf("expected %s hook in snippet: %s", event, text)
+		}
+	}
+	for _, want := range []string{
+		`matcher = "startup|resume"`,
+		"--raw-stdin",
+		"--quiet",
+		"agent_sessions_integration=kimi-code-hook",
+		managedMarker,
+		"install-hooks kimi-code",
+		"--state idle --event SessionStart",
+		"--state running --event UserPromptSubmit",
+		"--state waiting --event PermissionRequest",
+		"--state running --event PermissionResult",
+		"--state idle --event StopFailure",
+		"--state idle --event Interrupt",
+		"--state exited --event SessionEnd",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("expected %q in snippet: %s", want, text)
+		}
+	}
+	for _, forbidden := range []string{"statusMessage", "hooks =", "type ="} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("unexpected unsupported Kimi hook field %q in snippet: %s", forbidden, text)
+		}
+	}
+}
+
+func TestInstallKimiCodeReplacesManagedBlockAndPreservesConfig(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("KIMI_CODE_HOME", dir)
+	path := filepath.Join(dir, "config.toml")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatalf("creating kimi-code dir: %v", err)
+	}
+	oldConfig := strings.Join([]string{
+		`default_model = "kimi-code/kimi-for-coding"`,
+		"",
+		kimiCodeManagedStart,
+		"[[hooks]]",
+		`event = "SessionStart"`,
+		`command = "old-agent-sessions report --harness kimi-code --source kimi-code-hook"`,
+		kimiCodeManagedEnd,
+		"",
+		"[thinking]",
+		`mode = "auto"`,
+		"",
+	}, "\n")
+	if err := os.WriteFile(path, []byte(oldConfig), 0o600); err != nil {
+		t.Fatalf("writing old config: %v", err)
+	}
+
+	result, err := Run(Options{
+		Harness:      registry.HarnessKimiCode,
+		Binary:       testInstallBinary,
+		TargetBinary: "",
+		DryRun:       false,
+		Force:        false,
+		UseShim:      false,
+	})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("expected kimi-code install to replace old managed block")
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading installed hooks: %v", err)
+	}
+	text := string(data)
+	for _, want := range []string{`default_model = "kimi-code/kimi-for-coding"`, "[thinking]", `mode = "auto"`} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("expected preserved config %q in snippet: %s", want, text)
+		}
+	}
+	if strings.Contains(text, "old-agent-sessions") {
+		t.Fatalf("expected old managed hook to be removed: %s", text)
+	}
+
+	second, err := Run(Options{
+		Harness:      registry.HarnessKimiCode,
+		Binary:       testInstallBinary,
+		TargetBinary: "",
+		DryRun:       false,
+		Force:        false,
+		UseShim:      false,
+	})
+	if err != nil {
+		t.Fatalf("second Run returned error: %v", err)
+	}
+	if second.Changed {
+		t.Fatal("expected second kimi-code install to be idempotent")
+	}
+}
+
+func TestInstallKimiCodeDryRunDoesNotWrite(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("KIMI_CODE_HOME", dir)
+
+	result, err := Run(Options{
+		Harness:      registry.HarnessKimiCode,
+		Binary:       testInstallBinary,
+		TargetBinary: "",
+		DryRun:       true,
+		Force:        false,
+		UseShim:      false,
+	})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("expected kimi-code dry-run to report changed")
+	}
+	if !strings.Contains(result.Snippet, `event = "SessionStart"`) {
+		t.Fatalf("expected dry-run snippet to include Kimi hooks: %s", result.Snippet)
+	}
+	if _, err := os.Stat(result.Path); err == nil {
+		t.Fatalf("expected dry-run not to write %s", result.Path)
+	}
+}
+
 func TestInstallGrokWritesHooks(t *testing.T) {
 	t.Setenv("GROK_HOME", t.TempDir())
 
@@ -553,9 +946,12 @@ func TestRunAllInstallsEveryHarness(t *testing.T) {
 	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
 	t.Setenv("CODEX_HOME", t.TempDir())
 	t.Setenv("GROK_HOME", t.TempDir())
+	t.Setenv("KIMI_CODE_HOME", t.TempDir())
 	t.Setenv("PI_CODING_AGENT_DIR", t.TempDir())
 	t.Setenv(registry.StateDirEnv, t.TempDir())
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("AGY_CLI_HOME", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
 
 	results, err := RunAll(Options{
 		Harness:      "",
