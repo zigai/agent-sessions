@@ -19,6 +19,7 @@ var (
 	ErrNoTmuxContext = errors.New("not inside tmux")
 	// ErrInvalidFieldCount is returned when tmux output does not match the requested format.
 	ErrInvalidFieldCount = errors.New("invalid tmux field count")
+	errMissingTmuxPaneID = errors.New("missing tmux pane id")
 )
 
 type Pane struct {
@@ -98,6 +99,18 @@ func ListPanes(ctx context.Context) ([]Pane, error) {
 	}
 
 	return ParseListPanes(output)
+}
+
+func SendInterrupt(ctx context.Context, paneID string) error {
+	if strings.TrimSpace(paneID) == "" {
+		return errMissingTmuxPaneID
+	}
+	_, err := runTmux(ctx, "send-keys", "-t", paneID, "C-c")
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func ParseCurrent(output string) (registry.TmuxContext, error) {
