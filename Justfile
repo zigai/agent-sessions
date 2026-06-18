@@ -4,6 +4,9 @@
 test:
     go test ./...
 
+race:
+    go test -race ./...
+
 tidy:
     go mod tidy
 
@@ -13,7 +16,9 @@ fix:
 lint:
     golangci-lint run
 
-check: test lint
+check: lint test race
+    go mod tidy -diff
+    go build -o /dev/null .
 
 build:
     go build -o agent-sessions .
