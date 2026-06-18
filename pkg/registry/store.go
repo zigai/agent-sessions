@@ -32,6 +32,11 @@ type GCResult struct {
 	Remaining int `json:"remaining"`
 }
 
+type ResetResult struct {
+	Cleared   int `json:"cleared"`
+	Remaining int `json:"remaining"`
+}
+
 type FileStore struct {
 	path string
 	now  func() time.Time
@@ -202,6 +207,31 @@ func (s *FileStore) GC(ctx context.Context, deleteAfter time.Duration) (GCResult
 	})
 	if err != nil {
 		return GCResult{}, err
+	}
+
+	return result, nil
+}
+
+func (s *FileStore) Reset(ctx context.Context) (ResetResult, error) {
+	if err := ctx.Err(); err != nil {
+		return ResetResult{}, fmt.Errorf("checking context: %w", err)
+	}
+
+	now := s.now().UTC()
+	result := ResetResult{
+		Cleared:   0,
+		Remaining: 0,
+	}
+	err := s.withSnapshot(func(snap *snapshot) error {
+		result.Cleared = len(snap.Sessions)
+		snap.Sessions = make(map[string]Session)
+		snap.UpdatedAt = now
+		result.Remaining = len(snap.Sessions)
+
+		return nil
+	})
+	if err != nil {
+		return ResetResult{}, err
 	}
 
 	return result, nil

@@ -2,7 +2,9 @@ package registry
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -234,6 +236,55 @@ func TestFileStoreGCDeletesOldExitedSessions(t *testing.T) {
 	}
 	if _, getErr := store.Get(ctx, exited.ID); !errors.Is(getErr, ErrSessionNotFound) {
 		t.Fatalf("expected deleted session to be missing, got %v", getErr)
+	}
+}
+
+func TestFileStoreResetClearsSessions(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	now := time.Date(2026, 6, 17, 10, 0, 0, 0, time.UTC)
+	storePath := filepath.Join(t.TempDir(), "state.json")
+	store := NewFileStore(storePath)
+	store.SetNowForTest(func() time.Time { return now })
+	session := reportRunningCodexSession(t, store, ctx, now)
+
+	resetAt := now.Add(time.Minute)
+	store.SetNowForTest(func() time.Time { return resetAt })
+	result, err := store.Reset(ctx)
+	if err != nil {
+		t.Fatalf("Reset returned error: %v", err)
+	}
+	if result.Cleared != 1 || result.Remaining != 0 {
+		t.Fatalf("expected one cleared session and no remaining sessions, got %#v", result)
+	}
+
+	sessions, err := store.List(ctx, Filter{
+		Harness:     "",
+		State:       "",
+		TmuxSession: "",
+		ActiveOnly:  false,
+	})
+	if err != nil {
+		t.Fatalf("List after reset returned error: %v", err)
+	}
+	if len(sessions) != 0 {
+		t.Fatalf("expected reset store to be empty, got %#v", sessions)
+	}
+	if _, getErr := store.Get(ctx, session.ID); !errors.Is(getErr, ErrSessionNotFound) {
+		t.Fatalf("expected reset session to be missing, got %v", getErr)
+	}
+
+	data, err := os.ReadFile(storePath)
+	if err != nil {
+		t.Fatalf("reading reset store: %v", err)
+	}
+	var snap snapshot
+	if unmarshalErr := json.Unmarshal(data, &snap); unmarshalErr != nil {
+		t.Fatalf("reset store is not valid JSON: %v", unmarshalErr)
+	}
+	if snap.Version != storeVersion || !snap.UpdatedAt.Equal(resetAt) || len(snap.Sessions) != 0 {
+		t.Fatalf("unexpected reset snapshot: %#v", snap)
 	}
 }
 
