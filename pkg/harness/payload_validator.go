@@ -34,22 +34,10 @@ type cursorHookPayload struct {
 	CursorVersion  string   `json:"cursor_version"  validate:"required,notblank"`
 }
 
-type grokHookPayload struct {
-	SessionID     string `validate:"required,notblank"`
-	HookEventName string `validate:"required,notblank"`
-	CWD           string `json:"cwd"                   validate:"required,notblank"`
-	WorkspaceRoot string `validate:"required,notblank"`
-}
-
 type kimiCodeHookPayload struct {
 	SessionID     string `json:"session_id"      validate:"required,notblank"`
 	CWD           string `json:"cwd"             validate:"required,notblank"`
 	HookEventName string `json:"hook_event_name" validate:"required,notblank"`
-}
-
-type agyHookPayload struct {
-	ConversationID string   `validate:"required,notblank"`
-	WorkspacePaths []string `validate:"required,min=1,dive,notblank"`
 }
 
 var (
@@ -66,6 +54,40 @@ func payloadValidator[T any]() HookPayloadValidator {
 
 		return hookPayloadValidator().Struct(payload) == nil
 	}
+}
+
+func grokPayloadValidator(rawPayload json.RawMessage) bool {
+	payload, ok := payloadObject(rawPayload)
+	if !ok {
+		return false
+	}
+
+	return payloadStringAny(payload, "sessionId", "session_id") != "" &&
+		payloadStringAny(payload, "hookEventName", "hook_event_name") != "" &&
+		payloadString(payload, "cwd") != "" &&
+		payloadStringAny(payload, "workspaceRoot", "workspace_root") != ""
+}
+
+func agyPayloadValidator(rawPayload json.RawMessage) bool {
+	payload, ok := payloadObject(rawPayload)
+	if !ok {
+		return false
+	}
+
+	return payloadStringAny(payload, "conversationId", "conversation_id") != "" &&
+		firstArrayString(payload, "workspacePaths", "workspace_paths") != ""
+}
+
+func payloadObject(rawPayload json.RawMessage) (map[string]any, bool) {
+	var payload map[string]any
+	if err := json.Unmarshal(rawPayload, &payload); err != nil {
+		return nil, false
+	}
+	if payload == nil {
+		return nil, false
+	}
+
+	return payload, true
 }
 
 func hookPayloadValidator() *validator.Validate {

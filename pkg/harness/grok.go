@@ -22,7 +22,7 @@ func grokAdapter() Adapter {
 
 			return []string{"grok", "--resume", sessionID}
 		},
-		PayloadValidator: payloadValidator[grokHookPayload](),
+		PayloadValidator: grokPayloadValidator,
 		PayloadDefaults:  grokPayloadDefaults,
 	}
 }

@@ -15,7 +15,6 @@ func cursorAdapter() Adapter {
 		Aliases: []string{"cursor-agent", "cursor_agent", "cursor-cli", "cursor_cli"},
 		ProcessNames: []string{
 			cursorCommand,
-			"agent",
 		},
 		Env: EnvKeys{
 			SessionID:   nil,

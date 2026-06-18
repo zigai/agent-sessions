@@ -240,7 +240,7 @@ func TestFromCommand(t *testing.T) {
 	}{
 		{command: "/usr/bin/codex", want: registry.HarnessCodex, wantOK: true},
 		{command: "/usr/local/bin/cursor-agent", want: registry.HarnessCursor, wantOK: true},
-		{command: "agent", want: registry.HarnessCursor, wantOK: true},
+		{command: "agent", want: "", wantOK: false},
 		{command: "claude", want: registry.HarnessClaude, wantOK: true},
 		{command: "kimi", want: registry.HarnessKimiCode, wantOK: true},
 		{command: "grok", want: registry.HarnessGrok, wantOK: true},
@@ -442,6 +442,12 @@ func TestPayloadCompatibleWithHarness(t *testing.T) {
 			want:    true,
 		},
 		{
+			name:    "grok accepts snake case hook payload",
+			harness: registry.HarnessGrok,
+			payload: `{"hook_event_name":"stop","session_id":"grok-session","cwd":"/repo","workspace_root":"/repo"}`,
+			want:    true,
+		},
+		{
 			name:    "kimi-code accepts native hook payload",
 			harness: registry.HarnessKimiCode,
 			payload: `{"session_id":"kimi-session","cwd":"/repo","hook_event_name":"PermissionRequest"}`,
@@ -451,6 +457,12 @@ func TestPayloadCompatibleWithHarness(t *testing.T) {
 			name:    "agy accepts native hook payload",
 			harness: registry.HarnessAgy,
 			payload: `{"conversationId":"agy-session","workspacePaths":["/repo"],"event":"Stop"}`,
+			want:    true,
+		},
+		{
+			name:    "agy accepts snake case hook payload",
+			harness: registry.HarnessAgy,
+			payload: `{"conversation_id":"agy-session","workspace_paths":["/repo"],"event":"Stop"}`,
 			want:    true,
 		},
 		{
