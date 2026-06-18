@@ -54,8 +54,6 @@ Available Commands:
   path          Print the registry state file path
   report        Upsert a session report from a harness hook or wrapper
   scan          Scan tmux panes for supported harness processes
-  summary       Summarize agent counts by tmux session
-  watch         Watch registry state changes
 
 Flags:
   -h, --help           help for agent-sessions
@@ -63,7 +61,16 @@ Flags:
       --store string   registry state file path
   -v, --version        print version
 
-Use "agent-sessions [command] --help" for more information about a command
+Use "agent-sessions [command] --help" for more information about a command.
+```
+
+Common read-side views:
+
+```sh
+agent-sessions list
+agent-sessions list --summary
+agent-sessions list --watch
+agent-sessions list --watch --summary
 ```
 
 ## Hook Installation
