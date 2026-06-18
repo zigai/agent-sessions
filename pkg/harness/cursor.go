@@ -32,7 +32,8 @@ func cursorAdapter() Adapter {
 
 			return []string{cursorCommand, "--resume", sessionID}
 		},
-		PayloadDefaults: cursorPayloadDefaults,
+		PayloadValidator: payloadValidator[cursorHookPayload](),
+		PayloadDefaults:  cursorPayloadDefaults,
 	}
 }
 

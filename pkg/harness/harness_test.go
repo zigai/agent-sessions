@@ -402,6 +402,131 @@ func TestKimiDefaultsFromPayloadUsesSessionIndex(t *testing.T) {
 	}
 }
 
+func TestPayloadCompatibleWithHarness(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		harness registry.Harness
+		payload string
+		want    bool
+	}{
+		{
+			name:    "claude accepts native hook payload",
+			harness: registry.HarnessClaude,
+			payload: `{"session_id":"claude-session","transcript_path":"/home/zigai/.claude/projects/-repo/claude-session.jsonl","cwd":"/repo","hook_event_name":"Stop"}`,
+			want:    true,
+		},
+		{
+			name:    "codex accepts native hook payload",
+			harness: registry.HarnessCodex,
+			payload: `{"session_id":"codex-session","transcript_path":"/home/zigai/.codex/sessions/2026/06/18/rollout.jsonl","cwd":"/repo","hook_event_name":"Stop","model":"gpt-5-codex"}`,
+			want:    true,
+		},
+		{
+			name:    "codex accepts null transcript path",
+			harness: registry.HarnessCodex,
+			payload: `{"session_id":"codex-session","transcript_path":null,"cwd":"/repo","hook_event_name":"Stop","model":"gpt-5-codex"}`,
+			want:    true,
+		},
+		{
+			name:    "cursor accepts native hook payload",
+			harness: registry.HarnessCursor,
+			payload: `{"conversation_id":"cursor-conversation","session_id":"cursor-session","transcript_path":null,"workspace_roots":["/repo"],"hook_event_name":"sessionEnd","cursor_version":"2026.06.15"}`,
+			want:    true,
+		},
+		{
+			name:    "grok accepts native hook payload",
+			harness: registry.HarnessGrok,
+			payload: `{"hookEventName":"stop","sessionId":"grok-session","cwd":"/repo","workspaceRoot":"/repo"}`,
+			want:    true,
+		},
+		{
+			name:    "kimi-code accepts native hook payload",
+			harness: registry.HarnessKimiCode,
+			payload: `{"session_id":"kimi-session","cwd":"/repo","hook_event_name":"PermissionRequest"}`,
+			want:    true,
+		},
+		{
+			name:    "agy accepts native hook payload",
+			harness: registry.HarnessAgy,
+			payload: `{"conversationId":"agy-session","workspacePaths":["/repo"],"event":"Stop"}`,
+			want:    true,
+		},
+		{
+			name:    "claude rejects camel case hook payload",
+			harness: registry.HarnessClaude,
+			payload: `{"hookEventName":"stop","sessionId":"not-claude","cwd":"/repo","workspaceRoot":"/repo","promptId":"prompt"}`,
+			want:    false,
+		},
+		{
+			name:    "claude rejects cursor payload",
+			harness: registry.HarnessClaude,
+			payload: `{"conversation_id":"cursor-conversation","session_id":"cursor-session","transcript_path":null,"hook_event_name":"sessionEnd","cursor_version":"2026.06.15","workspace_roots":["/repo"]}`,
+			want:    false,
+		},
+		{
+			name:    "claude rejects codex transcript payload",
+			harness: registry.HarnessClaude,
+			payload: `{"session_id":"codex-session","transcript_path":"/home/zigai/.codex/sessions/2026/06/18/rollout.jsonl","cwd":"/repo","hook_event_name":"Stop","model":"gpt-5-codex"}`,
+			want:    false,
+		},
+		{
+			name:    "claude rejects null transcript path",
+			harness: registry.HarnessClaude,
+			payload: `{"session_id":"claude-session","transcript_path":null,"cwd":"/repo","hook_event_name":"Stop"}`,
+			want:    false,
+		},
+		{
+			name:    "codex rejects claude transcript payload",
+			harness: registry.HarnessCodex,
+			payload: `{"session_id":"claude-session","transcript_path":"/home/zigai/.claude/projects/-repo/claude-session.jsonl","cwd":"/repo","hook_event_name":"SessionStart","model":"claude-sonnet-4-6"}`,
+			want:    false,
+		},
+		{
+			name:    "cursor rejects payload without cursor common fields",
+			harness: registry.HarnessCursor,
+			payload: `{"session_id":"cursor-session","hook_event_name":"sessionStart"}`,
+			want:    false,
+		},
+		{
+			name:    "cursor rejects string workspace roots",
+			harness: registry.HarnessCursor,
+			payload: `{"session_id":"cursor-session","transcript_path":"/tmp/cursor.jsonl","workspace_roots":"/repo","hook_event_name":"sessionEnd","cursor_version":"2026.06.15"}`,
+			want:    false,
+		},
+		{
+			name:    "cursor rejects blank workspace roots",
+			harness: registry.HarnessCursor,
+			payload: `{"session_id":"cursor-session","transcript_path":"/tmp/cursor.jsonl","workspace_roots":["  "],"hook_event_name":"sessionEnd","cursor_version":"2026.06.15"}`,
+			want:    false,
+		},
+		{
+			name:    "claude rejects non-object json",
+			harness: registry.HarnessClaude,
+			payload: `"not an object"`,
+			want:    false,
+		},
+		{
+			name:    "claude rejects invalid json",
+			harness: registry.HarnessClaude,
+			payload: `{"session_id":`,
+			want:    false,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := PayloadCompatibleWithHarness(test.harness, json.RawMessage(test.payload))
+			if got != test.want {
+				t.Fatalf("expected %t, got %t", test.want, got)
+			}
+		})
+	}
+}
+
 func strconvQuoteForTest(value string) string {
 	data, err := json.Marshal(value)
 	if err != nil {

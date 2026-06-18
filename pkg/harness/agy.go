@@ -36,7 +36,8 @@ func agyAdapter() Adapter {
 
 			return []string{agyCommand, "--conversation", sessionID}
 		},
-		PayloadDefaults: agyPayloadDefaults,
+		PayloadValidator: payloadValidator[agyHookPayload](),
+		PayloadDefaults:  agyPayloadDefaults,
 	}
 }
 

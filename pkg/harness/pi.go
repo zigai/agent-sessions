@@ -25,6 +25,7 @@ func piAdapter() Adapter {
 
 			return nil
 		},
-		PayloadDefaults: nil,
+		PayloadValidator: nil,
+		PayloadDefaults:  nil,
 	}
 }

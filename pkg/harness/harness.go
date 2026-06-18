@@ -39,13 +39,14 @@ type PayloadDefaults struct {
 }
 
 type Adapter struct {
-	ID              registry.Harness
-	Aliases         []string
-	ProcessNames    []string
-	Env             EnvKeys
-	Installable     bool
-	ResumeCommand   func(sessionID string, sessionPath string) []string
-	PayloadDefaults func(payload map[string]any) PayloadDefaults
+	ID               registry.Harness
+	Aliases          []string
+	ProcessNames     []string
+	Env              EnvKeys
+	Installable      bool
+	ResumeCommand    func(sessionID string, sessionPath string) []string
+	PayloadValidator HookPayloadValidator
+	PayloadDefaults  func(payload map[string]any) PayloadDefaults
 }
 
 func All() []Adapter {
@@ -132,6 +133,19 @@ func DefaultsFromPayload(harness registry.Harness, rawPayload json.RawMessage) P
 	return adapter.PayloadDefaults(payload)
 }
 
+func PayloadCompatibleWithHarness(harness registry.Harness, rawPayload json.RawMessage) bool {
+	if len(rawPayload) == 0 {
+		return true
+	}
+
+	adapter, ok := Find(harness)
+	if !ok || adapter.PayloadValidator == nil {
+		return true
+	}
+
+	return adapter.PayloadValidator(rawPayload)
+}
+
 func ResumeCommandFor(harness registry.Harness, sessionID string, sessionPath string) []string {
 	adapter, ok := Find(harness)
 	if !ok || adapter.ResumeCommand == nil {
@@ -159,13 +173,14 @@ func cloneAdapter(adapter Adapter) Adapter {
 
 func emptyAdapter() Adapter {
 	return Adapter{
-		ID:              "",
-		Aliases:         nil,
-		ProcessNames:    nil,
-		Env:             emptyEnvKeys(),
-		Installable:     false,
-		ResumeCommand:   nil,
-		PayloadDefaults: nil,
+		ID:               "",
+		Aliases:          nil,
+		ProcessNames:     nil,
+		Env:              emptyEnvKeys(),
+		Installable:      false,
+		ResumeCommand:    nil,
+		PayloadValidator: nil,
+		PayloadDefaults:  nil,
 	}
 }
 

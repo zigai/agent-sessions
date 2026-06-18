@@ -24,7 +24,8 @@ func codexAdapter() Adapter {
 
 			return []string{codexCommand, "resume", sessionID}
 		},
-		PayloadDefaults: codexPayloadDefaults,
+		PayloadValidator: payloadValidator[codexHookPayload](),
+		PayloadDefaults:  codexPayloadDefaults,
 	}
 }
 

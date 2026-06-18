@@ -24,6 +24,7 @@ func kiloAdapter() Adapter {
 
 			return []string{kiloCommand, sessionFlag, sessionID}
 		},
-		PayloadDefaults: nil,
+		PayloadValidator: nil,
+		PayloadDefaults:  nil,
 	}
 }

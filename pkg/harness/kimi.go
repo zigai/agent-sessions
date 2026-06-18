@@ -32,7 +32,8 @@ func kimiCodeAdapter() Adapter {
 
 			return []string{kimiCommand, sessionFlag, sessionID}
 		},
-		PayloadDefaults: kimiCodePayloadDefaults,
+		PayloadValidator: payloadValidator[kimiCodeHookPayload](),
+		PayloadDefaults:  kimiCodePayloadDefaults,
 	}
 }
 

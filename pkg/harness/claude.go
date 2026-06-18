@@ -22,7 +22,8 @@ func claudeAdapter() Adapter {
 
 			return []string{"claude", "--resume", sessionID}
 		},
-		PayloadDefaults: claudePayloadDefaults,
+		PayloadValidator: payloadValidator[claudeHookPayload](),
+		PayloadDefaults:  claudePayloadDefaults,
 	}
 }
 

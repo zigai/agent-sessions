@@ -22,6 +22,7 @@ func openCodeAdapter() Adapter {
 
 			return []string{"opencode", sessionFlag, sessionID}
 		},
-		PayloadDefaults: nil,
+		PayloadValidator: nil,
+		PayloadDefaults:  nil,
 	}
 }
