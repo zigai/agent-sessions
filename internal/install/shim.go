@@ -1,27 +1,25 @@
 package install
 
 import (
+	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
+	"runtime"
+	"strings"
 
 	"github.com/zigai/agent-sessions/pkg/registry"
 )
 
+var errRecursiveShimTarget = errors.New("target binary resolves to managed shim")
+
 func installShim(options Options, harness registry.Harness) (Result, error) {
-	target := options.TargetBinary
-	if target == "" {
-		found, err := exec.LookPath(string(harness))
-		if err != nil {
-			return Result{}, fmt.Errorf("finding %s binary: %w", harness, err)
-		}
-
-		target = found
-	}
-
 	dir := filepath.Join(registry.DefaultStateDir(), "shims")
 	path := filepath.Join(dir, string(harness))
+	target, err := resolveShimTarget(options.TargetBinary, string(harness), dir, path)
+	if err != nil {
+		return Result{}, err
+	}
 	script := shimScript(options.Binary, string(harness), target)
 
 	changed, err := fileNeedsUpdate(path, script, options.Force)
@@ -63,6 +61,117 @@ func installShim(options Options, harness registry.Harness) (Result, error) {
 		Snippet: script,
 		Error:   "",
 	}, nil
+}
+
+func resolveShimTarget(target string, harness string, shimDir string, shimPath string) (string, error) {
+	if target != "" {
+		if pathInDir(target, shimDir) || samePath(target, shimPath) {
+			return "", fmt.Errorf("%w: %s", errRecursiveShimTarget, target)
+		}
+
+		return target, nil
+	}
+
+	found, err := lookPathExcludingShimDir(harness, shimDir)
+	if err != nil {
+		return "", fmt.Errorf("finding %s binary: %w", harness, err)
+	}
+	if pathInDir(found, shimDir) || samePath(found, shimPath) {
+		return "", fmt.Errorf("%w: %s", errRecursiveShimTarget, found)
+	}
+
+	return found, nil
+}
+
+func lookPathExcludingShimDir(file string, shimDir string) (string, error) {
+	if strings.ContainsAny(file, `/\`) {
+		if isExecutable(file) {
+			return file, nil
+		}
+
+		return "", os.ErrNotExist
+	}
+
+	for _, dir := range filepath.SplitList(os.Getenv("PATH")) {
+		if strings.TrimSpace(dir) == "" || samePath(dir, shimDir) {
+			continue
+		}
+		for _, candidate := range executableCandidates(filepath.Join(dir, file)) {
+			if isExecutable(candidate) {
+				return candidate, nil
+			}
+		}
+	}
+
+	return "", os.ErrNotExist
+}
+
+func executableCandidates(path string) []string {
+	if runtime.GOOS != "windows" || filepath.Ext(path) != "" {
+		return []string{path}
+	}
+
+	extensions := filepath.SplitList(os.Getenv("PATHEXT"))
+	if len(extensions) == 0 {
+		extensions = []string{".COM", ".EXE", ".BAT", ".CMD"}
+	}
+
+	candidates := make([]string, 0, len(extensions)+1)
+	candidates = append(candidates, path)
+	for _, extension := range extensions {
+		if extension == "" {
+			continue
+		}
+		candidates = append(candidates, path+extension)
+	}
+
+	return candidates
+}
+
+func isExecutable(path string) bool {
+	info, err := os.Stat(path)
+	if err != nil || info.IsDir() {
+		return false
+	}
+	if runtime.GOOS == "windows" {
+		return true
+	}
+
+	return info.Mode()&0o111 != 0
+}
+
+func pathInDir(path string, dir string) bool {
+	path = canonicalPath(path)
+	dir = canonicalPath(dir)
+	relative, err := filepath.Rel(dir, path)
+	if err != nil {
+		return false
+	}
+
+	return relative == "." || (relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)))
+}
+
+func samePath(left string, right string) bool {
+	left = canonicalPath(left)
+	right = canonicalPath(right)
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(left, right)
+	}
+
+	return left == right
+}
+
+func canonicalPath(path string) string {
+	absolute, err := filepath.Abs(path)
+	if err == nil {
+		path = absolute
+	}
+	evaluated, err := filepath.EvalSymlinks(path)
+	if err == nil {
+		path = evaluated
+	}
+
+	return filepath.Clean(path)
 }
 
 func shimScript(binary string, harness string, target string) string {

@@ -2,6 +2,8 @@ package install
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -18,7 +20,7 @@ func TestInstallCodexMergesHooks(t *testing.T) {
 
 	result, err := Run(Options{
 		Harness:      registry.HarnessCodex,
-		Binary:       "agent-sessions",
+		Binary:       defaultBinary,
 		TargetBinary: "",
 		DryRun:       false,
 		Force:        false,
@@ -83,7 +85,7 @@ func TestInstallClaudeWritesHooks(t *testing.T) {
 
 	result, err := Run(Options{
 		Harness:      registry.HarnessClaude,
-		Binary:       "agent-sessions",
+		Binary:       defaultBinary,
 		TargetBinary: "",
 		DryRun:       false,
 		Force:        false,
@@ -149,6 +151,64 @@ func TestInstallClaudeReplacesManagedHooks(t *testing.T) {
 		FirstChangeMessage:   "expected claude install to replace old managed hook",
 		SecondChangedMessage: "expected second claude install to be idempotent",
 	})
+}
+
+func TestInstallClaudeRepairsManagedHookMatcher(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", dir)
+
+	first, err := Run(Options{
+		Harness:      registry.HarnessClaude,
+		Binary:       testInstallBinary,
+		TargetBinary: "",
+		DryRun:       false,
+		Force:        false,
+		UseShim:      false,
+	})
+	if err != nil {
+		t.Fatalf("initial Run returned error: %v", err)
+	}
+
+	config := decodeTestJSONObject(t, readTestFile(t, first.Path, "reading claude hooks"), "claude hooks")
+	hooks := requireTestHooks(t, config)
+	notificationGroups, ok := hooks["Notification"].([]any)
+	if !ok || len(notificationGroups) == 0 {
+		t.Fatalf("expected Notification hook groups, got %#v", hooks["Notification"])
+	}
+	group, ok := notificationGroups[0].(map[string]any)
+	if !ok {
+		t.Fatalf("expected Notification hook group object, got %#v", notificationGroups[0])
+	}
+	group["matcher"] = "*"
+
+	data, err := json.MarshalIndent(config, "", "  ")
+	if err != nil {
+		t.Fatalf("encoding modified hooks: %v", err)
+	}
+	writeErr := os.WriteFile(first.Path, append(data, '\n'), 0o600)
+	if writeErr != nil {
+		t.Fatalf("writing modified hooks: %v", writeErr)
+	}
+
+	second, err := Run(Options{
+		Harness:      registry.HarnessClaude,
+		Binary:       testInstallBinary,
+		TargetBinary: "",
+		DryRun:       false,
+		Force:        false,
+		UseShim:      false,
+	})
+	if err != nil {
+		t.Fatalf("repair Run returned error: %v", err)
+	}
+	if !second.Changed {
+		t.Fatal("expected reinstall to repair stale managed matcher")
+	}
+
+	text := string(readTestFile(t, first.Path, "reading repaired hooks"))
+	if !strings.Contains(text, `"matcher": "permission_prompt"`) || strings.Contains(text, `"matcher": "*"`) {
+		t.Fatalf("expected repaired notification matcher, got %s", text)
+	}
 }
 
 func TestInstallCursorWritesHooks(t *testing.T) {
@@ -269,7 +329,7 @@ func TestInstallShimRequiresForceForForeignFile(t *testing.T) {
 
 	_, err := Run(Options{
 		Harness:      registry.HarnessOpenCode,
-		Binary:       "agent-sessions",
+		Binary:       defaultBinary,
 		TargetBinary: "/usr/bin/opencode",
 		DryRun:       false,
 		Force:        false,
@@ -286,7 +346,7 @@ func TestInstallShimWritesManagedScript(t *testing.T) {
 
 	result, err := Run(Options{
 		Harness:      registry.HarnessOpenCode,
-		Binary:       "agent-sessions",
+		Binary:       defaultBinary,
 		TargetBinary: "/usr/bin/opencode",
 		DryRun:       false,
 		Force:        false,
@@ -303,6 +363,61 @@ func TestInstallShimWritesManagedScript(t *testing.T) {
 	}
 	if result.Path != filepath.Join(dir, "shims", "opencode") {
 		t.Fatalf("unexpected path %q", result.Path)
+	}
+}
+
+func TestInstallShimResolvesTargetOutsideManagedShimDir(t *testing.T) {
+	dir := t.TempDir()
+	realDir := t.TempDir()
+	t.Setenv(registry.StateDirEnv, dir)
+	t.Setenv("PATH", filepath.Join(dir, "shims")+string(os.PathListSeparator)+realDir)
+
+	shimPath := filepath.Join(dir, "shims", "opencode")
+	if err := os.MkdirAll(filepath.Dir(shimPath), 0o700); err != nil {
+		t.Fatalf("creating shim dir: %v", err)
+	}
+	if err := writeExecutableTestFile(shimPath, []byte("#!/bin/sh\n# "+managedMarker+"\n")); err != nil {
+		t.Fatalf("writing existing shim: %v", err)
+	}
+	realPath := filepath.Join(realDir, "opencode")
+	if err := writeExecutableTestFile(realPath, []byte("#!/bin/sh\n")); err != nil {
+		t.Fatalf("writing real harness binary: %v", err)
+	}
+
+	result, err := Run(Options{
+		Harness:      registry.HarnessOpenCode,
+		Binary:       defaultBinary,
+		TargetBinary: "",
+		DryRun:       true,
+		Force:        false,
+		UseShim:      true,
+	})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if !strings.Contains(result.Snippet, "harness_bin="+realPath) {
+		t.Fatalf("expected shim to target real binary %q, got snippet: %s", realPath, result.Snippet)
+	}
+	if strings.Contains(result.Snippet, "harness_bin="+shimPath) {
+		t.Fatalf("shim targets itself: %s", result.Snippet)
+	}
+}
+
+func TestInstallShimRejectsManagedShimTarget(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv(registry.StateDirEnv, dir)
+	shimPath := filepath.Join(dir, "shims", "opencode")
+
+	_, err := Run(Options{
+		Harness:      registry.HarnessOpenCode,
+		Binary:       defaultBinary,
+		TargetBinary: shimPath,
+		DryRun:       true,
+		Force:        false,
+		UseShim:      true,
+	})
+	if !errors.Is(err, errRecursiveShimTarget) {
+		t.Fatalf("expected errRecursiveShimTarget, got %v", err)
 	}
 }
 
@@ -342,6 +457,9 @@ func TestInstallPiWritesExtension(t *testing.T) {
 	if !strings.Contains(result.Snippet, `"--harness", "pi"`) {
 		t.Fatalf("expected pi report command in snippet: %q", result.Snippet)
 	}
+	if !strings.Contains(result.Snippet, `"--observed-at", observedAt`) {
+		t.Fatalf("expected pi observed timestamp in snippet: %q", result.Snippet)
+	}
 }
 
 func TestInstallOpenCodeWritesPlugin(t *testing.T) {
@@ -373,6 +491,9 @@ func TestInstallOpenCodeWritesPlugin(t *testing.T) {
 	}
 	if !strings.Contains(result.Snippet, `"permission.asked"`) {
 		t.Fatalf("expected permission event mapping in snippet: %q", result.Snippet)
+	}
+	if !strings.Contains(result.Snippet, `"--observed-at", observedAt`) {
+		t.Fatalf("expected opencode observed timestamp in snippet: %q", result.Snippet)
 	}
 }
 
@@ -406,6 +527,7 @@ func TestInstallKiloWritesPlugin(t *testing.T) {
 		`case "session.updated":`,
 		`install-hooks", "kilo"`,
 		`"--harness", "kilo"`,
+		`"--observed-at", observedAt`,
 		`"kilo_status"`,
 		`"agent_sessions_integration", "kilo-plugin"`,
 	}, "kilo snippet")
@@ -717,7 +839,7 @@ func TestInstallGrokWritesHooks(t *testing.T) {
 
 	result, err := Run(Options{
 		Harness:      registry.HarnessGrok,
-		Binary:       "agent-sessions",
+		Binary:       defaultBinary,
 		TargetBinary: "",
 		DryRun:       false,
 		Force:        false,
@@ -831,7 +953,7 @@ func TestRunAllInstallsEveryHarness(t *testing.T) {
 
 	results, err := RunAll(Options{
 		Harness:      "",
-		Binary:       "agent-sessions",
+		Binary:       defaultBinary,
 		TargetBinary: "/usr/bin/opencode",
 		DryRun:       false,
 		Force:        false,
@@ -1046,4 +1168,16 @@ func requireAgyImportManifest(t *testing.T, path string) {
 	}
 
 	t.Fatalf("expected agy import for %q, got %#v", agyPluginName, imports)
+}
+
+func writeExecutableTestFile(path string, data []byte) error {
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		return fmt.Errorf("writing executable test file: %w", err)
+	}
+
+	if err := os.Chmod(path, 0o700); err != nil {
+		return fmt.Errorf("marking executable test file executable: %w", err)
+	}
+
+	return nil
 }

@@ -10,7 +10,10 @@ import (
 	"github.com/zigai/agent-sessions/pkg/registry"
 )
 
-const managedMarker = "agent-sessions managed integration"
+const (
+	defaultBinary = "agent-sessions"
+	managedMarker = "agent-sessions managed integration"
+)
 
 var (
 	errUnsupportedHarness = errors.New("unsupported harness")
@@ -54,7 +57,7 @@ type Result struct {
 
 func Run(options Options) (Result, error) {
 	if options.Binary == "" {
-		options.Binary = "agent-sessions"
+		options.Binary = defaultBinary
 	}
 
 	runInstaller, ok := installers[options.Harness]

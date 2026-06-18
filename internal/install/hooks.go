@@ -2,6 +2,7 @@ package install
 
 import (
 	"maps"
+	"reflect"
 	"strings"
 
 	"github.com/zigai/agent-sessions/pkg/registry"
@@ -63,20 +64,20 @@ func upsertManagedCommandHookGroup(
 		groups = nil
 	}
 
-	managedCount, exactCount := countManagedCommandHookGroups(groups, command, isManaged)
-	if managedCount == 1 && exactCount == 1 {
+	desiredGroup := commandHookGroup(command, matcher, statusMessage)
+	if managedCommandHookGroupsCurrent(groups, desiredGroup, isManaged) {
 		return false
 	}
 
 	groups, _ = removeManagedCommandHookGroups(groups, isManaged)
-	hooks[event] = append(groups, commandHookGroup(command, matcher, statusMessage))
+	hooks[event] = append(groups, desiredGroup)
 
 	return true
 }
 
-func countManagedCommandHookGroups(groups []any, command string, isManaged func(string) bool) (int, int) {
+func managedCommandHookGroupsCurrent(groups []any, desiredGroup map[string]any, isManaged func(string) bool) bool {
 	managedCount := 0
-	exactCount := 0
+	desiredCount := 0
 	for _, groupValue := range groups {
 		group, ok := groupValue.(map[string]any)
 		if !ok {
@@ -96,13 +97,13 @@ func countManagedCommandHookGroups(groups []any, command string, isManaged func(
 				continue
 			}
 			managedCount++
-			if hookCommand == command {
-				exactCount++
-			}
+		}
+		if reflect.DeepEqual(group, desiredGroup) {
+			desiredCount++
 		}
 	}
 
-	return managedCount, exactCount
+	return managedCount == 1 && desiredCount == 1
 }
 
 func removeManagedCommandHookGroups(groups []any, isManaged func(string) bool) ([]any, bool) {
