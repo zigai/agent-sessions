@@ -12,14 +12,21 @@ import (
 	"github.com/zigai/agent-sessions/pkg/registry"
 )
 
-const fieldSeparator = "\t"
+const (
+	fieldSeparator            = "\t"
+	escapedFieldPrefix        = "tmuxctx:"
+	listPaneFieldCount        = 11
+	singleQuoteDelimiterWidth = 2
+)
 
 var (
 	// ErrNoTmuxContext is returned when no tmux environment is available.
 	ErrNoTmuxContext = errors.New("not inside tmux")
 	// ErrInvalidFieldCount is returned when tmux output does not match the requested format.
-	ErrInvalidFieldCount = errors.New("invalid tmux field count")
-	errMissingTmuxPaneID = errors.New("missing tmux pane id")
+	ErrInvalidFieldCount             = errors.New("invalid tmux field count")
+	errMissingTmuxPaneID             = errors.New("missing tmux pane id")
+	errUnterminatedSingleQuotedField = errors.New("unterminated tmux single-quoted field")
+	errUnterminatedDoubleQuotedField = errors.New("unterminated tmux double-quoted field")
 )
 
 type Pane struct {
@@ -32,7 +39,7 @@ func Current(ctx context.Context) (registry.TmuxContext, error) {
 		return registry.TmuxContext{}, ErrNoTmuxContext
 	}
 
-	format := strings.Join([]string{
+	format := tmuxFormat([]string{
 		"#{session_id}",
 		"#{session_name}",
 		"#{window_id}",
@@ -44,7 +51,7 @@ func Current(ctx context.Context) (registry.TmuxContext, error) {
 		"#{pane_pid}",
 		"#{pane_tty}",
 		"#{client_tty}",
-	}, fieldSeparator)
+	})
 	output, err := runTmux(ctx, currentDisplayMessageArgs(format, os.Getenv("TMUX_PANE"))...)
 	if err != nil {
 		if paneID := os.Getenv("TMUX_PANE"); paneID != "" {
@@ -80,7 +87,7 @@ func currentDisplayMessageArgs(format string, paneID string) []string {
 }
 
 func ListPanes(ctx context.Context) ([]Pane, error) {
-	format := strings.Join([]string{
+	format := tmuxFormat([]string{
 		"#{session_id}",
 		"#{session_name}",
 		"#{window_id}",
@@ -92,7 +99,7 @@ func ListPanes(ctx context.Context) ([]Pane, error) {
 		"#{pane_pid}",
 		"#{pane_tty}",
 		"#{pane_current_command}",
-	}, fieldSeparator)
+	})
 	output, err := runTmux(ctx, "list-panes", "-a", "-F", format)
 	if err != nil {
 		return nil, err
@@ -114,10 +121,13 @@ func SendInterrupt(ctx context.Context, paneID string) error {
 }
 
 func ParseCurrent(output string) (registry.TmuxContext, error) {
-	fields := splitFields(output)
-	const expectedFields = 11
+	const expectedFields = listPaneFieldCount
+	fields, err := parseTmuxFields(output, expectedFields)
+	if err != nil {
+		return registry.TmuxContext{}, err
+	}
 	if len(fields) != expectedFields {
-		return registry.TmuxContext{}, fmt.Errorf("%w: expected %d, got %d", ErrInvalidFieldCount, expectedFields, len(fields))
+		return registry.TmuxContext{}, invalidFieldCountError(expectedFields, len(fields))
 	}
 
 	return registry.TmuxContext{
@@ -137,43 +147,218 @@ func ParseCurrent(output string) (registry.TmuxContext, error) {
 }
 
 func ParseListPanes(output string) ([]Pane, error) {
-	lines := strings.Split(strings.TrimSpace(output), "\n")
-	if len(lines) == 1 && lines[0] == "" {
+	trimmed := strings.TrimRight(output, "\r\n")
+	if trimmed == "" {
 		return nil, nil
 	}
 
-	panes := make([]Pane, 0, len(lines))
-	for _, line := range lines {
-		fields := splitFields(line)
-		const expectedFields = 11
-		if len(fields) != expectedFields {
-			return nil, fmt.Errorf("%w: expected %d, got %d", ErrInvalidFieldCount, expectedFields, len(fields))
-		}
+	fields, ok, err := parseEscapedFields(trimmed)
+	if err != nil {
+		return nil, err
+	}
+	if ok {
+		return panesFromFields(fields)
+	}
+
+	return parseLegacyListPanes(trimmed)
+}
+
+func panesFromFields(fields []string) ([]Pane, error) {
+	const expectedFields = listPaneFieldCount
+	if len(fields)%expectedFields != 0 {
+		return nil, invalidFieldCountError(expectedFields, len(fields))
+	}
+
+	panes := make([]Pane, 0, len(fields)/expectedFields)
+	for offset := 0; offset < len(fields); offset += expectedFields {
+		paneFields := fields[offset : offset+expectedFields]
 
 		panes = append(panes, Pane{
 			Tmux: registry.TmuxContext{
 				Inside:          true,
-				SessionID:       fields[0],
-				SessionName:     fields[1],
-				WindowID:        fields[2],
-				WindowIndex:     fields[3],
-				WindowName:      fields[4],
-				PaneID:          fields[5],
-				PaneIndex:       fields[6],
-				PaneCurrentPath: fields[7],
-				PanePID:         parsePositiveInt(fields[8]),
-				PaneTTY:         fields[9],
+				SessionID:       paneFields[0],
+				SessionName:     paneFields[1],
+				WindowID:        paneFields[2],
+				WindowIndex:     paneFields[3],
+				WindowName:      paneFields[4],
+				PaneID:          paneFields[5],
+				PaneIndex:       paneFields[6],
+				PaneCurrentPath: paneFields[7],
+				PanePID:         parsePositiveInt(paneFields[8]),
+				PaneTTY:         paneFields[9],
 				ClientTTY:       "",
 			},
-			CurrentCommand: fields[10],
+			CurrentCommand: paneFields[10],
 		})
 	}
 
 	return panes, nil
 }
 
-func splitFields(output string) []string {
-	return strings.Split(strings.TrimRight(output, "\r\n"), fieldSeparator)
+func parseLegacyListPanes(output string) ([]Pane, error) {
+	lines := strings.Split(strings.TrimSpace(output), "\n")
+	if len(lines) == 1 && lines[0] == "" {
+		return nil, nil
+	}
+
+	fields := make([]string, 0, len(lines)*listPaneFieldCount)
+	const expectedFields = listPaneFieldCount
+	for _, line := range lines {
+		lineFields := splitLegacyFields(line, expectedFields)
+		if len(lineFields) != expectedFields {
+			return nil, invalidFieldCountError(expectedFields, len(lineFields))
+		}
+		fields = append(fields, lineFields...)
+	}
+
+	return panesFromFields(fields)
+}
+
+func tmuxFormat(fields []string) string {
+	parts := make([]string, 0, len(fields))
+	for _, field := range fields {
+		parts = append(parts, escapedFieldPrefix+"#{q:"+field+"}")
+	}
+
+	return strings.Join(parts, " ")
+}
+
+func parseTmuxFields(output string, expectedFields int) ([]string, error) {
+	trimmed := strings.TrimRight(output, "\r\n")
+	if trimmed == "" {
+		return nil, nil
+	}
+
+	escapedFields, ok, err := parseEscapedFields(trimmed)
+	if err != nil {
+		return nil, err
+	}
+	if ok {
+		return escapedFields, nil
+	}
+
+	return splitLegacyFields(trimmed, expectedFields), nil
+}
+
+func parseEscapedFields(output string) ([]string, bool, error) {
+	if !strings.Contains(output, escapedFieldPrefix) {
+		return nil, false, nil
+	}
+
+	words, err := shellWords(output)
+	if err != nil {
+		return nil, false, err
+	}
+	if len(words) == 0 {
+		return nil, false, nil
+	}
+
+	fields := make([]string, 0, len(words))
+	for _, word := range words {
+		if !strings.HasPrefix(word, escapedFieldPrefix) {
+			return nil, false, nil
+		}
+		fields = append(fields, strings.TrimPrefix(word, escapedFieldPrefix))
+	}
+
+	return fields, true, nil
+}
+
+func shellWords(input string) ([]string, error) {
+	var words []string
+	var current strings.Builder
+	inWord := false
+	for index := 0; index < len(input); {
+		char := input[index]
+		switch {
+		case isShellWhitespace(char):
+			if inWord {
+				words = append(words, current.String())
+				current.Reset()
+				inWord = false
+			}
+			index++
+		case char == '\'':
+			inWord = true
+			next := strings.IndexByte(input[index+1:], '\'')
+			if next < 0 {
+				return nil, errUnterminatedSingleQuotedField
+			}
+			current.WriteString(input[index+1 : index+1+next])
+			index += next + singleQuoteDelimiterWidth
+		case char == '"':
+			inWord = true
+			nextIndex, err := appendDoubleQuotedShellWord(&current, input, index+1)
+			if err != nil {
+				return nil, err
+			}
+			index = nextIndex
+		case char == '\\':
+			inWord = true
+			if index+1 >= len(input) {
+				current.WriteByte(char)
+				index++
+				continue
+			}
+			current.WriteByte(input[index+1])
+			index += 2
+		default:
+			inWord = true
+			current.WriteByte(char)
+			index++
+		}
+	}
+	if inWord {
+		words = append(words, current.String())
+	}
+
+	return words, nil
+}
+
+func appendDoubleQuotedShellWord(current *strings.Builder, input string, index int) (int, error) {
+	for index < len(input) {
+		char := input[index]
+		switch char {
+		case '"':
+			return index + 1, nil
+		case '\\':
+			if index+1 >= len(input) {
+				current.WriteByte(char)
+				index++
+				continue
+			}
+			current.WriteByte(input[index+1])
+			index += 2
+		default:
+			current.WriteByte(char)
+			index++
+		}
+	}
+
+	return index, errUnterminatedDoubleQuotedField
+}
+
+func isShellWhitespace(char byte) bool {
+	return char == ' ' || char == '\t' || char == '\n' || char == '\r'
+}
+
+func splitLegacyFields(output string, expectedFields int) []string {
+	fields := strings.Split(output, fieldSeparator)
+	if len(fields) > expectedFields && expectedFields > 8 {
+		pathParts := len(fields) - expectedFields + 1
+		merged := make([]string, 0, expectedFields)
+		merged = append(merged, fields[:7]...)
+		merged = append(merged, strings.Join(fields[7:7+pathParts], fieldSeparator))
+		merged = append(merged, fields[7+pathParts:]...)
+
+		return merged
+	}
+
+	return fields
+}
+
+func invalidFieldCountError(expected int, got int) error {
+	return fmt.Errorf("%w: expected %d, got %d", ErrInvalidFieldCount, expected, got)
 }
 
 func parsePositiveInt(value string) int {

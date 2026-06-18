@@ -38,6 +38,33 @@ func TestParseCurrent(t *testing.T) {
 	}
 }
 
+func TestParseCurrentAllowsTabInPaneCurrentPath(t *testing.T) {
+	t.Parallel()
+
+	ctx, err := ParseCurrent("$1\twork\t@2\t3\tapi\t%4\t1\t/home/me/dir\twith-tab\t1234\t/dev/pts/5\t/dev/pts/1\n")
+	if err != nil {
+		t.Fatalf("ParseCurrent returned error: %v", err)
+	}
+	if ctx.PaneCurrentPath != "/home/me/dir\twith-tab" {
+		t.Fatalf("expected tab in pane current path, got %q", ctx.PaneCurrentPath)
+	}
+}
+
+func TestParseCurrentEscapedFields(t *testing.T) {
+	t.Parallel()
+
+	output := "tmuxctx:\\$1 tmuxctx:work tmuxctx:@2 tmuxctx:3 tmuxctx:api " +
+		"tmuxctx:%4 tmuxctx:1 tmuxctx:'/home/me/dir\twith-tab' " +
+		"tmuxctx:1234 tmuxctx:/dev/pts/5 tmuxctx:/dev/pts/1\n"
+	ctx, err := ParseCurrent(output)
+	if err != nil {
+		t.Fatalf("ParseCurrent returned error: %v", err)
+	}
+	if ctx.SessionID != "$1" || ctx.PaneCurrentPath != "/home/me/dir\twith-tab" {
+		t.Fatalf("unexpected escaped tmux context: %#v", ctx)
+	}
+}
+
 func TestCurrentDisplayMessageArgsTargetsTmuxPane(t *testing.T) {
 	got := currentDisplayMessageArgs("format", "%12")
 	want := []string{"display-message", "-p", "-t", "%12", "-F", "format"}
@@ -73,5 +100,22 @@ func TestParseListPanes(t *testing.T) {
 
 	if panes[1].Tmux.PaneID != "%5" {
 		t.Fatalf("expected second pane id %%5, got %q", panes[1].Tmux.PaneID)
+	}
+}
+
+func TestParseListPanesEscapedFields(t *testing.T) {
+	t.Parallel()
+
+	panes, err := ParseListPanes("tmuxctx:\\$1 tmuxctx:work tmuxctx:@2 tmuxctx:3 tmuxctx:api " +
+		"tmuxctx:%4 tmuxctx:1 tmuxctx:'/home/me/dir\twith-tab' " +
+		"tmuxctx:1234 tmuxctx:/dev/pts/5 tmuxctx:codex\n")
+	if err != nil {
+		t.Fatalf("ParseListPanes returned error: %v", err)
+	}
+	if len(panes) != 1 {
+		t.Fatalf("expected one pane, got %d", len(panes))
+	}
+	if panes[0].Tmux.PaneCurrentPath != "/home/me/dir\twith-tab" || panes[0].CurrentCommand != "codex" {
+		t.Fatalf("unexpected escaped pane: %#v", panes[0])
 	}
 }
