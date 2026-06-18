@@ -56,7 +56,6 @@ var (
 type watchOptions struct {
 	filter     registry.Filter
 	summary    bool
-	staleAfter time.Duration
 	noSnapshot bool
 	format     string
 	formatSet  bool
@@ -93,7 +92,6 @@ type watchSummaryEvent struct {
 	Waiting         int       `json:"waiting"`
 	Idle            int       `json:"idle"`
 	Unknown         int       `json:"unknown"`
-	Stale           int       `json:"stale"`
 	Exited          int       `json:"exited"`
 }
 
@@ -141,7 +139,7 @@ func (app *application) loadInitialWatchState(
 	observedAt time.Time,
 ) (map[string]registry.Session, map[string]registry.Summary, error) {
 	if options.summary {
-		summaries, err := watchSummaries(ctx, store, options, observedAt)
+		summaries, err := watchSummaries(ctx, store, options)
 		if err != nil {
 			return nil, nil, fmt.Errorf("loading initial summary snapshot: %w", err)
 		}
@@ -390,7 +388,7 @@ func (loop *watchLoop) reloadSessions(ctx context.Context) error {
 
 func (loop *watchLoop) reloadSummaries(ctx context.Context) error {
 	observedAt := loop.options.now()
-	nextSummaries, err := watchSummaries(ctx, loop.store, loop.options, observedAt)
+	nextSummaries, err := watchSummaries(ctx, loop.store, loop.options)
 	if err != nil {
 		loop.app.warnf("watch warning: %v\n", err)
 
@@ -439,12 +437,9 @@ func watchSummaries(
 	ctx context.Context,
 	store *registry.FileStore,
 	options watchOptions,
-	observedAt time.Time,
 ) ([]registry.Summary, error) {
 	summaries, err := store.SummaryByTmuxSessionWithOptions(ctx, registry.SummaryOptions{
-		Filter:     options.filter,
-		StaleAfter: options.staleAfter,
-		Now:        observedAt,
+		Filter: options.filter,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("summarizing watch sessions: %w", err)
@@ -620,7 +615,6 @@ func watchSummaryEventFromSummary(
 		Waiting:         summary.Waiting,
 		Idle:            summary.Idle,
 		Unknown:         summary.Unknown,
-		Stale:           summary.Stale,
 		Exited:          summary.Exited,
 	}
 }
@@ -837,7 +831,6 @@ func formatWatchSummaryPlainEvent(event watchSummaryEvent) string {
 		{key: "waiting", value: strconv.Itoa(event.Waiting)},
 		{key: "idle", value: strconv.Itoa(event.Idle)},
 		{key: "unknown", value: strconv.Itoa(event.Unknown)},
-		{key: "stale", value: strconv.Itoa(event.Stale)},
 		{key: "exited", value: strconv.Itoa(event.Exited)},
 	}
 	for _, field := range fields {
@@ -862,7 +855,6 @@ func formatWatchSummaryTableEvent(event watchSummaryEvent) string {
 		padWatchColumn(strconv.Itoa(event.Waiting), watchCountColumnWidth),
 		padWatchColumn(strconv.Itoa(event.Idle), watchCountColumnWidth),
 		padWatchColumn(strconv.Itoa(event.Unknown), watchCountColumnWidth),
-		padWatchColumn(strconv.Itoa(event.Stale), watchCountColumnWidth),
 		strconv.Itoa(event.Exited),
 	}
 

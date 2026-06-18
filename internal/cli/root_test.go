@@ -141,7 +141,7 @@ func TestReadCommandsAreMergedIntoList(t *testing.T) {
 	}
 
 	listCommand := findRootTestCommand(t, cmd, listCommandName)
-	for _, flagName := range []string{"summary", "watch", "no-snapshot", "format", "stale-after"} {
+	for _, flagName := range []string{"summary", "watch", "no-snapshot", "format"} {
 		if listCommand.Flags().Lookup(flagName) == nil {
 			t.Fatalf("expected list flag %s to be registered", flagName)
 		}
@@ -291,10 +291,6 @@ func TestListRejectsModeSpecificFlags(t *testing.T) {
 		{
 			name: "watch flag without watch",
 			args: []string{storeFlag, filepath.Join(t.TempDir(), "state.json"), listCommandName, "--no-snapshot"},
-		},
-		{
-			name: "summary flag without summary",
-			args: []string{storeFlag, filepath.Join(t.TempDir(), "state.json"), listCommandName, "--stale-after", "1m"},
 		},
 		{
 			name: "sort with summary",

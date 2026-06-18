@@ -28,9 +28,8 @@ type snapshot struct {
 }
 
 type GCResult struct {
-	MarkedStale int `json:"marked_stale"`
-	Deleted     int `json:"deleted"`
-	Remaining   int `json:"remaining"`
+	Deleted   int `json:"deleted"`
+	Remaining int `json:"remaining"`
 }
 
 type FileStore struct {
@@ -121,9 +120,7 @@ func (s *FileStore) Get(ctx context.Context, id string) (Session, error) {
 
 func (s *FileStore) SummaryByTmuxSession(ctx context.Context, filter Filter) ([]Summary, error) {
 	return s.SummaryByTmuxSessionWithOptions(ctx, SummaryOptions{
-		Filter:     filter,
-		StaleAfter: 0,
-		Now:        time.Time{},
+		Filter: filter,
 	})
 }
 
@@ -135,14 +132,6 @@ func (s *FileStore) SummaryByTmuxSessionWithOptions(ctx context.Context, options
 	sessions, err := s.listAll()
 	if err != nil {
 		return nil, err
-	}
-
-	now := options.Now
-	if now.IsZero() {
-		now = s.now()
-	}
-	for index := range sessions {
-		sessions[index] = withReadSideStaleState(sessions[index], now, options.StaleAfter)
 	}
 
 	return summariesForSessions(filterSessions(sessions, options.Filter)), nil
@@ -171,7 +160,6 @@ func summariesForSessions(sessions []Session) []Summary {
 				Waiting:         0,
 				Idle:            0,
 				Unknown:         0,
-				Stale:           0,
 				Exited:          0,
 			}
 			byKey[key] = summary
@@ -188,33 +176,20 @@ func summariesForSessions(sessions []Session) []Summary {
 	return summaries
 }
 
-func (s *FileStore) GC(ctx context.Context, staleAfter time.Duration, deleteAfter time.Duration) (GCResult, error) {
+func (s *FileStore) GC(ctx context.Context, deleteAfter time.Duration) (GCResult, error) {
 	if err := ctx.Err(); err != nil {
 		return GCResult{}, fmt.Errorf("checking context: %w", err)
 	}
 
 	now := s.now()
 	result := GCResult{
-		MarkedStale: 0,
-		Deleted:     0,
-		Remaining:   0,
+		Deleted:   0,
+		Remaining: 0,
 	}
 	err := s.withSnapshot(func(snap *snapshot) error {
 		for id, session := range snap.Sessions {
 			age := now.Sub(session.LastSeenAt)
-			if staleAfter > 0 &&
-				age >= staleAfter &&
-				session.State != StateExited &&
-				session.State != StateStale {
-				session.State = StateStale
-				session.UpdatedAt = now
-				session.StateChangedAt = now
-				snap.Sessions[id] = session
-				result.MarkedStale++
-			}
-
-			deleteable := session.State == StateExited || session.State == StateStale
-			if deleteAfter > 0 && deleteable && age >= deleteAfter {
+			if deleteAfter > 0 && session.State == StateExited && age >= deleteAfter {
 				delete(snap.Sessions, id)
 				result.Deleted++
 			}
@@ -379,27 +354,11 @@ func applySummaryState(summary *Summary, state State) {
 		summary.Idle++
 	case StateUnknown:
 		summary.Unknown++
-	case StateStale:
-		summary.Stale++
 	case StateExited:
 		summary.Exited++
 	default:
 		summary.Unknown++
 	}
-}
-
-func withReadSideStaleState(session Session, now time.Time, staleAfter time.Duration) Session {
-	if staleAfter <= 0 || session.LastSeenAt.IsZero() {
-		return session
-	}
-	if session.State == StateExited || session.State == StateStale {
-		return session
-	}
-	if now.Sub(session.LastSeenAt) >= staleAfter {
-		session.State = StateStale
-	}
-
-	return session
 }
 
 func syncDir(dir string) error {

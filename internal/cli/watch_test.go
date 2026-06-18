@@ -184,12 +184,11 @@ func TestFormatWatchSummaryPlainEvent(t *testing.T) {
 		Waiting:         1,
 		Idle:            1,
 		Unknown:         0,
-		Stale:           0,
 		Exited:          0,
 	}
 
 	got := formatWatchSummaryPlainEvent(event)
-	want := `2026-06-17T10:02:00Z updated tmux="work tree" active=2 total=3 running=1 waiting=1 idle=1 unknown=0 stale=0 exited=0`
+	want := `2026-06-17T10:02:00Z updated tmux="work tree" active=2 total=3 running=1 waiting=1 idle=1 unknown=0 exited=0`
 	if got != want {
 		t.Fatalf("expected %q, got %q", want, got)
 	}
@@ -232,12 +231,11 @@ func TestFormatWatchSummaryTableEvent(t *testing.T) {
 		Waiting:         1,
 		Idle:            1,
 		Unknown:         0,
-		Stale:           0,
 		Exited:          0,
 	}
 
 	got := formatWatchSummaryTableEvent(event)
-	want := `2026-06-17T10:02:00Z  updated         work                      2/3      1        1        1        0        0        0`
+	want := `2026-06-17T10:02:00Z  updated         work                      2/3      1        1        1        0        0`
 	if got != want {
 		t.Fatalf("expected %q, got %q", want, got)
 	}
@@ -299,7 +297,6 @@ func TestWriteWatchSummaryEventJSONL(t *testing.T) {
 		Waiting:         0,
 		Idle:            0,
 		Unknown:         0,
-		Stale:           0,
 		Exited:          0,
 	}
 
@@ -500,7 +497,6 @@ func TestWatchSummaryReportsFileStoreChanges(t *testing.T) {
 				ActiveOnly:  false,
 			},
 			summary:    true,
-			staleAfter: 0,
 			noSnapshot: true,
 			format:     watchFormatTable,
 			formatSet:  false,
@@ -569,7 +565,6 @@ func watchTestSummary(sessionID string, sessionName string, active int, total in
 		Waiting:         0,
 		Idle:            total - active,
 		Unknown:         0,
-		Stale:           0,
 		Exited:          0,
 	}
 }

@@ -43,7 +43,6 @@ const (
 	StateWaiting State = "waiting"
 	StateUnknown State = "unknown"
 	StateExited  State = "exited"
-	StateStale   State = "stale"
 )
 
 type TmuxContext struct {
@@ -138,14 +137,11 @@ type Summary struct {
 	Waiting         int    `json:"waiting"`
 	Idle            int    `json:"idle"`
 	Unknown         int    `json:"unknown"`
-	Stale           int    `json:"stale"`
 	Exited          int    `json:"exited"`
 }
 
 type SummaryOptions struct {
-	Filter     Filter
-	StaleAfter time.Duration
-	Now        time.Time
+	Filter Filter
 }
 
 func NormalizeHarness(value string) (Harness, error) {
@@ -187,8 +183,6 @@ func NormalizeState(value string) (State, error) {
 		return StateUnknown, nil
 	case string(StateExited), "released", "ended":
 		return StateExited, nil
-	case string(StateStale):
-		return StateStale, nil
 	default:
 		return "", fmt.Errorf("%w: %q", ErrUnknownState, value)
 	}

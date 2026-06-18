@@ -19,7 +19,7 @@ func TestFileStoreReportAndList(t *testing.T) {
 	session := reportRunningCodexSession(t, store, ctx, now)
 	assertUnknownReportPreservesRunning(t, store, ctx, now)
 	assertStoreListAndSummary(t, store, ctx)
-	assertStoreGCMarksStale(t, store, session.ID, now)
+	assertStoreGCKeepsOldLiveSession(t, store, session.ID, now)
 }
 
 func reportRunningCodexSession(t *testing.T, store *FileStore, ctx context.Context, now time.Time) Session {
@@ -165,32 +165,75 @@ func assertStoreListAndSummary(t *testing.T, store *FileStore, ctx context.Conte
 	}
 }
 
-func assertStoreGCMarksStale(t *testing.T, store *FileStore, sessionID string, now time.Time) {
+func assertStoreGCKeepsOldLiveSession(t *testing.T, store *FileStore, sessionID string, now time.Time) {
 	t.Helper()
 
 	ctx := context.Background()
 	store.SetNowForTest(func() time.Time { return now.Add(2 * time.Hour) })
 
-	result, err := store.GC(ctx, time.Hour, 0)
+	result, err := store.GC(ctx, time.Hour)
 	if err != nil {
 		t.Fatalf("GC returned error: %v", err)
 	}
-	if result.MarkedStale != 1 {
-		t.Fatalf("expected one stale session, got %#v", result)
+	if result.Deleted != 0 || result.Remaining != 1 {
+		t.Fatalf("expected live session to remain, got %#v", result)
 	}
 
-	stale, err := store.Get(ctx, sessionID)
+	session, err := store.Get(ctx, sessionID)
 	if err != nil {
 		t.Fatalf("Get returned error: %v", err)
 	}
-	if stale.State != StateStale {
-		t.Fatalf("expected stale state, got %q", stale.State)
+	if session.State != StateRunning {
+		t.Fatalf("expected running state, got %q", session.State)
 	}
-	if !stale.StateChangedAt.Equal(now.Add(2 * time.Hour)) {
-		t.Fatalf("expected stale state_changed_at to be gc time, got %s", stale.StateChangedAt)
+	if !session.StateChangedAt.Equal(now) {
+		t.Fatalf("expected state_changed_at to remain %s, got %s", now, session.StateChangedAt)
 	}
-	if !stale.EndedAt.IsZero() {
-		t.Fatalf("stale session should not have ended_at, got %s", stale.EndedAt)
+	if !session.EndedAt.IsZero() {
+		t.Fatalf("running session should not have ended_at, got %s", session.EndedAt)
+	}
+}
+
+func TestFileStoreGCDeletesOldExitedSessions(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	now := time.Date(2026, 6, 17, 10, 0, 0, 0, time.UTC)
+	store := NewFileStore(filepath.Join(t.TempDir(), "state.json"))
+	store.SetNowForTest(func() time.Time { return now })
+	exited, err := store.Report(ctx, Report{
+		Harness:       HarnessCodex,
+		State:         StateExited,
+		SessionID:     "session-1",
+		SessionPath:   "",
+		ResumeCommand: nil,
+		CWD:           "",
+		ProjectRoot:   "",
+		PID:           0,
+		PPID:          0,
+		TTY:           "",
+		Tmux:          emptyTmuxContext(),
+		Source:        "",
+		Confidence:    "",
+		Event:         "Stop",
+		Attributes:    nil,
+		RawPayload:    nil,
+		ObservedAt:    time.Time{},
+	})
+	if err != nil {
+		t.Fatalf("exited Report returned error: %v", err)
+	}
+
+	store.SetNowForTest(func() time.Time { return now.Add(2 * time.Hour) })
+	result, err := store.GC(ctx, time.Hour)
+	if err != nil {
+		t.Fatalf("GC returned error: %v", err)
+	}
+	if result.Deleted != 1 || result.Remaining != 0 {
+		t.Fatalf("expected exited session to be deleted, got %#v", result)
+	}
+	if _, getErr := store.Get(ctx, exited.ID); !errors.Is(getErr, ErrSessionNotFound) {
+		t.Fatalf("expected deleted session to be missing, got %v", getErr)
 	}
 }
 
@@ -394,7 +437,7 @@ func TestFileStoreGetMissing(t *testing.T) {
 	}
 }
 
-func TestSummaryWithOptionsTreatsOldLiveSessionsStaleWithoutWriting(t *testing.T) {
+func TestSummaryWithOptionsKeepsOldLiveSessionsOpen(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
@@ -410,8 +453,6 @@ func TestSummaryWithOptionsTreatsOldLiveSessionsStaleWithoutWriting(t *testing.T
 			TmuxSession: "",
 			ActiveOnly:  false,
 		},
-		StaleAfter: time.Hour,
-		Now:        now.Add(2 * time.Hour),
 	})
 	if err != nil {
 		t.Fatalf("SummaryByTmuxSessionWithOptions returned error: %v", err)
@@ -419,8 +460,8 @@ func TestSummaryWithOptionsTreatsOldLiveSessionsStaleWithoutWriting(t *testing.T
 	if len(summaries) != 1 {
 		t.Fatalf("expected one summary, got %d", len(summaries))
 	}
-	if summaries[0].Active != 0 || summaries[0].Stale != 1 {
-		t.Fatalf("expected read-side stale summary, got %#v", summaries[0])
+	if summaries[0].Active != 1 || summaries[0].Running != 1 || summaries[0].Total != 1 {
+		t.Fatalf("expected live summary to remain open, got %#v", summaries[0])
 	}
 
 	stored, err := store.Get(ctx, session.ID)
@@ -428,6 +469,6 @@ func TestSummaryWithOptionsTreatsOldLiveSessionsStaleWithoutWriting(t *testing.T
 		t.Fatalf("Get returned error: %v", err)
 	}
 	if stored.State != StateRunning {
-		t.Fatalf("read-side stale summary should not write state, got %q", stored.State)
+		t.Fatalf("summary should not rewrite state, got %q", stored.State)
 	}
 }

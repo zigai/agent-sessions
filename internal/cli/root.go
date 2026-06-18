@@ -43,7 +43,7 @@ const (
 )
 
 const (
-	reportStatesLabel        = "idle, running, waiting, unknown, exited, stale"
+	reportStatesLabel        = "idle, running, waiting, unknown, exited"
 	reportExampleHarness     = "agent-sessions report pi running"
 	reportExampleStateFirst  = "agent-sessions report running --harness pi"
 	reportExampleWithSession = "agent-sessions report --harness codex --state waiting --session-id abc"
@@ -505,8 +505,6 @@ type listOptions struct {
 	sortSet       bool
 	desc          bool
 	descSet       bool
-	staleAfter    time.Duration
-	staleSet      bool
 	noSnapshot    bool
 	noSnapshotSet bool
 	watchFormat   string
@@ -523,7 +521,6 @@ func (app *application) newListCommand() *cobra.Command {
 			options.absoluteSet = flags.Changed("absolute-time")
 			options.sortSet = flags.Changed("sort")
 			options.descSet = flags.Changed("desc")
-			options.staleSet = flags.Changed("stale-after")
 			options.noSnapshotSet = flags.Changed("no-snapshot")
 			options.formatSet = flags.Changed("format")
 
@@ -539,7 +536,6 @@ func (app *application) newListCommand() *cobra.Command {
 	cmd.Flags().BoolVar(&options.watch, "watch", false, "watch registry state changes")
 	cmd.Flags().BoolVar(&options.absoluteTime, "absolute-time", false, "show full RFC3339 timestamps in text output")
 	cmd.Flags().BoolVar(&options.desc, "desc", false, "sort descending")
-	cmd.Flags().DurationVar(&options.staleAfter, "stale-after", 0, "treat old live sessions as stale without writing")
 	cmd.Flags().BoolVar(&options.noSnapshot, "no-snapshot", false, "suppress the startup watch snapshot")
 	cmd.Flags().StringVar(&options.watchFormat, "format", "", "watch text output format: table, plain")
 
@@ -560,7 +556,6 @@ func (app *application) runList(ctx context.Context, options listOptions) error 
 		return app.runWatch(ctx, watchOptions{
 			filter:     filter,
 			summary:    options.summary,
-			staleAfter: options.staleAfter,
 			noSnapshot: options.noSnapshot,
 			format:     options.watchFormat,
 			formatSet:  options.formatSet,
@@ -585,9 +580,6 @@ func validateListOptions(options listOptions) error {
 		if options.formatSet {
 			return fmt.Errorf("%w: --format requires --watch", errInvalidListFlags)
 		}
-	}
-	if !options.summary && options.staleSet {
-		return fmt.Errorf("%w: --stale-after requires --summary", errInvalidListFlags)
 	}
 	if options.watch || options.summary {
 		if options.sortSet {
@@ -663,9 +655,7 @@ func (app *application) runListSummary(ctx context.Context, options listOptions)
 	}
 
 	summaries, err := app.registryStore().SummaryByTmuxSessionWithOptions(ctx, registry.SummaryOptions{
-		Filter:     filter,
-		StaleAfter: options.staleAfter,
-		Now:        time.Time{},
+		Filter: filter,
 	})
 	if err != nil {
 		return fmt.Errorf("summarizing sessions: %w", err)
@@ -680,7 +670,7 @@ func (app *application) runListSummary(ctx context.Context, options listOptions)
 
 func (app *application) writeSummaryTable(summaries []registry.Summary) error {
 	writer := tabwriter.NewWriter(app.stdout, 0, 0, tabPadding, ' ', 0)
-	_, headerErr := fmt.Fprintln(writer, "TMUX\tACTIVE/TOTAL\tRUNNING\tWAITING\tIDLE\tUNKNOWN\tSTALE\tEXITED")
+	_, headerErr := fmt.Fprintln(writer, "TMUX\tACTIVE/TOTAL\tRUNNING\tWAITING\tIDLE\tUNKNOWN\tEXITED")
 	if headerErr != nil {
 		return fmt.Errorf("writing output: %w", headerErr)
 	}
@@ -688,7 +678,7 @@ func (app *application) writeSummaryTable(summaries []registry.Summary) error {
 	for _, summary := range summaries {
 		_, rowErr := fmt.Fprintf(
 			writer,
-			"%s\t%d/%d\t%d\t%d\t%d\t%d\t%d\t%d\n",
+			"%s\t%d/%d\t%d\t%d\t%d\t%d\t%d\n",
 			summaryLabel(summary),
 			summary.Active,
 			summary.Total,
@@ -696,7 +686,6 @@ func (app *application) writeSummaryTable(summaries []registry.Summary) error {
 			summary.Waiting,
 			summary.Idle,
 			summary.Unknown,
-			summary.Stale,
 			summary.Exited,
 		)
 		if rowErr != nil {
@@ -798,13 +787,12 @@ func (app *application) runScan(ctx context.Context, options scanOptions) error 
 }
 
 func (app *application) newGCCommand() *cobra.Command {
-	var staleAfter time.Duration
 	var deleteAfter time.Duration
 	cmd := &cobra.Command{
 		Use:   "gc",
-		Short: "Mark old sessions stale and optionally delete stale/exited records",
+		Short: "Delete old exited session records",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			result, err := app.registryStore().GC(cmd.Context(), staleAfter, deleteAfter)
+			result, err := app.registryStore().GC(cmd.Context(), deleteAfter)
 			if err != nil {
 				return fmt.Errorf("garbage collecting sessions: %w", err)
 			}
@@ -813,11 +801,10 @@ func (app *application) newGCCommand() *cobra.Command {
 				return app.writeJSON(result)
 			}
 
-			return app.writef("marked_stale=%d deleted=%d remaining=%d\n", result.MarkedStale, result.Deleted, result.Remaining)
+			return app.writef("deleted=%d remaining=%d\n", result.Deleted, result.Remaining)
 		},
 	}
-	cmd.Flags().DurationVar(&staleAfter, "stale-after", 0, "mark live sessions stale after this age")
-	cmd.Flags().DurationVar(&deleteAfter, "delete-after", 0, "delete stale/exited sessions after this age")
+	cmd.Flags().DurationVar(&deleteAfter, "delete-after", 0, "delete exited sessions after this age")
 
 	return cmd
 }

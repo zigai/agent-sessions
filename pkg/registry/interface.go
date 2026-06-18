@@ -12,7 +12,7 @@ type Store interface {
 	Get(ctx context.Context, id string) (Session, error)
 	SummaryByTmuxSession(ctx context.Context, filter Filter) ([]Summary, error)
 	SummaryByTmuxSessionWithOptions(ctx context.Context, options SummaryOptions) ([]Summary, error)
-	GC(ctx context.Context, staleAfter time.Duration, deleteAfter time.Duration) (GCResult, error)
+	GC(ctx context.Context, deleteAfter time.Duration) (GCResult, error)
 }
 
 func OpenDefaultStore() Store {
