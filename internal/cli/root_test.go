@@ -4,19 +4,24 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/spf13/cobra"
+
 	"github.com/zigai/agent-sessions/pkg/registry"
 )
 
 const (
-	storeFlag     = "--store"
-	noTmuxFlag    = "--no-tmux"
-	reportCommand = "report"
+	storeFlag           = "--store"
+	noTmuxFlag          = "--no-tmux"
+	reportCommand       = "report"
+	runningStateArg     = "running"
+	testTmuxSessionName = "work"
 )
 
 func TestRootCommandHasUse(t *testing.T) {
@@ -92,10 +97,10 @@ func TestReportStateArgumentRequiresHarness(t *testing.T) {
 	var output bytes.Buffer
 	var stderr bytes.Buffer
 	cmd := NewRootCommand(&output, &stderr)
-	cmd.SetArgs([]string{reportCommand, "running", noTmuxFlag})
+	cmd.SetArgs([]string{reportCommand, runningStateArg, noTmuxFlag})
 
 	err := cmd.Execute()
-	if err == nil || !strings.Contains(err.Error(), `state "running" needs --harness`) {
+	if err == nil || !strings.Contains(err.Error(), `state "`+runningStateArg+`" needs --harness`) {
 		t.Fatalf("expected state missing harness error, got %v", err)
 	}
 	if !strings.Contains(err.Error(), reportExampleStateFirst) {
@@ -112,7 +117,7 @@ func TestReportAcceptsHarnessAndStateArguments(t *testing.T) {
 	storePath := filepath.Join(t.TempDir(), "state.json")
 	var output bytes.Buffer
 	cmd := NewRootCommand(&output, &bytes.Buffer{})
-	cmd.SetArgs([]string{storeFlag, storePath, reportCommand, "pi", "running", noTmuxFlag})
+	cmd.SetArgs([]string{storeFlag, storePath, reportCommand, "pi", runningStateArg, noTmuxFlag})
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("report command failed: %v", err)
 	}
@@ -120,6 +125,26 @@ func TestReportAcceptsHarnessAndStateArguments(t *testing.T) {
 	got := output.String()
 	if !strings.Contains(got, "\tpi\trunning") {
 		t.Fatalf("expected positional report output to include pi running, got %q", got)
+	}
+}
+
+func TestReadCommandsAreMergedIntoList(t *testing.T) {
+	t.Parallel()
+
+	cmd := NewRootCommand(&bytes.Buffer{}, &bytes.Buffer{})
+	for _, name := range []string{"summary", "watch"} {
+		for _, command := range cmd.Commands() {
+			if command.Name() == name {
+				t.Fatalf("expected top-level %s command to be removed", name)
+			}
+		}
+	}
+
+	listCommand := findRootTestCommand(t, cmd, listCommandName)
+	for _, flagName := range []string{"summary", "watch", "no-snapshot", "format", "stale-after"} {
+		if listCommand.Flags().Lookup(flagName) == nil {
+			t.Fatalf("expected list flag %s to be registered", flagName)
+		}
 	}
 }
 
@@ -133,7 +158,7 @@ func TestReportAndList(t *testing.T) {
 		storeFlag, storePath,
 		reportCommand,
 		"--harness", "codex",
-		"--state", "running",
+		"--state", runningStateArg,
 		"--session-id", "abc",
 		noTmuxFlag,
 	})
@@ -143,7 +168,7 @@ func TestReportAndList(t *testing.T) {
 
 	var listOut bytes.Buffer
 	listCmd := NewRootCommand(&listOut, &bytes.Buffer{})
-	listCmd.SetArgs([]string{storeFlag, storePath, "list"})
+	listCmd.SetArgs([]string{storeFlag, storePath, listCommandName})
 	if err := listCmd.Execute(); err != nil {
 		t.Fatalf("list command failed: %v", err)
 	}
@@ -152,7 +177,7 @@ func TestReportAndList(t *testing.T) {
 	if !strings.Contains(output, "codex") {
 		t.Fatalf("expected list output to include codex, got %q", output)
 	}
-	if !strings.Contains(output, "running") {
+	if !strings.Contains(output, runningStateArg) {
 		t.Fatalf("expected list output to include running, got %q", output)
 	}
 	if !strings.Contains(output, "ago") && !strings.Contains(output, "just now") {
@@ -160,6 +185,68 @@ func TestReportAndList(t *testing.T) {
 	}
 	if rfc3339Pattern().MatchString(output) {
 		t.Fatalf("expected default list output not to include RFC3339 timestamp, got %q", output)
+	}
+}
+
+func TestListSummary(t *testing.T) {
+	t.Parallel()
+
+	storePath := filepath.Join(t.TempDir(), "state.json")
+	store := registry.NewFileStore(storePath)
+	ctx := context.Background()
+	if _, err := store.Report(ctx, registry.Report{
+		Harness:   registry.HarnessCodex,
+		State:     registry.StateRunning,
+		SessionID: runningStateArg,
+		Tmux: registry.TmuxContext{
+			Inside:          true,
+			SessionID:       "$1",
+			SessionName:     testTmuxSessionName,
+			WindowID:        "",
+			WindowIndex:     "",
+			WindowName:      "",
+			PaneID:          "",
+			PaneIndex:       "",
+			PaneCurrentPath: "",
+			PanePID:         0,
+			PaneTTY:         "",
+			ClientTTY:       "",
+		},
+	}); err != nil {
+		t.Fatalf("reporting running session: %v", err)
+	}
+	if _, err := store.Report(ctx, registry.Report{
+		Harness:   registry.HarnessCodex,
+		State:     registry.StateIdle,
+		SessionID: "idle",
+		Tmux: registry.TmuxContext{
+			Inside:          true,
+			SessionID:       "$1",
+			SessionName:     testTmuxSessionName,
+			WindowID:        "",
+			WindowIndex:     "",
+			WindowName:      "",
+			PaneID:          "",
+			PaneIndex:       "",
+			PaneCurrentPath: "",
+			PanePID:         0,
+			PaneTTY:         "",
+			ClientTTY:       "",
+		},
+	}); err != nil {
+		t.Fatalf("reporting idle session: %v", err)
+	}
+
+	var listOut bytes.Buffer
+	listCmd := NewRootCommand(&listOut, &bytes.Buffer{})
+	listCmd.SetArgs([]string{storeFlag, storePath, listCommandName, "--summary"})
+	if err := listCmd.Execute(); err != nil {
+		t.Fatalf("list summary command failed: %v", err)
+	}
+
+	output := listOut.String()
+	if !strings.Contains(output, testTmuxSessionName) || !strings.Contains(output, "1/2") {
+		t.Fatalf("expected summary output to include work active/total counts, got %q", output)
 	}
 }
 
@@ -173,7 +260,7 @@ func TestListAbsoluteTime(t *testing.T) {
 		storeFlag, storePath,
 		reportCommand,
 		"--harness", "codex",
-		"--state", "running",
+		"--state", runningStateArg,
 		"--session-id", "abc",
 		noTmuxFlag,
 	})
@@ -183,7 +270,7 @@ func TestListAbsoluteTime(t *testing.T) {
 
 	var listOut bytes.Buffer
 	listCmd := NewRootCommand(&listOut, &bytes.Buffer{})
-	listCmd.SetArgs([]string{storeFlag, storePath, "list", "--absolute-time"})
+	listCmd.SetArgs([]string{storeFlag, storePath, listCommandName, "--absolute-time"})
 	if err := listCmd.Execute(); err != nil {
 		t.Fatalf("list command failed: %v", err)
 	}
@@ -191,6 +278,47 @@ func TestListAbsoluteTime(t *testing.T) {
 	output := listOut.String()
 	if !rfc3339Pattern().MatchString(output) {
 		t.Fatalf("expected absolute list output to include RFC3339 timestamp, got %q", output)
+	}
+}
+
+func TestListRejectsModeSpecificFlags(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{
+			name: "watch flag without watch",
+			args: []string{storeFlag, filepath.Join(t.TempDir(), "state.json"), listCommandName, "--no-snapshot"},
+		},
+		{
+			name: "summary flag without summary",
+			args: []string{storeFlag, filepath.Join(t.TempDir(), "state.json"), listCommandName, "--stale-after", "1m"},
+		},
+		{
+			name: "sort with summary",
+			args: []string{storeFlag, filepath.Join(t.TempDir(), "state.json"), listCommandName, "--summary", "--sort", "updated"},
+		},
+		{
+			name: "absolute time with watch",
+			args: []string{storeFlag, filepath.Join(t.TempDir(), "state.json"), listCommandName, "--watch", "--absolute-time"},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			var output bytes.Buffer
+			var stderr bytes.Buffer
+			cmd := NewRootCommand(&output, &stderr)
+			cmd.SetArgs(test.args)
+			err := cmd.Execute()
+			if !errors.Is(err, errInvalidListFlags) {
+				t.Fatalf("expected invalid list flags error, got %v", err)
+			}
+		})
 	}
 }
 
@@ -221,7 +349,7 @@ func TestListSortUpdatedDesc(t *testing.T) {
 
 	var listOut bytes.Buffer
 	listCmd := NewRootCommand(&listOut, &bytes.Buffer{})
-	listCmd.SetArgs([]string{storeFlag, storePath, "list", "--sort", "updated", "--desc", "--absolute-time"})
+	listCmd.SetArgs([]string{storeFlag, storePath, listCommandName, "--sort", "updated", "--desc", "--absolute-time"})
 	executeErr := listCmd.Execute()
 	if executeErr != nil {
 		t.Fatalf("list command failed: %v", executeErr)
@@ -244,7 +372,7 @@ func TestListSortRejectsUnknownField(t *testing.T) {
 	var listOut bytes.Buffer
 	var listErr bytes.Buffer
 	listCmd := NewRootCommand(&listOut, &listErr)
-	listCmd.SetArgs([]string{storeFlag, filepath.Join(t.TempDir(), "state.json"), "list", "--sort", "nope"})
+	listCmd.SetArgs([]string{storeFlag, filepath.Join(t.TempDir(), "state.json"), listCommandName, "--sort", "nope"})
 	err := listCmd.Execute()
 	if err == nil {
 		t.Fatal("expected invalid sort error")
@@ -252,6 +380,20 @@ func TestListSortRejectsUnknownField(t *testing.T) {
 	if !strings.Contains(err.Error(), "invalid list sort") {
 		t.Fatalf("expected invalid sort error, got %v", err)
 	}
+}
+
+func findRootTestCommand(t *testing.T, root *cobra.Command, name string) *cobra.Command {
+	t.Helper()
+
+	for _, command := range root.Commands() {
+		if command.Name() == name {
+			return command
+		}
+	}
+
+	t.Fatalf("expected command %s to be registered", name)
+
+	return nil
 }
 
 func TestFormatUpdatedAt(t *testing.T) {
@@ -316,7 +458,7 @@ func TestReportCodexHookPayloadQuiet(t *testing.T) {
 		storeFlag, storePath,
 		reportCommand,
 		"--harness", "codex",
-		"--state", "running",
+		"--state", runningStateArg,
 		"--source", "codex-hook",
 		"--raw-stdin",
 		"--quiet",
@@ -404,7 +546,7 @@ func TestReportGrokHookPayloadQuiet(t *testing.T) {
 		storeFlag, storePath,
 		reportCommand,
 		"--harness", "grok",
-		"--state", "running",
+		"--state", runningStateArg,
 		"--source", "grok-hook",
 		"--raw-stdin",
 		"--quiet",
@@ -660,7 +802,7 @@ func TestReportCursorHookDefaultsOnlyQuiet(t *testing.T) {
 		storeFlag, storePath,
 		reportCommand,
 		"--harness", "cursor",
-		"--state", "running",
+		"--state", runningStateArg,
 		"--source", "cursor-hook",
 		"--raw-stdin-defaults-only",
 		"--quiet",

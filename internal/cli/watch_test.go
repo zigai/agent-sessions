@@ -71,6 +71,40 @@ func TestDiffWatchEventsClassifiesSessionChanges(t *testing.T) {
 	}
 }
 
+func TestDiffWatchSummaryEventsClassifiesSummaryChanges(t *testing.T) {
+	t.Parallel()
+
+	observedAt := time.Date(2026, 6, 17, 10, 5, 0, 0, time.UTC)
+	previous := map[string]registry.Summary{
+		"$1":      watchTestSummary("$1", testTmuxSessionName, 1, 1),
+		"$remove": watchTestSummary("$remove", "remove", 1, 1),
+	}
+	next := map[string]registry.Summary{
+		"$1": watchTestSummary("$1", testTmuxSessionName, 2, 3),
+		"$2": watchTestSummary("$2", "next", 1, 1),
+	}
+
+	events := diffWatchSummaryEvents(previous, next, observedAt)
+	if len(events) != 3 {
+		t.Fatalf("expected 3 events, got %#v", events)
+	}
+
+	byLabel := make(map[string]watchSummaryEvent, len(events))
+	for _, event := range events {
+		byLabel[event.Label] = event
+	}
+
+	if byLabel["next"].Action != watchActionAdded {
+		t.Fatalf("expected added summary event, got %#v", byLabel["next"])
+	}
+	if byLabel["remove"].Action != watchActionRemoved {
+		t.Fatalf("expected removed summary event, got %#v", byLabel["remove"])
+	}
+	if byLabel[testTmuxSessionName].Action != watchActionUpdated || byLabel[testTmuxSessionName].Total != 3 {
+		t.Fatalf("expected updated summary event, got %#v", byLabel[testTmuxSessionName])
+	}
+}
+
 func TestSnapshotWatchEvents(t *testing.T) {
 	t.Parallel()
 
@@ -89,6 +123,27 @@ func TestSnapshotWatchEvents(t *testing.T) {
 	empty := snapshotWatchEvents(nil, now)
 	if len(empty) != 1 || empty[0].Action != watchActionSnapshotEmpty || !empty[0].Time.Equal(now) {
 		t.Fatalf("expected snapshot_empty event, got %#v", empty)
+	}
+}
+
+func TestSnapshotWatchSummaryEvents(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 6, 17, 12, 0, 0, 0, time.UTC)
+	events := snapshotWatchSummaryEvents([]registry.Summary{
+		watchTestSummary("$2", "next", 1, 1),
+		watchTestSummary("$1", testTmuxSessionName, 2, 3),
+	}, now)
+	if len(events) != 2 {
+		t.Fatalf("expected two summary snapshot events, got %#v", events)
+	}
+	if events[0].Label != "next" || events[1].Label != testTmuxSessionName {
+		t.Fatalf("expected summary snapshot events sorted by label, got %#v", events)
+	}
+
+	empty := snapshotWatchSummaryEvents(nil, now)
+	if len(empty) != 1 || empty[0].Action != watchActionSnapshotEmpty || !empty[0].Time.Equal(now) {
+		t.Fatalf("expected summary snapshot_empty event, got %#v", empty)
 	}
 }
 
@@ -114,6 +169,32 @@ func TestFormatWatchPlainEvent(t *testing.T) {
 	}
 }
 
+func TestFormatWatchSummaryPlainEvent(t *testing.T) {
+	t.Parallel()
+
+	event := watchSummaryEvent{
+		Time:            time.Date(2026, 6, 17, 10, 2, 0, 0, time.UTC),
+		Action:          watchActionUpdated,
+		TmuxSessionID:   "$1",
+		TmuxSessionName: "work tree",
+		Label:           "work tree",
+		Active:          2,
+		Total:           3,
+		Running:         1,
+		Waiting:         1,
+		Idle:            1,
+		Unknown:         0,
+		Stale:           0,
+		Exited:          0,
+	}
+
+	got := formatWatchSummaryPlainEvent(event)
+	want := `2026-06-17T10:02:00Z updated tmux="work tree" active=2 total=3 running=1 waiting=1 idle=1 unknown=0 stale=0 exited=0`
+	if got != want {
+		t.Fatalf("expected %q, got %q", want, got)
+	}
+}
+
 func TestFormatWatchTableEvent(t *testing.T) {
 	t.Parallel()
 
@@ -131,6 +212,32 @@ func TestFormatWatchTableEvent(t *testing.T) {
 
 	got := formatWatchTableEvent(event)
 	want := `2026-06-17T10:02:00Z  state_changed   codex       waiting   abc                       prev=running event=PreToolUse cwd="/repo with space" tmux=work:2:%3`
+	if got != want {
+		t.Fatalf("expected %q, got %q", want, got)
+	}
+}
+
+func TestFormatWatchSummaryTableEvent(t *testing.T) {
+	t.Parallel()
+
+	event := watchSummaryEvent{
+		Time:            time.Date(2026, 6, 17, 10, 2, 0, 0, time.UTC),
+		Action:          watchActionUpdated,
+		TmuxSessionID:   "$1",
+		TmuxSessionName: testTmuxSessionName,
+		Label:           testTmuxSessionName,
+		Active:          2,
+		Total:           3,
+		Running:         1,
+		Waiting:         1,
+		Idle:            1,
+		Unknown:         0,
+		Stale:           0,
+		Exited:          0,
+	}
+
+	got := formatWatchSummaryTableEvent(event)
+	want := `2026-06-17T10:02:00Z  updated         work                      2/3      1        1        1        0        0        0`
 	if got != want {
 		t.Fatalf("expected %q, got %q", want, got)
 	}
@@ -170,6 +277,48 @@ func TestWriteWatchEventJSONL(t *testing.T) {
 	}
 }
 
+func TestWriteWatchSummaryEventJSONL(t *testing.T) {
+	t.Parallel()
+
+	var output bytes.Buffer
+	app := &application{
+		storePath:  "",
+		outputJSON: true,
+		stdout:     &output,
+		stderr:     &bytes.Buffer{},
+	}
+	event := watchSummaryEvent{
+		Time:            time.Date(2026, 6, 17, 10, 2, 0, 0, time.UTC),
+		Action:          watchActionAdded,
+		TmuxSessionID:   "$1",
+		TmuxSessionName: testTmuxSessionName,
+		Label:           testTmuxSessionName,
+		Active:          1,
+		Total:           1,
+		Running:         1,
+		Waiting:         0,
+		Idle:            0,
+		Unknown:         0,
+		Stale:           0,
+		Exited:          0,
+	}
+
+	if err := app.writeWatchSummaryEvents([]watchSummaryEvent{event}, watchFormatJSON); err != nil {
+		t.Fatalf("writeWatchSummaryEvents returned error: %v", err)
+	}
+	if strings.HasPrefix(strings.TrimSpace(output.String()), "[") {
+		t.Fatalf("expected newline-delimited JSON object, got %q", output.String())
+	}
+
+	var decoded watchSummaryEvent
+	if err := json.Unmarshal(output.Bytes(), &decoded); err != nil {
+		t.Fatalf("expected valid JSON event, got %v: %q", err, output.String())
+	}
+	if decoded.Action != watchActionAdded || decoded.Label != testTmuxSessionName || decoded.Active != 1 {
+		t.Fatalf("unexpected decoded event: %#v", decoded)
+	}
+}
+
 func TestValidateWatchTextFormat(t *testing.T) {
 	t.Parallel()
 
@@ -194,7 +343,8 @@ func TestWatchRejectsFormatWithGlobalJSON(t *testing.T) {
 	cmd.SetArgs([]string{
 		"--json",
 		storeFlag, filepath.Join(t.TempDir(), "state.json"),
-		"watch",
+		listCommandName,
+		"--watch",
 		"--format", "plain",
 		"--no-snapshot",
 	})
@@ -213,7 +363,8 @@ func TestWatchRejectsJSONFormatWithoutGlobalJSON(t *testing.T) {
 	cmd := NewRootCommand(&output, &stderr)
 	cmd.SetArgs([]string{
 		storeFlag, filepath.Join(t.TempDir(), "state.json"),
-		"watch",
+		listCommandName,
+		"--watch",
 		"--format", "json",
 		"--no-snapshot",
 	})
@@ -323,6 +474,77 @@ func TestWatchReportsFileStoreChanges(t *testing.T) {
 	}
 }
 
+func TestWatchSummaryReportsFileStoreChanges(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 6, 17, 10, 0, 0, 0, time.UTC)
+	storePath := filepath.Join(t.TempDir(), "state.json")
+	output := &safeBuffer{}
+	stderr := &safeBuffer{}
+	app := &application{
+		storePath:  storePath,
+		outputJSON: false,
+		stdout:     output,
+		stderr:     stderr,
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	ready := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		done <- app.runWatch(ctx, watchOptions{
+			filter: registry.Filter{
+				Harness:     "",
+				State:       "",
+				TmuxSession: "",
+				ActiveOnly:  false,
+			},
+			summary:    true,
+			staleAfter: 0,
+			noSnapshot: true,
+			format:     watchFormatTable,
+			formatSet:  false,
+			debounce:   10 * time.Millisecond,
+			now:        nil,
+			ready:      ready,
+		})
+	}()
+	defer cancel()
+	waitForWatchReady(t, ready, done)
+
+	store := registry.NewFileStore(storePath)
+	store.SetNowForTest(func() time.Time { return now })
+	if _, err := store.Report(context.Background(), registry.Report{
+		Harness:    registry.HarnessCodex,
+		State:      registry.StateRunning,
+		SessionID:  "abc",
+		ObservedAt: now,
+		Tmux: registry.TmuxContext{
+			Inside:          true,
+			SessionID:       "$1",
+			SessionName:     testTmuxSessionName,
+			WindowID:        "",
+			WindowIndex:     "",
+			WindowName:      "",
+			PaneID:          "",
+			PaneIndex:       "",
+			PaneCurrentPath: "",
+			PanePID:         0,
+			PaneTTY:         "",
+			ClientTTY:       "",
+		},
+	}); err != nil {
+		t.Fatalf("reporting session: %v", err)
+	}
+
+	waitForOutput(t, output, "added           work")
+	cancel()
+	waitForWatchDone(t, done)
+	if stderr.String() != "" {
+		t.Fatalf("expected no watch warnings, got %q", stderr.String())
+	}
+}
+
 func watchTestSession(id string, state registry.State, updatedAt time.Time) registry.Session {
 	return registry.Session{
 		ID:             id,
@@ -334,6 +556,21 @@ func watchTestSession(id string, state registry.State, updatedAt time.Time) regi
 		UpdatedAt:      updatedAt,
 		LastSeenAt:     updatedAt,
 		StateChangedAt: updatedAt,
+	}
+}
+
+func watchTestSummary(sessionID string, sessionName string, active int, total int) registry.Summary {
+	return registry.Summary{
+		TmuxSessionID:   sessionID,
+		TmuxSessionName: sessionName,
+		Total:           total,
+		Active:          active,
+		Running:         active,
+		Waiting:         0,
+		Idle:            total - active,
+		Unknown:         0,
+		Stale:           0,
+		Exited:          0,
 	}
 }
 

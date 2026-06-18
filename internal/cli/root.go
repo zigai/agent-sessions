@@ -29,6 +29,7 @@ var (
 
 	errInvalidAttribute = errors.New("invalid attribute")
 	errInvalidListSort  = errors.New("invalid list sort")
+	errInvalidListFlags = errors.New("invalid list flags")
 
 	errInvalidReportArguments = errors.New("invalid report arguments")
 	errUnexpectedReportArg    = errors.New("unexpected report argument")
@@ -56,7 +57,10 @@ const (
 	daysPerYear      = 365
 )
 
-const listSortUpdated = "updated"
+const (
+	listCommandName = "list"
+	listSortUpdated = "updated"
+)
 
 type application struct {
 	storePath  string
@@ -96,8 +100,6 @@ func NewRootCommand(stdout io.Writer, stderr io.Writer) *cobra.Command {
 		app.newReportCommand(),
 		app.newListCommand(),
 		app.newGetCommand(),
-		app.newSummaryCommand(),
-		app.newWatchCommand(),
 		app.newScanCommand(),
 		app.newGCCommand(),
 		app.newPathCommand(),
@@ -491,21 +493,40 @@ func reportQuickHelp(primaryExample string) string {
 }
 
 type listOptions struct {
-	harness      string
-	state        string
-	tmuxSession  string
-	activeOnly   bool
-	absoluteTime bool
-	sortBy       string
-	desc         bool
+	harness       string
+	state         string
+	tmuxSession   string
+	activeOnly    bool
+	summary       bool
+	watch         bool
+	absoluteTime  bool
+	absoluteSet   bool
+	sortBy        string
+	sortSet       bool
+	desc          bool
+	descSet       bool
+	staleAfter    time.Duration
+	staleSet      bool
+	noSnapshot    bool
+	noSnapshotSet bool
+	watchFormat   string
+	formatSet     bool
 }
 
 func (app *application) newListCommand() *cobra.Command {
 	options := listOptions{}
 	cmd := &cobra.Command{
-		Use:   "list",
+		Use:   listCommandName,
 		Short: "List known agent sessions",
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			flags := cmd.Flags()
+			options.absoluteSet = flags.Changed("absolute-time")
+			options.sortSet = flags.Changed("sort")
+			options.descSet = flags.Changed("desc")
+			options.staleSet = flags.Changed("stale-after")
+			options.noSnapshotSet = flags.Changed("no-snapshot")
+			options.formatSet = flags.Changed("format")
+
 			return app.runList(cmd.Context(), options)
 		},
 	}
@@ -514,13 +535,76 @@ func (app *application) newListCommand() *cobra.Command {
 	cmd.Flags().StringVar(&options.tmuxSession, "tmux-session", "", "filter by tmux session id or name")
 	cmd.Flags().StringVar(&options.sortBy, "sort", "", "sort by: tmux, updated, state-changed, created, ended, event-at, event, harness, state, cwd, id")
 	cmd.Flags().BoolVar(&options.activeOnly, "active", false, "only sessions in running or waiting states")
+	cmd.Flags().BoolVar(&options.summary, "summary", false, "summarize agent counts by tmux session")
+	cmd.Flags().BoolVar(&options.watch, "watch", false, "watch registry state changes")
 	cmd.Flags().BoolVar(&options.absoluteTime, "absolute-time", false, "show full RFC3339 timestamps in text output")
 	cmd.Flags().BoolVar(&options.desc, "desc", false, "sort descending")
+	cmd.Flags().DurationVar(&options.staleAfter, "stale-after", 0, "treat old live sessions as stale without writing")
+	cmd.Flags().BoolVar(&options.noSnapshot, "no-snapshot", false, "suppress the startup watch snapshot")
+	cmd.Flags().StringVar(&options.watchFormat, "format", "", "watch text output format: table, plain")
 
 	return cmd
 }
 
 func (app *application) runList(ctx context.Context, options listOptions) error {
+	if err := validateListOptions(options); err != nil {
+		return err
+	}
+
+	if options.watch {
+		filter, err := buildFilter(options)
+		if err != nil {
+			return err
+		}
+
+		return app.runWatch(ctx, watchOptions{
+			filter:     filter,
+			summary:    options.summary,
+			staleAfter: options.staleAfter,
+			noSnapshot: options.noSnapshot,
+			format:     options.watchFormat,
+			formatSet:  options.formatSet,
+			debounce:   0,
+			now:        nil,
+			ready:      nil,
+		})
+	}
+
+	if options.summary {
+		return app.runListSummary(ctx, options)
+	}
+
+	return app.runListSessions(ctx, options)
+}
+
+func validateListOptions(options listOptions) error {
+	if !options.watch {
+		if options.noSnapshotSet {
+			return fmt.Errorf("%w: --no-snapshot requires --watch", errInvalidListFlags)
+		}
+		if options.formatSet {
+			return fmt.Errorf("%w: --format requires --watch", errInvalidListFlags)
+		}
+	}
+	if !options.summary && options.staleSet {
+		return fmt.Errorf("%w: --stale-after requires --summary", errInvalidListFlags)
+	}
+	if options.watch || options.summary {
+		if options.sortSet {
+			return fmt.Errorf("%w: --sort only applies to session list output", errInvalidListFlags)
+		}
+		if options.descSet {
+			return fmt.Errorf("%w: --desc only applies to session list output", errInvalidListFlags)
+		}
+		if options.absoluteSet {
+			return fmt.Errorf("%w: --absolute-time only applies to session list output", errInvalidListFlags)
+		}
+	}
+
+	return nil
+}
+
+func (app *application) runListSessions(ctx context.Context, options listOptions) error {
 	filter, err := buildFilter(options)
 	if err != nil {
 		return err
@@ -572,6 +656,62 @@ func (app *application) runList(ctx context.Context, options listOptions) error 
 	return nil
 }
 
+func (app *application) runListSummary(ctx context.Context, options listOptions) error {
+	filter, err := buildFilter(options)
+	if err != nil {
+		return err
+	}
+
+	summaries, err := app.registryStore().SummaryByTmuxSessionWithOptions(ctx, registry.SummaryOptions{
+		Filter:     filter,
+		StaleAfter: options.staleAfter,
+		Now:        time.Time{},
+	})
+	if err != nil {
+		return fmt.Errorf("summarizing sessions: %w", err)
+	}
+
+	if app.outputJSON {
+		return app.writeJSON(summaries)
+	}
+
+	return app.writeSummaryTable(summaries)
+}
+
+func (app *application) writeSummaryTable(summaries []registry.Summary) error {
+	writer := tabwriter.NewWriter(app.stdout, 0, 0, tabPadding, ' ', 0)
+	_, headerErr := fmt.Fprintln(writer, "TMUX\tACTIVE/TOTAL\tRUNNING\tWAITING\tIDLE\tUNKNOWN\tSTALE\tEXITED")
+	if headerErr != nil {
+		return fmt.Errorf("writing output: %w", headerErr)
+	}
+
+	for _, summary := range summaries {
+		_, rowErr := fmt.Fprintf(
+			writer,
+			"%s\t%d/%d\t%d\t%d\t%d\t%d\t%d\t%d\n",
+			summaryLabel(summary),
+			summary.Active,
+			summary.Total,
+			summary.Running,
+			summary.Waiting,
+			summary.Idle,
+			summary.Unknown,
+			summary.Stale,
+			summary.Exited,
+		)
+		if rowErr != nil {
+			return fmt.Errorf("writing output: %w", rowErr)
+		}
+	}
+
+	flushErr := writer.Flush()
+	if flushErr != nil {
+		return fmt.Errorf("flushing output: %w", flushErr)
+	}
+
+	return nil
+}
+
 func (app *application) newGetCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:   "get <id>",
@@ -594,73 +734,6 @@ func (app *application) newGetCommand() *cobra.Command {
 			return app.writeJSON(session)
 		},
 	}
-}
-
-func (app *application) newSummaryCommand() *cobra.Command {
-	options := listOptions{}
-	var staleAfter time.Duration
-	cmd := &cobra.Command{
-		Use:   "summary",
-		Short: "Summarize agent counts by tmux session",
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			filter, err := buildFilter(options)
-			if err != nil {
-				return err
-			}
-
-			summaries, err := app.registryStore().SummaryByTmuxSessionWithOptions(cmd.Context(), registry.SummaryOptions{
-				Filter:     filter,
-				StaleAfter: staleAfter,
-				Now:        time.Time{},
-			})
-			if err != nil {
-				return fmt.Errorf("summarizing sessions: %w", err)
-			}
-
-			if app.outputJSON {
-				return app.writeJSON(summaries)
-			}
-
-			writer := tabwriter.NewWriter(app.stdout, 0, 0, tabPadding, ' ', 0)
-			_, headerErr := fmt.Fprintln(writer, "TMUX\tACTIVE/TOTAL\tRUNNING\tWAITING\tIDLE\tUNKNOWN\tSTALE\tEXITED")
-			if headerErr != nil {
-				return fmt.Errorf("writing output: %w", headerErr)
-			}
-
-			for _, summary := range summaries {
-				_, rowErr := fmt.Fprintf(
-					writer,
-					"%s\t%d/%d\t%d\t%d\t%d\t%d\t%d\t%d\n",
-					summaryLabel(summary),
-					summary.Active,
-					summary.Total,
-					summary.Running,
-					summary.Waiting,
-					summary.Idle,
-					summary.Unknown,
-					summary.Stale,
-					summary.Exited,
-				)
-				if rowErr != nil {
-					return fmt.Errorf("writing output: %w", rowErr)
-				}
-			}
-
-			flushErr := writer.Flush()
-			if flushErr != nil {
-				return fmt.Errorf("flushing output: %w", flushErr)
-			}
-
-			return nil
-		},
-	}
-	cmd.Flags().StringVar(&options.harness, "harness", "", "filter by harness")
-	cmd.Flags().StringVar(&options.state, "state", "", "filter by state")
-	cmd.Flags().StringVar(&options.tmuxSession, "tmux-session", "", "filter by tmux session id or name")
-	cmd.Flags().BoolVar(&options.activeOnly, "active", false, "only sessions in running or waiting states")
-	cmd.Flags().DurationVar(&staleAfter, "stale-after", 0, "treat old live sessions as stale without writing")
-
-	return cmd
 }
 
 type scanOptions struct {

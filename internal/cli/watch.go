@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/fsnotify/fsnotify"
-	"github.com/spf13/cobra"
 
 	"github.com/zigai/agent-sessions/pkg/registry"
 )
@@ -44,16 +43,20 @@ const (
 	watchHarnessColumnWidth    = 10
 	watchStateColumnWidth      = 8
 	watchLabelColumnWidth      = 24
+	watchCountColumnWidth      = 7
 )
 
 var (
-	errWatchFormatJSONConflict    = errors.New("watch --format cannot be used with --json")
+	errWatchFormatJSONConflict    = errors.New("list --format cannot be used with --json")
 	errWatchStateDirectoryMissing = errors.New("watching store: state directory does not exist")
 	errWatchStateDirectoryNotDir  = errors.New("watching store: state directory is not a directory")
 	errInvalidWatchFormat         = errors.New("invalid watch format")
 )
 
 type watchOptions struct {
+	filter     registry.Filter
+	summary    bool
+	staleAfter time.Duration
 	noSnapshot bool
 	format     string
 	formatSet  bool
@@ -78,21 +81,20 @@ type watchEvent struct {
 	Tmux          string           `json:"tmux,omitempty"`
 }
 
-func (app *application) newWatchCommand() *cobra.Command {
-	options := watchOptions{}
-	cmd := &cobra.Command{
-		Use:   "watch",
-		Short: "Watch registry state changes",
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			options.formatSet = cmd.Flags().Changed("format")
-
-			return app.runWatch(cmd.Context(), options)
-		},
-	}
-	cmd.Flags().BoolVar(&options.noSnapshot, "no-snapshot", false, "suppress the startup snapshot")
-	cmd.Flags().StringVar(&options.format, "format", "", "text output format: table, plain")
-
-	return cmd
+type watchSummaryEvent struct {
+	Time            time.Time `json:"time"`
+	Action          string    `json:"action"`
+	TmuxSessionID   string    `json:"tmux_session_id,omitempty"`
+	TmuxSessionName string    `json:"tmux_session_name,omitempty"`
+	Label           string    `json:"label,omitempty"`
+	Active          int       `json:"active"`
+	Total           int       `json:"total"`
+	Running         int       `json:"running"`
+	Waiting         int       `json:"waiting"`
+	Idle            int       `json:"idle"`
+	Unknown         int       `json:"unknown"`
+	Stale           int       `json:"stale"`
+	Exited          int       `json:"exited"`
 }
 
 func (app *application) runWatch(ctx context.Context, options watchOptions) error {
@@ -122,24 +124,49 @@ func (app *application) runWatch(ctx context.Context, options watchOptions) erro
 		return fmt.Errorf("watching state directory: %w", addErr)
 	}
 
-	sessions, err := store.List(ctx, registry.Filter{})
+	observedAt := normalizedOptions.now()
+	previousSessions, previousSummaries, err := app.loadInitialWatchState(ctx, store, normalizedOptions, observedAt)
 	if err != nil {
-		return fmt.Errorf("loading initial snapshot: %w", err)
-	}
-	previous := watchSessionMap(sessions)
-
-	if !normalizedOptions.noSnapshot {
-		writeErr := app.writeWatchEvents(
-			snapshotWatchEvents(sessions, normalizedOptions.now()),
-			normalizedOptions.format,
-		)
-		if writeErr != nil {
-			return writeErr
-		}
+		return err
 	}
 	notifyWatchReady(normalizedOptions.ready)
 
-	return app.watchStore(ctx, watcher, store, target, previous, normalizedOptions)
+	return app.watchStore(ctx, watcher, store, target, previousSessions, previousSummaries, normalizedOptions)
+}
+
+func (app *application) loadInitialWatchState(
+	ctx context.Context,
+	store *registry.FileStore,
+	options watchOptions,
+	observedAt time.Time,
+) (map[string]registry.Session, map[string]registry.Summary, error) {
+	if options.summary {
+		summaries, err := watchSummaries(ctx, store, options, observedAt)
+		if err != nil {
+			return nil, nil, fmt.Errorf("loading initial summary snapshot: %w", err)
+		}
+		if !options.noSnapshot {
+			writeErr := app.writeWatchSummaryEvents(snapshotWatchSummaryEvents(summaries, observedAt), options.format)
+			if writeErr != nil {
+				return nil, nil, writeErr
+			}
+		}
+
+		return nil, watchSummaryMap(summaries), nil
+	}
+
+	sessions, err := store.List(ctx, options.filter)
+	if err != nil {
+		return nil, nil, fmt.Errorf("loading initial snapshot: %w", err)
+	}
+	if !options.noSnapshot {
+		writeErr := app.writeWatchEvents(snapshotWatchEvents(sessions, observedAt), options.format)
+		if writeErr != nil {
+			return nil, nil, writeErr
+		}
+	}
+
+	return watchSessionMap(sessions), nil, nil
 }
 
 func (app *application) normalizeWatchRunOptions(options watchOptions) (watchOptions, error) {
@@ -228,16 +255,18 @@ func (app *application) watchStore(
 	watcher *fsnotify.Watcher,
 	store *registry.FileStore,
 	target string,
-	previous map[string]registry.Session,
+	previousSessions map[string]registry.Session,
+	previousSummaries map[string]registry.Summary,
 	options watchOptions,
 ) error {
 	loop := watchLoop{
-		app:      app,
-		watcher:  watcher,
-		store:    store,
-		target:   target,
-		previous: previous,
-		options:  options,
+		app:               app,
+		watcher:           watcher,
+		store:             store,
+		target:            target,
+		previousSessions:  previousSessions,
+		previousSummaries: previousSummaries,
+		options:           options,
 	}
 	defer loop.stopTimer()
 
@@ -245,15 +274,16 @@ func (app *application) watchStore(
 }
 
 type watchLoop struct {
-	app      *application
-	watcher  *fsnotify.Watcher
-	store    *registry.FileStore
-	target   string
-	previous map[string]registry.Session
-	options  watchOptions
-	timer    *time.Timer
-	timerC   <-chan time.Time
-	pending  bool
+	app               *application
+	watcher           *fsnotify.Watcher
+	store             *registry.FileStore
+	target            string
+	previousSessions  map[string]registry.Session
+	previousSummaries map[string]registry.Summary
+	options           watchOptions
+	timer             *time.Timer
+	timerC            <-chan time.Time
+	pending           bool
 }
 
 func (loop *watchLoop) run(ctx context.Context) error {
@@ -332,19 +362,47 @@ func (loop *watchLoop) reload(ctx context.Context) error {
 	loop.timerC = nil
 	loop.stopTimer()
 
-	nextSessions, err := loop.store.List(ctx, registry.Filter{})
+	if loop.options.summary {
+		return loop.reloadSummaries(ctx)
+	}
+
+	return loop.reloadSessions(ctx)
+}
+
+func (loop *watchLoop) reloadSessions(ctx context.Context) error {
+	observedAt := loop.options.now()
+	nextSessions, err := loop.store.List(ctx, loop.options.filter)
 	if err != nil {
 		loop.app.warnf("watch warning: %v\n", err)
 
 		return nil
 	}
 	next := watchSessionMap(nextSessions)
-	events := diffWatchEvents(loop.previous, next, loop.options.now())
+	events := diffWatchEvents(loop.previousSessions, next, observedAt)
 	writeErr := loop.app.writeWatchEvents(events, loop.options.format)
 	if writeErr != nil {
 		return writeErr
 	}
-	loop.previous = next
+	loop.previousSessions = next
+
+	return nil
+}
+
+func (loop *watchLoop) reloadSummaries(ctx context.Context) error {
+	observedAt := loop.options.now()
+	nextSummaries, err := watchSummaries(ctx, loop.store, loop.options, observedAt)
+	if err != nil {
+		loop.app.warnf("watch warning: %v\n", err)
+
+		return nil
+	}
+	next := watchSummaryMap(nextSummaries)
+	events := diffWatchSummaryEvents(loop.previousSummaries, next, observedAt)
+	writeErr := loop.app.writeWatchSummaryEvents(events, loop.options.format)
+	if writeErr != nil {
+		return writeErr
+	}
+	loop.previousSummaries = next
 
 	return nil
 }
@@ -377,6 +435,44 @@ func watchSessionMap(sessions []registry.Session) map[string]registry.Session {
 	return mapped
 }
 
+func watchSummaries(
+	ctx context.Context,
+	store *registry.FileStore,
+	options watchOptions,
+	observedAt time.Time,
+) ([]registry.Summary, error) {
+	summaries, err := store.SummaryByTmuxSessionWithOptions(ctx, registry.SummaryOptions{
+		Filter:     options.filter,
+		StaleAfter: options.staleAfter,
+		Now:        observedAt,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("summarizing watch sessions: %w", err)
+	}
+
+	return summaries, nil
+}
+
+func watchSummaryMap(summaries []registry.Summary) map[string]registry.Summary {
+	mapped := make(map[string]registry.Summary, len(summaries))
+	for _, summary := range summaries {
+		mapped[watchSummaryKey(summary)] = summary
+	}
+
+	return mapped
+}
+
+func watchSummaryKey(summary registry.Summary) string {
+	if summary.TmuxSessionID != "" {
+		return summary.TmuxSessionID
+	}
+	if summary.TmuxSessionName != "" {
+		return "detached:" + summary.TmuxSessionName
+	}
+
+	return "unknown"
+}
+
 func snapshotWatchEvents(sessions []registry.Session, observedAt time.Time) []watchEvent {
 	if len(sessions) == 0 {
 		return []watchEvent{{
@@ -390,6 +486,23 @@ func snapshotWatchEvents(sessions []registry.Session, observedAt time.Time) []wa
 		events = append(events, watchEventFromSession(watchActionSnapshot, session, registry.Session{}, observedAt))
 	}
 	sortWatchEvents(events)
+
+	return events
+}
+
+func snapshotWatchSummaryEvents(summaries []registry.Summary, observedAt time.Time) []watchSummaryEvent {
+	if len(summaries) == 0 {
+		return []watchSummaryEvent{{
+			Time:   observedAt.UTC(),
+			Action: watchActionSnapshotEmpty,
+		}}
+	}
+
+	events := make([]watchSummaryEvent, 0, len(summaries))
+	for _, summary := range summaries {
+		events = append(events, watchSummaryEventFromSummary(watchActionSnapshot, summary, observedAt))
+	}
+	sortWatchSummaryEvents(events)
 
 	return events
 }
@@ -430,6 +543,37 @@ func diffWatchEvents(
 	return events
 }
 
+func diffWatchSummaryEvents(
+	previous map[string]registry.Summary,
+	next map[string]registry.Summary,
+	observedAt time.Time,
+) []watchSummaryEvent {
+	events := make([]watchSummaryEvent, 0)
+	for key, nextSummary := range next {
+		previousSummary, ok := previous[key]
+		if !ok {
+			events = append(events, watchSummaryEventFromSummary(watchActionAdded, nextSummary, observedAt))
+
+			continue
+		}
+
+		if !reflect.DeepEqual(nextSummary, previousSummary) {
+			events = append(events, watchSummaryEventFromSummary(watchActionUpdated, nextSummary, observedAt))
+		}
+	}
+
+	for key, previousSummary := range previous {
+		if _, ok := next[key]; ok {
+			continue
+		}
+		events = append(events, watchSummaryEventFromSummary(watchActionRemoved, previousSummary, observedAt))
+	}
+
+	sortWatchSummaryEvents(events)
+
+	return events
+}
+
 func watchEventFromSession(
 	action string,
 	session registry.Session,
@@ -457,6 +601,28 @@ func watchEventFromSession(
 	}
 
 	return event
+}
+
+func watchSummaryEventFromSummary(
+	action string,
+	summary registry.Summary,
+	observedAt time.Time,
+) watchSummaryEvent {
+	return watchSummaryEvent{
+		Time:            observedAt.UTC(),
+		Action:          action,
+		TmuxSessionID:   summary.TmuxSessionID,
+		TmuxSessionName: summary.TmuxSessionName,
+		Label:           summaryLabel(summary),
+		Active:          summary.Active,
+		Total:           summary.Total,
+		Running:         summary.Running,
+		Waiting:         summary.Waiting,
+		Idle:            summary.Idle,
+		Unknown:         summary.Unknown,
+		Stale:           summary.Stale,
+		Exited:          summary.Exited,
+	}
 }
 
 func watchEventTime(action string, session registry.Session, observedAt time.Time) time.Time {
@@ -493,6 +659,19 @@ func sortWatchEvents(events []watchEvent) {
 		}
 		if events[i].ID != events[j].ID {
 			return events[i].ID < events[j].ID
+		}
+
+		return events[i].Action < events[j].Action
+	})
+}
+
+func sortWatchSummaryEvents(events []watchSummaryEvent) {
+	sort.SliceStable(events, func(i int, j int) bool {
+		if !events[i].Time.Equal(events[j].Time) {
+			return events[i].Time.Before(events[j].Time)
+		}
+		if events[i].Label != events[j].Label {
+			return events[i].Label < events[j].Label
 		}
 
 		return events[i].Action < events[j].Action
@@ -550,7 +729,39 @@ func (app *application) writeWatchEvents(events []watchEvent, format string) err
 	return nil
 }
 
+func (app *application) writeWatchSummaryEvents(events []watchSummaryEvent, format string) error {
+	for _, event := range events {
+		switch format {
+		case watchFormatJSON:
+			if err := app.writeWatchSummaryEventJSON(event); err != nil {
+				return err
+			}
+		case watchFormatPlain:
+			if err := app.writeln(formatWatchSummaryPlainEvent(event)); err != nil {
+				return err
+			}
+		case watchFormatTable:
+			if err := app.writeln(formatWatchSummaryTableEvent(event)); err != nil {
+				return err
+			}
+		default:
+			return validateWatchOutputFormat(format)
+		}
+	}
+
+	return nil
+}
+
 func (app *application) writeWatchEventJSON(event watchEvent) error {
+	encoder := json.NewEncoder(app.stdout)
+	if err := encoder.Encode(event); err != nil {
+		return fmt.Errorf("writing JSON: %w", err)
+	}
+
+	return nil
+}
+
+func (app *application) writeWatchSummaryEventJSON(event watchSummaryEvent) error {
 	encoder := json.NewEncoder(app.stdout)
 	if err := encoder.Encode(event); err != nil {
 		return fmt.Errorf("writing JSON: %w", err)
@@ -601,6 +812,58 @@ func formatWatchTableEvent(event watchEvent) string {
 		padWatchColumn(string(event.State), watchStateColumnWidth),
 		padWatchColumn(event.Label, watchLabelColumnWidth),
 		details,
+	}
+
+	return strings.TrimRight(strings.Join(columns, "  "), " ")
+}
+
+func formatWatchSummaryPlainEvent(event watchSummaryEvent) string {
+	parts := []string{
+		event.Time.UTC().Format(time.RFC3339),
+		event.Action,
+	}
+	if event.Label == "" {
+		return strings.Join(parts, " ")
+	}
+
+	fields := []struct {
+		key   string
+		value string
+	}{
+		{key: "tmux", value: event.Label},
+		{key: "active", value: strconv.Itoa(event.Active)},
+		{key: "total", value: strconv.Itoa(event.Total)},
+		{key: string(registry.StateRunning), value: strconv.Itoa(event.Running)},
+		{key: "waiting", value: strconv.Itoa(event.Waiting)},
+		{key: "idle", value: strconv.Itoa(event.Idle)},
+		{key: "unknown", value: strconv.Itoa(event.Unknown)},
+		{key: "stale", value: strconv.Itoa(event.Stale)},
+		{key: "exited", value: strconv.Itoa(event.Exited)},
+	}
+	for _, field := range fields {
+		parts = append(parts, formatWatchTextField(field.key, field.value))
+	}
+
+	return strings.Join(parts, " ")
+}
+
+func formatWatchSummaryTableEvent(event watchSummaryEvent) string {
+	label := event.Label
+	if label == "" {
+		label = "-"
+	}
+
+	columns := []string{
+		event.Time.UTC().Format(time.RFC3339),
+		padWatchColumn(event.Action, watchActionColumnWidth),
+		padWatchColumn(label, watchLabelColumnWidth),
+		padWatchColumn(fmt.Sprintf("%d/%d", event.Active, event.Total), watchCountColumnWidth),
+		padWatchColumn(strconv.Itoa(event.Running), watchCountColumnWidth),
+		padWatchColumn(strconv.Itoa(event.Waiting), watchCountColumnWidth),
+		padWatchColumn(strconv.Itoa(event.Idle), watchCountColumnWidth),
+		padWatchColumn(strconv.Itoa(event.Unknown), watchCountColumnWidth),
+		padWatchColumn(strconv.Itoa(event.Stale), watchCountColumnWidth),
+		strconv.Itoa(event.Exited),
 	}
 
 	return strings.TrimRight(strings.Join(columns, "  "), " ")
