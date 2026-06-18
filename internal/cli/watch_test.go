@@ -156,7 +156,7 @@ func TestFormatWatchPlainEvent(t *testing.T) {
 		Harness:       registry.HarnessCodex,
 		State:         registry.StateWaiting,
 		PreviousState: registry.StateRunning,
-		Label:         "abc",
+		Label:         testSessionID,
 		Event:         "PreToolUse",
 		CWD:           "/repo with space",
 		Tmux:          "work:2:%3",
@@ -203,7 +203,7 @@ func TestFormatWatchTableEvent(t *testing.T) {
 		Harness:       registry.HarnessCodex,
 		State:         registry.StateWaiting,
 		PreviousState: registry.StateRunning,
-		Label:         "abc",
+		Label:         testSessionID,
 		Event:         "PreToolUse",
 		CWD:           "/repo with space",
 		Tmux:          "work:2:%3",
@@ -256,7 +256,7 @@ func TestWriteWatchEventJSONL(t *testing.T) {
 		ID:      "codex-1",
 		Harness: registry.HarnessCodex,
 		State:   registry.StateRunning,
-		Label:   "abc",
+		Label:   testSessionID,
 	}
 
 	if err := app.writeWatchEvents([]watchEvent{event}, watchFormatJSON); err != nil {
@@ -455,7 +455,7 @@ func TestWatchReportsFileStoreChanges(t *testing.T) {
 	if _, err := store.Report(context.Background(), registry.Report{
 		Harness:    registry.HarnessCodex,
 		State:      registry.StateRunning,
-		SessionID:  "abc",
+		SessionID:  testSessionID,
 		CWD:        "/repo",
 		Event:      "UserPromptSubmit",
 		ObservedAt: now,
@@ -513,7 +513,7 @@ func TestWatchSummaryReportsFileStoreChanges(t *testing.T) {
 	if _, err := store.Report(context.Background(), registry.Report{
 		Harness:    registry.HarnessCodex,
 		State:      registry.StateRunning,
-		SessionID:  "abc",
+		SessionID:  testSessionID,
 		ObservedAt: now,
 		Tmux: registry.TmuxContext{
 			Inside:          true,

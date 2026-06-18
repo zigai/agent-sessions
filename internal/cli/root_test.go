@@ -21,8 +21,11 @@ const (
 	noTmuxFlag          = "--no-tmux"
 	reportCommand       = "report"
 	runningStateArg     = "running"
+	testSessionID       = "abc"
 	testTmuxSessionName = "work"
 )
+
+var errTestInterruptFailed = errors.New("interrupt failed")
 
 func TestRootCommandHasUse(t *testing.T) {
 	t.Parallel()
@@ -159,7 +162,7 @@ func TestReportAndList(t *testing.T) {
 		reportCommand,
 		"--harness", "codex",
 		"--state", runningStateArg,
-		"--session-id", "abc",
+		"--session-id", testSessionID,
 		noTmuxFlag,
 	})
 	if err := reportCmd.Execute(); err != nil {
@@ -185,6 +188,130 @@ func TestReportAndList(t *testing.T) {
 	}
 	if rfc3339Pattern().MatchString(output) {
 		t.Fatalf("expected default list output not to include RFC3339 timestamp, got %q", output)
+	}
+}
+
+func TestManageResetCommandClearsStore(t *testing.T) {
+	t.Parallel()
+
+	storePath := filepath.Join(t.TempDir(), "state.json")
+	store := registry.NewFileStore(storePath)
+	ctx := context.Background()
+	if _, err := store.Report(ctx, registry.Report{
+		Harness:   registry.HarnessCodex,
+		State:     registry.StateRunning,
+		SessionID: testSessionID,
+	}); err != nil {
+		t.Fatalf("reporting session: %v", err)
+	}
+
+	var output bytes.Buffer
+	cmd := NewRootCommand(&output, &bytes.Buffer{})
+	cmd.SetArgs([]string{storeFlag, storePath, "manage", "reset"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("manage reset command failed: %v", err)
+	}
+
+	got := output.String()
+	if !strings.Contains(got, "cleared=1 remaining=0") || !strings.Contains(got, "path="+storePath) {
+		t.Fatalf("unexpected reset output: %q", got)
+	}
+	sessions, err := store.List(ctx, registry.Filter{})
+	if err != nil {
+		t.Fatalf("listing reset store: %v", err)
+	}
+	if len(sessions) != 0 {
+		t.Fatalf("expected reset command to clear sessions, got %#v", sessions)
+	}
+}
+
+func TestManageResetCommandJSON(t *testing.T) {
+	t.Parallel()
+
+	storePath := filepath.Join(t.TempDir(), "state.json")
+	var output bytes.Buffer
+	cmd := NewRootCommand(&output, &bytes.Buffer{})
+	cmd.SetArgs([]string{"--json", storeFlag, storePath, "manage", "reset"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("json manage reset command failed: %v", err)
+	}
+
+	var got map[string]any
+	if err := json.Unmarshal(output.Bytes(), &got); err != nil {
+		t.Fatalf("reset command output is not JSON: %v", err)
+	}
+	if got["cleared"] != float64(0) || got["remaining"] != float64(0) || got["path"] != storePath {
+		t.Fatalf("unexpected reset JSON output: %#v", got)
+	}
+}
+
+func TestManageStopAllDryRun(t *testing.T) {
+	t.Parallel()
+
+	storePath := filepath.Join(t.TempDir(), "state.json")
+	store := registry.NewFileStore(storePath)
+	reportStopAllTestSessions(t, store)
+
+	var output bytes.Buffer
+	cmd := NewRootCommand(&output, &bytes.Buffer{})
+	cmd.SetArgs([]string{storeFlag, storePath, "manage", "stop-all", "--dry-run"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("manage stop-all dry run failed: %v", err)
+	}
+
+	want := "stoppable=2 stopped=0 skipped=2 failed=0 dry_run=true"
+	if !strings.Contains(output.String(), want) {
+		t.Fatalf("expected dry-run summary %q, got %q", want, output.String())
+	}
+}
+
+func TestManageStopAllSendsSignalsAndDeduplicatesTargets(t *testing.T) {
+	t.Parallel()
+
+	storePath := filepath.Join(t.TempDir(), "state.json")
+	store := registry.NewFileStore(storePath)
+	reportStopAllTestSessions(t, store)
+
+	signaler := &fakeSessionStopSignaler{}
+	app := &application{storePath: storePath, stdout: &bytes.Buffer{}, stderr: &bytes.Buffer{}}
+	result, err := app.runManageStopAll(context.Background(), manageStopAllOptions{signaler: signaler})
+	if err != nil {
+		t.Fatalf("runManageStopAll returned error: %v", err)
+	}
+	if result.Stoppable != 2 || result.Stopped != 2 || result.Skipped != 2 || result.Failed != 0 {
+		t.Fatalf("unexpected stop-all result: %#v", result)
+	}
+	if len(signaler.tmuxPanes) != 1 || signaler.tmuxPanes[0] != "%1" {
+		t.Fatalf("expected one tmux interrupt for %%1, got %#v", signaler.tmuxPanes)
+	}
+	if len(signaler.pids) != 1 || signaler.pids[0] != 1234 {
+		t.Fatalf("expected one pid interrupt for 1234, got %#v", signaler.pids)
+	}
+}
+
+func TestManageStopAllReportsFailures(t *testing.T) {
+	t.Parallel()
+
+	storePath := filepath.Join(t.TempDir(), "state.json")
+	store := registry.NewFileStore(storePath)
+	ctx := context.Background()
+	if _, err := store.Report(ctx, registry.Report{
+		Harness:   registry.HarnessPi,
+		State:     registry.StateRunning,
+		SessionID: "pid",
+		PID:       1234,
+	}); err != nil {
+		t.Fatalf("reporting pid session: %v", err)
+	}
+
+	signaler := &fakeSessionStopSignaler{pidErr: errTestInterruptFailed}
+	app := &application{storePath: storePath, stdout: &bytes.Buffer{}, stderr: &bytes.Buffer{}}
+	result, err := app.runManageStopAll(ctx, manageStopAllOptions{signaler: signaler})
+	if !errors.Is(err, errManageStopAllFailed) {
+		t.Fatalf("expected stop-all failed error, got %v", err)
+	}
+	if result.Stoppable != 1 || result.Stopped != 0 || result.Failed != 1 {
+		t.Fatalf("unexpected failed stop-all result: %#v", result)
 	}
 }
 
@@ -261,7 +388,7 @@ func TestListAbsoluteTime(t *testing.T) {
 		reportCommand,
 		"--harness", "codex",
 		"--state", runningStateArg,
-		"--session-id", "abc",
+		"--session-id", testSessionID,
 		noTmuxFlag,
 	})
 	if err := reportCmd.Execute(); err != nil {
@@ -918,4 +1045,73 @@ func listAgyTestSessions(t *testing.T, storePath string) []registry.Session {
 	}
 
 	return sessions
+}
+
+func reportStopAllTestSessions(t *testing.T, store *registry.FileStore) {
+	t.Helper()
+
+	ctx := context.Background()
+	if _, err := store.Report(ctx, registry.Report{
+		Harness:   registry.HarnessCodex,
+		State:     registry.StateRunning,
+		SessionID: "tmux",
+		Tmux: registry.TmuxContext{
+			Inside: true,
+			PaneID: "%1",
+		},
+	}); err != nil {
+		t.Fatalf("reporting tmux session: %v", err)
+	}
+	if _, err := store.Report(ctx, registry.Report{
+		Harness:   registry.HarnessClaude,
+		State:     registry.StateWaiting,
+		SessionID: "duplicate-tmux",
+		Tmux: registry.TmuxContext{
+			Inside: true,
+			PaneID: "%1",
+		},
+	}); err != nil {
+		t.Fatalf("reporting duplicate tmux session: %v", err)
+	}
+	if _, err := store.Report(ctx, registry.Report{
+		Harness:   registry.HarnessPi,
+		State:     registry.StateRunning,
+		SessionID: "pid",
+		PID:       1234,
+	}); err != nil {
+		t.Fatalf("reporting pid session: %v", err)
+	}
+	if _, err := store.Report(ctx, registry.Report{
+		Harness:   registry.HarnessCursor,
+		State:     registry.StateWaiting,
+		SessionID: "no-target",
+	}); err != nil {
+		t.Fatalf("reporting no-target session: %v", err)
+	}
+	if _, err := store.Report(ctx, registry.Report{
+		Harness:   registry.HarnessGrok,
+		State:     registry.StateExited,
+		SessionID: "exited",
+	}); err != nil {
+		t.Fatalf("reporting exited session: %v", err)
+	}
+}
+
+type fakeSessionStopSignaler struct {
+	tmuxPanes []string
+	pids      []int
+	tmuxErr   error
+	pidErr    error
+}
+
+func (s *fakeSessionStopSignaler) SendTmuxInterrupt(_ context.Context, paneID string) error {
+	s.tmuxPanes = append(s.tmuxPanes, paneID)
+
+	return s.tmuxErr
+}
+
+func (s *fakeSessionStopSignaler) SendProcessInterrupt(pid int) error {
+	s.pids = append(s.pids, pid)
+
+	return s.pidErr
 }

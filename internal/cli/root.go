@@ -102,6 +102,7 @@ func NewRootCommand(stdout io.Writer, stderr io.Writer) *cobra.Command {
 		app.newGetCommand(),
 		app.newScanCommand(),
 		app.newGCCommand(),
+		app.newManageCommand(),
 		app.newPathCommand(),
 		app.newInstallHooksCommand(),
 		app.newAgyHookCommand(),
