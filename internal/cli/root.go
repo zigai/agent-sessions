@@ -32,13 +32,20 @@ var (
 
 	errInvalidReportArguments = errors.New("invalid report arguments")
 	errUnexpectedReportArg    = errors.New("unexpected report argument")
-	errMissingReportHarness   = errors.New("missing harness: pass --harness <name> or use `agent-sessions report <harness> <state>`")
-	errMissingReportIdentity  = errors.New("missing report identity: provide --state <state>, --session-id, or --session-path")
+	errMissingReportHarness   = errors.New("missing harness")
+	errMissingReportIdentity  = errors.New("missing report state or identity")
 )
 
 const (
 	tabPadding    = 2
 	maxReportArgs = 2
+)
+
+const (
+	reportStatesLabel        = "idle, running, waiting, unknown, exited, stale"
+	reportExampleHarness     = "agent-sessions report pi running"
+	reportExampleStateFirst  = "agent-sessions report running --harness pi"
+	reportExampleWithSession = "agent-sessions report --harness codex --state waiting --session-id abc"
 )
 
 const (
@@ -204,12 +211,13 @@ func (app *application) newReportCommand() *cobra.Command {
 	}
 
 	cmd := &cobra.Command{
-		Use:   "report [harness] [state]",
-		Short: "Upsert a session report from a harness hook or wrapper",
+		Use:          "report [harness] [state]",
+		Short:        "Upsert a session report from a harness hook or wrapper",
+		SilenceUsage: true,
 		Example: strings.Join([]string{
-			"  agent-sessions report pi running",
-			"  agent-sessions report running --harness pi",
-			"  agent-sessions report --harness codex --state waiting --session-id abc",
+			"  " + reportExampleHarness,
+			"  " + reportExampleStateFirst,
+			"  " + reportExampleWithSession,
 		}, "\n"),
 		Args: cobra.MaximumNArgs(maxReportArgs),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -227,7 +235,7 @@ func (app *application) newReportCommand() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&options.harness, "harness", options.harness, "harness name: "+strings.Join(harnesspkg.SupportedNames(), ", "))
-	cmd.Flags().StringVar(&options.state, "state", options.state, "state: idle, running, waiting, unknown, exited, stale")
+	cmd.Flags().StringVar(&options.state, "state", options.state, "state: "+reportStatesLabel)
 	cmd.Flags().StringVar(&options.sessionID, "session-id", options.sessionID, "harness session id")
 	cmd.Flags().StringVar(&options.sessionPath, "session-path", options.sessionPath, "harness session file path")
 	cmd.Flags().StringVar(&options.cwd, "cwd", options.cwd, "agent current working directory")
@@ -351,9 +359,16 @@ func (app *application) runReport(ctx context.Context, stdin io.Reader, options 
 	if err != nil {
 		return err
 	}
+	if !harnesspkg.PayloadCompatibleWithHarness(harness, defaultsPayload) {
+		if options.quiet {
+			return nil
+		}
+
+		return app.writef("ignored %s report: hook payload does not match harness\n", harness)
+	}
 	applyPayloadDefaults(&options, attributes, harnesspkg.DefaultsFromPayload(harness, defaultsPayload))
 	if identityErr := requireReportIdentity(state, options); identityErr != nil {
-		return identityErr
+		return missingReportIdentityError(harness)
 	}
 
 	source := options.source
@@ -402,7 +417,7 @@ func (app *application) runReport(ctx context.Context, stdin io.Reader, options 
 
 func normalizeReportHarnessAndState(options reportOptions) (registry.Harness, registry.State, error) {
 	if strings.TrimSpace(options.harness) == "" {
-		return "", "", errMissingReportHarness
+		return "", "", missingReportHarnessError(options)
 	}
 	harness, err := harnesspkg.Normalize(options.harness)
 	if err != nil {
@@ -436,6 +451,43 @@ func requireReportIdentity(state registry.State, options reportOptions) error {
 	}
 
 	return nil
+}
+
+func missingReportHarnessError(options reportOptions) error {
+	if options.state != "" {
+		return fmt.Errorf(
+			"%w: state %q needs --harness <name>\n\n%s",
+			errMissingReportHarness,
+			options.state,
+			reportQuickHelp(reportExampleStateFirst),
+		)
+	}
+
+	return fmt.Errorf(
+		"%w: choose a harness and state\n\n%s",
+		errMissingReportHarness,
+		reportQuickHelp(reportExampleHarness),
+	)
+}
+
+func missingReportIdentityError(harness registry.Harness) error {
+	return fmt.Errorf(
+		"%w: report for %s needs a state, --session-id, or --session-path\n\n%s",
+		errMissingReportIdentity,
+		harness,
+		reportQuickHelp("agent-sessions report "+string(harness)+" running"),
+	)
+}
+
+func reportQuickHelp(primaryExample string) string {
+	return strings.Join([]string{
+		"Try:",
+		"  " + primaryExample,
+		"  " + reportExampleWithSession,
+		"",
+		"States: " + reportStatesLabel,
+		"Use \"agent-sessions report --help\" for all flags.",
+	}, "\n")
 }
 
 type listOptions struct {

@@ -15,6 +15,7 @@ import (
 
 const (
 	storeFlag     = "--store"
+	noTmuxFlag    = "--no-tmux"
 	reportCommand = "report"
 )
 
@@ -49,12 +50,19 @@ func TestReportRequiresHarness(t *testing.T) {
 	t.Parallel()
 
 	var output bytes.Buffer
-	cmd := NewRootCommand(&output, &bytes.Buffer{})
+	var stderr bytes.Buffer
+	cmd := NewRootCommand(&output, &stderr)
 	cmd.SetArgs([]string{reportCommand})
 
 	err := cmd.Execute()
 	if err == nil || !strings.Contains(err.Error(), "missing harness") {
 		t.Fatalf("expected missing harness error, got %v", err)
+	}
+	if !strings.Contains(err.Error(), reportExampleHarness) {
+		t.Fatalf("expected report example in error, got %v", err)
+	}
+	if strings.Contains(stderr.String(), "Usage:") {
+		t.Fatalf("expected report error not to print full usage, got %q", stderr.String())
 	}
 }
 
@@ -62,12 +70,39 @@ func TestReportHarnessArgumentRequiresStateOrIdentity(t *testing.T) {
 	t.Parallel()
 
 	var output bytes.Buffer
-	cmd := NewRootCommand(&output, &bytes.Buffer{})
-	cmd.SetArgs([]string{reportCommand, "pi", "--no-tmux"})
+	var stderr bytes.Buffer
+	cmd := NewRootCommand(&output, &stderr)
+	cmd.SetArgs([]string{reportCommand, "pi", noTmuxFlag})
 
 	err := cmd.Execute()
-	if err == nil || !strings.Contains(err.Error(), "missing report identity") {
-		t.Fatalf("expected missing report identity error, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "report for pi needs a state") {
+		t.Fatalf("expected missing report state error, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "agent-sessions report pi running") {
+		t.Fatalf("expected pi running example in error, got %v", err)
+	}
+	if strings.Contains(stderr.String(), "Usage:") {
+		t.Fatalf("expected report error not to print full usage, got %q", stderr.String())
+	}
+}
+
+func TestReportStateArgumentRequiresHarness(t *testing.T) {
+	t.Parallel()
+
+	var output bytes.Buffer
+	var stderr bytes.Buffer
+	cmd := NewRootCommand(&output, &stderr)
+	cmd.SetArgs([]string{reportCommand, "running", noTmuxFlag})
+
+	err := cmd.Execute()
+	if err == nil || !strings.Contains(err.Error(), `state "running" needs --harness`) {
+		t.Fatalf("expected state missing harness error, got %v", err)
+	}
+	if !strings.Contains(err.Error(), reportExampleStateFirst) {
+		t.Fatalf("expected state-first example in error, got %v", err)
+	}
+	if strings.Contains(stderr.String(), "Usage:") {
+		t.Fatalf("expected report error not to print full usage, got %q", stderr.String())
 	}
 }
 
@@ -77,7 +112,7 @@ func TestReportAcceptsHarnessAndStateArguments(t *testing.T) {
 	storePath := filepath.Join(t.TempDir(), "state.json")
 	var output bytes.Buffer
 	cmd := NewRootCommand(&output, &bytes.Buffer{})
-	cmd.SetArgs([]string{storeFlag, storePath, reportCommand, "pi", "running", "--no-tmux"})
+	cmd.SetArgs([]string{storeFlag, storePath, reportCommand, "pi", "running", noTmuxFlag})
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("report command failed: %v", err)
 	}
@@ -100,7 +135,7 @@ func TestReportAndList(t *testing.T) {
 		"--harness", "codex",
 		"--state", "running",
 		"--session-id", "abc",
-		"--no-tmux",
+		noTmuxFlag,
 	})
 	if err := reportCmd.Execute(); err != nil {
 		t.Fatalf("report command failed: %v", err)
@@ -140,7 +175,7 @@ func TestListAbsoluteTime(t *testing.T) {
 		"--harness", "codex",
 		"--state", "running",
 		"--session-id", "abc",
-		"--no-tmux",
+		noTmuxFlag,
 	})
 	if err := reportCmd.Execute(); err != nil {
 		t.Fatalf("report command failed: %v", err)
@@ -285,9 +320,9 @@ func TestReportCodexHookPayloadQuiet(t *testing.T) {
 		"--source", "codex-hook",
 		"--raw-stdin",
 		"--quiet",
-		"--no-tmux",
+		noTmuxFlag,
 	})
-	cmd.SetIn(strings.NewReader(`{"session_id":"codex-session","transcript_path":"/tmp/codex.jsonl","cwd":"/tmp","hook_event_name":"UserPromptSubmit","model":"gpt-5-codex"}`))
+	cmd.SetIn(strings.NewReader(`{"session_id":"codex-session","transcript_path":"/home/zigai/.codex/sessions/2026/06/18/rollout.jsonl","cwd":"/tmp","hook_event_name":"UserPromptSubmit","model":"gpt-5-codex"}`))
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("report command failed: %v", err)
 	}
@@ -310,7 +345,7 @@ func TestReportCodexHookPayloadQuiet(t *testing.T) {
 	if sessions[0].SessionID != "codex-session" {
 		t.Fatalf("expected codex session id, got %q", sessions[0].SessionID)
 	}
-	if sessions[0].SessionPath != "/tmp/codex.jsonl" {
+	if sessions[0].SessionPath != "/home/zigai/.codex/sessions/2026/06/18/rollout.jsonl" {
 		t.Fatalf("expected codex transcript path, got %q", sessions[0].SessionPath)
 	}
 	if sessions[0].Attributes["codex_hook_event"] != "UserPromptSubmit" {
@@ -321,6 +356,41 @@ func TestReportCodexHookPayloadQuiet(t *testing.T) {
 	}
 	if sessions[0].LastEventAt.IsZero() || sessions[0].StateChangedAt.IsZero() {
 		t.Fatalf("expected event and state timestamps, got event_at=%s state_changed_at=%s", sessions[0].LastEventAt, sessions[0].StateChangedAt)
+	}
+}
+
+func TestReportClaudeHookIgnoresNonClaudePayloadQuiet(t *testing.T) {
+	t.Parallel()
+
+	storePath := filepath.Join(t.TempDir(), "state.json")
+	var reportOut bytes.Buffer
+	cmd := NewRootCommand(&reportOut, &bytes.Buffer{})
+	cmd.SetArgs([]string{
+		storeFlag, storePath,
+		reportCommand,
+		"--harness", "claude",
+		"--state", "idle",
+		"--source", "claude-hook",
+		"--raw-stdin",
+		"--quiet",
+		noTmuxFlag,
+	})
+	cmd.SetIn(strings.NewReader(`{"hookEventName":"stop","sessionId":"not-claude","cwd":"/repo","workspaceRoot":"/repo","promptId":"prompt","reason":"end_turn"}`))
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("report command failed: %v", err)
+	}
+	if reportOut.String() != "" {
+		t.Fatalf("expected quiet report to suppress output, got %q", reportOut.String())
+	}
+
+	sessions, err := registry.NewFileStore(storePath).List(context.Background(), registry.Filter{
+		Harness: registry.HarnessClaude,
+	})
+	if err != nil {
+		t.Fatalf("listing sessions: %v", err)
+	}
+	if len(sessions) != 0 {
+		t.Fatalf("expected no claude sessions, got %#v", sessions)
 	}
 }
 
@@ -338,7 +408,7 @@ func TestReportGrokHookPayloadQuiet(t *testing.T) {
 		"--source", "grok-hook",
 		"--raw-stdin",
 		"--quiet",
-		"--no-tmux",
+		noTmuxFlag,
 	})
 	cmd.SetIn(strings.NewReader(`{"sessionId":"grok-session","cwd":"/tmp","workspaceRoot":"/tmp","hookEventName":"UserPromptSubmit","toolName":"run_terminal_command"}`))
 	if err := cmd.Execute(); err != nil {
@@ -594,9 +664,9 @@ func TestReportCursorHookDefaultsOnlyQuiet(t *testing.T) {
 		"--source", "cursor-hook",
 		"--raw-stdin-defaults-only",
 		"--quiet",
-		"--no-tmux",
+		noTmuxFlag,
 	})
-	cmd.SetIn(strings.NewReader(`{"session_id":"cursor-session","transcript_path":"/tmp/cursor.jsonl","workspace_roots":["/repo"],"hook_event_name":"beforeSubmitPrompt","model":"gpt-5.2","prompt":"sensitive prompt text"}`))
+	cmd.SetIn(strings.NewReader(`{"session_id":"cursor-session","transcript_path":"/tmp/cursor.jsonl","workspace_roots":["/repo"],"hook_event_name":"beforeSubmitPrompt","model":"gpt-5.2","cursor_version":"1.7.2","prompt":"sensitive prompt text"}`))
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("report command failed: %v", err)
 	}
