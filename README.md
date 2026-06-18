@@ -51,6 +51,7 @@ Available Commands:
   help          Help about any command
   install-hooks Install harness reporting hooks or shims
   list          List known agent sessions
+  manage        Manage registry state and agent sessions
   path          Print the registry state file path
   report        Upsert a session report from a harness hook or wrapper
   scan          Scan tmux panes for supported harness processes
@@ -72,6 +73,17 @@ agent-sessions list --summary
 agent-sessions list --watch
 agent-sessions list --watch --summary
 ```
+
+Management commands:
+
+```sh
+agent-sessions manage reset
+agent-sessions manage stop-all
+agent-sessions manage stop-all --dry-run
+```
+
+`manage stop-all` sends `C-c` to tmux-backed sessions and `SIGINT` to sessions
+with a reported process id. Exited sessions are ignored.
 
 ## Hook Installation
 
