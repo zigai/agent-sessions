@@ -6,7 +6,7 @@ other tools can answer questions like:
 
 - which agent sessions are open
 - which harness owns each session
-- whether each session is idle, running, waiting, stale, or exited
+- whether each session is idle, running, waiting, unknown, or exited
 - which tmux session, window, and pane the agent belongs to
 - which command can resume the harness session
 
@@ -46,7 +46,7 @@ Usage:
   agent-sessions [command]
 
 Available Commands:
-  gc            Mark old sessions stale and optionally delete stale/exited records
+  gc            Delete old exited session records
   get           Get one session by registry id
   help          Help about any command
   install-hooks Install harness reporting hooks or shims
@@ -88,7 +88,7 @@ agent-sessions install-hooks codex --dry-run
 Each session record stores:
 - registry id
 - harness: `claude`, `codex`, `cursor`, `kimi-code`, `grok`, `pi`, `opencode`, `agy`, or `kilo`
-- normalized state: `idle`, `running`, `waiting`, `unknown`, `stale`, `exited`
+- normalized state: `idle`, `running`, `waiting`, `unknown`, `exited`
 - harness session id and/or session path when known
 - resume command when a harness adapter can derive one from session id/path
 - cwd and project root
