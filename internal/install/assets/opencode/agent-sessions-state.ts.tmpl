@@ -151,9 +151,10 @@ function addEvent(args: string[], value: unknown): void {
 }
 
 function report(state: string, ctx: any, event: any): void {
+  const observedAt = new Date().toISOString();
   refreshSessionRef(ctx, event);
 
-  const args = ["report", "--harness", "opencode", "--state", state, "--source", source];
+  const args = ["report", "--harness", "opencode", "--state", state, "--source", source, "--observed-at", observedAt];
   addEvent(args, event?.type);
   if (currentSessionId) {
     args.push("--session-id", currentSessionId);

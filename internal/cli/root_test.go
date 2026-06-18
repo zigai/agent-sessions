@@ -980,6 +980,40 @@ func TestDefaultInstallBinaryIsAbsolute(t *testing.T) {
 	}
 }
 
+func TestParseObservedAt(t *testing.T) {
+	t.Parallel()
+
+	got, err := parseObservedAt("2026-06-18T12:00:00.123456789Z")
+	if err != nil {
+		t.Fatalf("parseObservedAt returned error: %v", err)
+	}
+	want := time.Date(2026, 6, 18, 12, 0, 0, 123456789, time.UTC)
+	if !got.Equal(want) {
+		t.Fatalf("expected %s, got %s", want, got)
+	}
+
+	_, invalidErr := parseObservedAt("not-a-time")
+	if invalidErr == nil {
+		t.Fatal("expected invalid observed-at to fail")
+	}
+}
+
+func TestCompareSessionTmuxUsesNumericIndexes(t *testing.T) {
+	t.Parallel()
+
+	w10 := registry.Session{ID: "w10", Harness: registry.HarnessCodex, Tmux: registry.TmuxContext{SessionName: "work", WindowIndex: "10", PaneIndex: "1"}}
+	w2 := registry.Session{ID: "w2", Harness: registry.HarnessCodex, Tmux: registry.TmuxContext{SessionName: "work", WindowIndex: "2", PaneIndex: "1"}}
+	p10 := registry.Session{ID: "p10", Harness: registry.HarnessCodex, Tmux: registry.TmuxContext{SessionName: "work", WindowIndex: "2", PaneIndex: "10"}}
+	p2 := registry.Session{ID: "p2", Harness: registry.HarnessCodex, Tmux: registry.TmuxContext{SessionName: "work", WindowIndex: "2", PaneIndex: "2"}}
+
+	if cmp := compareSessionTmux(w2, w10); cmp >= 0 {
+		t.Fatalf("expected window 2 before window 10, got cmp=%d", cmp)
+	}
+	if cmp := compareSessionTmux(p2, p10); cmp >= 0 {
+		t.Fatalf("expected pane 2 before pane 10, got cmp=%d", cmp)
+	}
+}
+
 func TestInstallHooksAll(t *testing.T) {
 	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
 	t.Setenv("CODEX_HOME", t.TempDir())

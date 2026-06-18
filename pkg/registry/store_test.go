@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 )
@@ -461,6 +462,152 @@ func TestReportIdentityIgnoresTmuxWindowName(t *testing.T) {
 	}
 }
 
+func TestReportPathThenSessionIDMergesSameLogicalSession(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	now := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
+	store := NewFileStore(filepath.Join(t.TempDir(), "state.json"))
+	store.SetNowForTest(func() time.Time { return now })
+
+	firstReport := testReport(HarnessCodex, StateIdle)
+	firstReport.SessionPath = "/tmp/codex/session.jsonl"
+	first, err := store.Report(ctx, firstReport)
+	if err != nil {
+		t.Fatalf("first Report returned error: %v", err)
+	}
+
+	store.SetNowForTest(func() time.Time { return now.Add(time.Second) })
+	secondReport := testReport(HarnessCodex, StateRunning)
+	secondReport.SessionID = "session-123"
+	secondReport.SessionPath = "/tmp/codex/session.jsonl"
+	second, err := store.Report(ctx, secondReport)
+	if err != nil {
+		t.Fatalf("second Report returned error: %v", err)
+	}
+	if second.ID == first.ID {
+		t.Fatalf("expected canonical id to upgrade from path key to session id key, both were %q", second.ID)
+	}
+
+	sessions, err := store.List(ctx, filterByHarness(HarnessCodex))
+	if err != nil {
+		t.Fatalf("List returned error: %v", err)
+	}
+	if len(sessions) != 1 {
+		t.Fatalf("same harness/path should be one logical session, got %#v", sessions)
+	}
+	if sessions[0].SessionID != "session-123" || sessions[0].SessionPath != "/tmp/codex/session.jsonl" {
+		t.Fatalf("expected merged identities, got %#v", sessions[0])
+	}
+}
+
+func TestReportMergesSeparateIdentityRecords(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	base := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
+	store := NewFileStore(filepath.Join(t.TempDir(), "state.json"))
+	store.SetNowForTest(func() time.Time { return base })
+	pathOnlyReport := testReport(HarnessCodex, StateIdle)
+	pathOnlyReport.SessionPath = "/tmp/codex/session.jsonl"
+	pathOnly, err := store.Report(ctx, pathOnlyReport)
+	if err != nil {
+		t.Fatalf("path Report returned error: %v", err)
+	}
+
+	store.SetNowForTest(func() time.Time { return base.Add(time.Second) })
+	idOnlyReport := testReport(HarnessCodex, StateRunning)
+	idOnlyReport.SessionID = "session-123"
+	idOnly, err := store.Report(ctx, idOnlyReport)
+	if err != nil {
+		t.Fatalf("id Report returned error: %v", err)
+	}
+	if idOnly.ID == pathOnly.ID {
+		t.Fatalf("setup expected separate records before overlapping identity report")
+	}
+
+	store.SetNowForTest(func() time.Time { return base.Add(2 * time.Second) })
+	mergedReport := testReport(HarnessCodex, StateWaiting)
+	mergedReport.SessionID = "session-123"
+	mergedReport.SessionPath = "/tmp/codex/session.jsonl"
+	merged, err := store.Report(ctx, mergedReport)
+	if err != nil {
+		t.Fatalf("merge Report returned error: %v", err)
+	}
+
+	sessions, err := store.List(ctx, filterByHarness(HarnessCodex))
+	if err != nil {
+		t.Fatalf("List returned error: %v", err)
+	}
+	if len(sessions) != 1 {
+		t.Fatalf("expected duplicate identity records to coalesce, got %#v", sessions)
+	}
+	if sessions[0].ID != merged.ID || sessions[0].State != StateWaiting {
+		t.Fatalf("unexpected merged session: returned=%#v listed=%#v", merged, sessions[0])
+	}
+}
+
+func TestReportObservedAtPreventsStaleStateRegression(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	base := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
+	store := NewFileStore(filepath.Join(t.TempDir(), "state.json"))
+
+	runningReport := testReport(HarnessKilo, StateRunning)
+	runningReport.SessionID = "session-123"
+	runningReport.Event = "agent.start"
+	runningReport.ObservedAt = base
+	_, err := store.Report(ctx, runningReport)
+	if err != nil {
+		t.Fatalf("running Report returned error: %v", err)
+	}
+	idleReport := testReport(HarnessKilo, StateIdle)
+	idleReport.SessionID = "session-123"
+	idleReport.Event = "agent.end"
+	idleReport.ObservedAt = base.Add(time.Second)
+	idle, err := store.Report(ctx, idleReport)
+	if err != nil {
+		t.Fatalf("idle Report returned error: %v", err)
+	}
+	staleReport := testReport(HarnessKilo, StateRunning)
+	staleReport.SessionID = "session-123"
+	staleReport.Event = "agent.start"
+	staleReport.ObservedAt = base.Add(500 * time.Millisecond)
+	stale, err := store.Report(ctx, staleReport)
+	if err != nil {
+		t.Fatalf("stale Report returned error: %v", err)
+	}
+
+	if stale.State != StateIdle || stale.LastEvent != "agent.end" {
+		t.Fatalf("stale observed report should not regress lifecycle, got state=%q event=%q", stale.State, stale.LastEvent)
+	}
+	if !stale.StateChangedAt.Equal(idle.StateChangedAt) || !stale.LastEventAt.Equal(idle.LastEventAt) {
+		t.Fatalf("stale observed report changed lifecycle timestamps: before=%#v after=%#v", idle, stale)
+	}
+	if stale.UpdatedAt.Before(idle.UpdatedAt) || stale.LastSeenAt.Before(idle.LastSeenAt) {
+		t.Fatalf("stale observed report moved update times backwards: before=%#v after=%#v", idle, stale)
+	}
+}
+
+func TestSortSessionsUsesNumericTmuxIndexes(t *testing.T) {
+	t.Parallel()
+
+	sessions := []Session{
+		testSessionWithTmux("w10", "10", "1"),
+		testSessionWithTmux("w2", "2", "1"),
+		testSessionWithTmux("p10", "2", "10"),
+		testSessionWithTmux("p2", "2", "2"),
+	}
+
+	sortSessions(sessions)
+	got := []string{sessions[0].ID, sessions[1].ID, sessions[2].ID, sessions[3].ID}
+	want := []string{"w2", "p2", "p10", "w10"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("expected numeric tmux order %#v, got %#v", want, got)
+	}
+}
+
 func emptyTmuxContext() TmuxContext {
 	return TmuxContext{
 		Inside:          false,
@@ -475,6 +622,78 @@ func emptyTmuxContext() TmuxContext {
 		PanePID:         0,
 		PaneTTY:         "",
 		ClientTTY:       "",
+	}
+}
+
+func testReport(harness Harness, state State) Report {
+	return Report{
+		Harness:       harness,
+		State:         state,
+		SessionID:     "",
+		SessionPath:   "",
+		ResumeCommand: nil,
+		CWD:           "",
+		ProjectRoot:   "",
+		PID:           0,
+		PPID:          0,
+		TTY:           "",
+		Tmux:          emptyTmuxContext(),
+		Source:        "",
+		Confidence:    "",
+		Event:         "",
+		Attributes:    nil,
+		RawPayload:    nil,
+		ObservedAt:    time.Time{},
+	}
+}
+
+func filterByHarness(harness Harness) Filter {
+	return Filter{
+		Harness:     harness,
+		State:       "",
+		TmuxSession: "",
+		ActiveOnly:  false,
+	}
+}
+
+func testSessionWithTmux(id string, windowIndex string, paneIndex string) Session {
+	return Session{
+		ID:            id,
+		Harness:       HarnessCodex,
+		State:         "",
+		SessionID:     "",
+		SessionPath:   "",
+		ResumeCommand: nil,
+		CWD:           "",
+		ProjectRoot:   "",
+		PID:           0,
+		PPID:          0,
+		TTY:           "",
+		Tmux: TmuxContext{
+			Inside:          false,
+			SessionID:       "",
+			SessionName:     "work",
+			WindowID:        "",
+			WindowIndex:     windowIndex,
+			WindowName:      "",
+			PaneID:          "",
+			PaneIndex:       paneIndex,
+			PaneCurrentPath: "",
+			PanePID:         0,
+			PaneTTY:         "",
+			ClientTTY:       "",
+		},
+		Source:         "",
+		Confidence:     "",
+		LastEvent:      "",
+		Attributes:     nil,
+		RawPayload:     nil,
+		CreatedAt:      time.Time{},
+		UpdatedAt:      time.Time{},
+		LastSeenAt:     time.Time{},
+		StateChangedAt: time.Time{},
+		LastEventAt:    time.Time{},
+		EndedAt:        time.Time{},
 	}
 }
 

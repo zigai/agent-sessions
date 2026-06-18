@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
+	"sort"
 	"time"
 )
 
@@ -78,10 +80,9 @@ func (s *FileStore) Report(ctx context.Context, report Report) (Session, error) 
 			return ErrReportIdentityRequired
 		}
 
-		id := sessionIDForReport(report)
-		saved = mergeReport(snap.Sessions[id], report, now)
+		saved = mergeReportSession(snap, report, now)
 		snap.Sessions[saved.ID] = saved
-		snap.UpdatedAt = now
+		snap.UpdatedAt = maxTime(snap.UpdatedAt, saved.UpdatedAt, now)
 
 		return nil
 	})
@@ -90,6 +91,169 @@ func (s *FileStore) Report(ctx context.Context, report Report) (Session, error) 
 	}
 
 	return saved, nil
+}
+
+func mergeReportSession(snap *snapshot, report Report, now time.Time) Session {
+	canonicalID := sessionIDForReport(report)
+	matchingIDs := matchingSessionIDs(snap.Sessions, report, canonicalID)
+	base := mergedExistingSessions(snap.Sessions, matchingIDs, canonicalID)
+	saved := mergeReport(base, report, now)
+
+	for _, id := range matchingIDs {
+		delete(snap.Sessions, id)
+	}
+
+	return saved
+}
+
+func matchingSessionIDs(sessions map[string]Session, report Report, canonicalID string) []string {
+	matchingIDs := make([]string, 0, 1)
+	for id, session := range sessions {
+		if id == canonicalID || sessionMatchesReportIdentity(session, report) {
+			matchingIDs = append(matchingIDs, id)
+		}
+	}
+	sort.Strings(matchingIDs)
+
+	return matchingIDs
+}
+
+func sessionMatchesReportIdentity(session Session, report Report) bool {
+	if session.Harness != report.Harness {
+		return false
+	}
+	if report.SessionID != "" && session.SessionID == report.SessionID {
+		return true
+	}
+	if report.SessionPath != "" && session.SessionPath != "" &&
+		filepath.Clean(session.SessionPath) == filepath.Clean(report.SessionPath) {
+		return true
+	}
+	if report.Tmux.PaneID != "" && session.Tmux.PaneID == report.Tmux.PaneID {
+		return true
+	}
+	if report.PID > 0 && session.PID == report.PID {
+		return true
+	}
+
+	return false
+}
+
+func mergedExistingSessions(sessions map[string]Session, ids []string, canonicalID string) Session {
+	if len(ids) == 0 {
+		var empty Session
+
+		return empty
+	}
+
+	existing := make([]Session, 0, len(ids))
+	for _, id := range ids {
+		existing = append(existing, sessions[id])
+	}
+	sort.Slice(existing, func(i int, j int) bool {
+		if !existing[i].UpdatedAt.Equal(existing[j].UpdatedAt) {
+			return existing[i].UpdatedAt.Before(existing[j].UpdatedAt)
+		}
+		if !existing[i].CreatedAt.Equal(existing[j].CreatedAt) {
+			return existing[i].CreatedAt.Before(existing[j].CreatedAt)
+		}
+
+		return existing[i].ID < existing[j].ID
+	})
+
+	var merged Session
+	merged.ID = canonicalID
+	for _, session := range existing {
+		merged = mergeStoredSession(merged, session)
+	}
+	merged.ID = canonicalID
+
+	return merged
+}
+
+func mergeStoredSession(merged Session, session Session) Session {
+	merged = mergeStoredLifecycle(merged, session)
+	merged = mergeStoredIdentity(merged, session)
+	merged = mergeStoredLocation(merged, session)
+	merged = mergeStoredMetadata(merged, session)
+	merged.UpdatedAt = maxTime(merged.UpdatedAt, session.UpdatedAt)
+	merged.LastSeenAt = maxTime(merged.LastSeenAt, session.LastSeenAt)
+	merged.EndedAt = maxTime(merged.EndedAt, session.EndedAt)
+
+	return merged
+}
+
+func mergeStoredLifecycle(merged Session, session Session) Session {
+	if merged.CreatedAt.IsZero() || (!session.CreatedAt.IsZero() && session.CreatedAt.Before(merged.CreatedAt)) {
+		merged.CreatedAt = session.CreatedAt
+	}
+	if session.Harness != "" {
+		merged.Harness = session.Harness
+	}
+	if session.State != "" && !session.StateChangedAt.Before(merged.StateChangedAt) {
+		merged.State = session.State
+		merged.StateChangedAt = session.StateChangedAt
+	}
+	if session.LastEvent != "" && !session.LastEventAt.Before(merged.LastEventAt) {
+		merged.LastEvent = session.LastEvent
+		merged.LastEventAt = session.LastEventAt
+	}
+
+	return merged
+}
+
+func mergeStoredIdentity(merged Session, session Session) Session {
+	if session.SessionID != "" {
+		merged.SessionID = session.SessionID
+	}
+	if session.SessionPath != "" {
+		merged.SessionPath = session.SessionPath
+	}
+	if len(session.ResumeCommand) > 0 {
+		merged.ResumeCommand = slices.Clone(session.ResumeCommand)
+	}
+
+	return merged
+}
+
+func mergeStoredLocation(merged Session, session Session) Session {
+	if session.CWD != "" {
+		merged.CWD = session.CWD
+	}
+	if session.ProjectRoot != "" {
+		merged.ProjectRoot = session.ProjectRoot
+	}
+	if session.PID > 0 {
+		merged.PID = session.PID
+	}
+	if session.PPID > 0 {
+		merged.PPID = session.PPID
+	}
+	if session.TTY != "" {
+		merged.TTY = session.TTY
+	}
+	if !session.Tmux.Empty() {
+		merged.Tmux = session.Tmux
+	}
+
+	return merged
+}
+
+func mergeStoredMetadata(merged Session, session Session) Session {
+	if session.Source != "" {
+		merged.Source = session.Source
+	}
+	if session.Confidence != "" {
+		merged.Confidence = session.Confidence
+	}
+	if len(session.Attributes) > 0 {
+		merged.Attributes = mergeAttributes(merged.Attributes, session.Attributes)
+	}
+	if len(session.RawPayload) > 0 {
+		merged.RawPayload = append(json.RawMessage(nil), session.RawPayload...)
+	}
+
+	return merged
 }
 
 func (s *FileStore) List(ctx context.Context, filter Filter) ([]Session, error) {

@@ -184,6 +184,7 @@ type reportOptions struct {
 	source          string
 	confidence      string
 	event           string
+	observedAt      string
 	attributes      []string
 	rawStdin        bool
 	rawDefaultsOnly bool
@@ -249,6 +250,7 @@ func (app *application) newReportCommand() *cobra.Command {
 	cmd.Flags().StringVar(&options.source, "source", options.source, "report source label")
 	cmd.Flags().StringVar(&options.confidence, "confidence", options.confidence, "confidence label")
 	cmd.Flags().StringVar(&options.event, "event", options.event, "native harness event name")
+	cmd.Flags().StringVar(&options.observedAt, "observed-at", options.observedAt, "RFC3339 timestamp when the harness event was observed")
 	cmd.Flags().StringArrayVar(&options.attributes, "attribute", nil, "extra key=value attribute")
 	cmd.Flags().StringArrayVar(&options.resumeCommand, "resume-command", nil, "explicit resume command argv item, repeatable")
 	cmd.Flags().BoolVar(&options.rawStdin, "raw-stdin", false, "store stdin as raw hook payload")
@@ -373,6 +375,10 @@ func (app *application) runReport(ctx context.Context, stdin io.Reader, options 
 	if identityErr := requireReportIdentity(state, options); identityErr != nil {
 		return missingReportIdentityError(harness)
 	}
+	observedAt, err := parseObservedAt(options.observedAt)
+	if err != nil {
+		return err
+	}
 
 	source := options.source
 	if source == "" {
@@ -401,6 +407,7 @@ func (app *application) runReport(ctx context.Context, stdin io.Reader, options 
 		Event:         options.event,
 		Attributes:    attributes,
 		RawPayload:    rawPayload,
+		ObservedAt:    observedAt,
 	})
 
 	session, err := app.registryStore().Report(ctx, report)
@@ -408,14 +415,32 @@ func (app *application) runReport(ctx context.Context, stdin io.Reader, options 
 		return fmt.Errorf("reporting session: %w", err)
 	}
 
+	return app.writeReportResult(session, options.quiet)
+}
+
+func (app *application) writeReportResult(session registry.Session, quiet bool) error {
 	if app.outputJSON {
 		return app.writeJSON(session)
 	}
-	if options.quiet {
+	if quiet {
 		return nil
 	}
 
 	return app.writef("%s\t%s\t%s\n", session.ID, session.Harness, session.State)
+}
+
+func parseObservedAt(value string) (time.Time, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return time.Time{}, nil
+	}
+
+	observedAt, err := time.Parse(time.RFC3339Nano, value)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("parsing observed-at: %w", err)
+	}
+
+	return observedAt, nil
 }
 
 func normalizeReportHarnessAndState(options reportOptions) (registry.Harness, registry.State, error) {
@@ -920,28 +945,40 @@ func normalizeListSort(sortBy string) string {
 }
 
 func compareSessionTmux(left registry.Session, right registry.Session) int {
-	leftKey := []string{
-		left.Tmux.SessionName,
-		left.Tmux.WindowIndex,
-		left.Tmux.PaneIndex,
-		string(left.Harness),
-		left.ID,
+	if cmp := strings.Compare(left.Tmux.SessionName, right.Tmux.SessionName); cmp != 0 {
+		return cmp
 	}
-	rightKey := []string{
-		right.Tmux.SessionName,
-		right.Tmux.WindowIndex,
-		right.Tmux.PaneIndex,
-		string(right.Harness),
-		right.ID,
+	if cmp := compareNumericStrings(left.Tmux.WindowIndex, right.Tmux.WindowIndex); cmp != 0 {
+		return cmp
 	}
-
-	for index := range leftKey {
-		if cmp := strings.Compare(leftKey[index], rightKey[index]); cmp != 0 {
-			return cmp
-		}
+	if cmp := compareNumericStrings(left.Tmux.PaneIndex, right.Tmux.PaneIndex); cmp != 0 {
+		return cmp
+	}
+	if cmp := strings.Compare(string(left.Harness), string(right.Harness)); cmp != 0 {
+		return cmp
+	}
+	if cmp := strings.Compare(left.ID, right.ID); cmp != 0 {
+		return cmp
 	}
 
 	return compareTime(left.UpdatedAt, right.UpdatedAt)
+}
+
+func compareNumericStrings(left string, right string) int {
+	leftNumber, leftErr := strconv.Atoi(left)
+	rightNumber, rightErr := strconv.Atoi(right)
+	if leftErr == nil && rightErr == nil {
+		switch {
+		case leftNumber < rightNumber:
+			return -1
+		case leftNumber > rightNumber:
+			return 1
+		default:
+			return 0
+		}
+	}
+
+	return strings.Compare(left, right)
 }
 
 func compareSessionUpdated(left registry.Session, right registry.Session) int {

@@ -61,11 +61,12 @@ function addEvent(args: string[], value: unknown): void {
 }
 
 function report(state: string, ctx?: any, event?: any): void {
+  const observedAt = new Date().toISOString();
   if (ctx) {
     updateSessionRef(ctx);
   }
 
-  const args = ["report", "--harness", "pi", "--state", state, "--source", source];
+  const args = ["report", "--harness", "pi", "--state", state, "--source", source, "--observed-at", observedAt];
   addEvent(args, event?.type);
   if (currentSessionPath) {
     args.push("--session-path", currentSessionPath);

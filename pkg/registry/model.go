@@ -216,7 +216,7 @@ func mergeReport(existing Session, report Report, now time.Time) Session {
 	previousState := session.State
 	session.Harness = report.Harness
 
-	if report.State != "" && (report.State != StateUnknown || session.State == "" || session.State == StateUnknown) {
+	if shouldApplyReportState(session, report, now) {
 		session.State = report.State
 	}
 	session = mergeLifecycle(session, previousState, report, now)
@@ -224,8 +224,8 @@ func mergeReport(existing Session, report Report, now time.Time) Session {
 	session = mergeIdentity(session, report)
 	session = mergeLocation(session, report)
 	session = mergeMetadata(session, report)
-	session.UpdatedAt = now
-	session.LastSeenAt = now
+	session.UpdatedAt = maxTime(session.UpdatedAt, now)
+	session.LastSeenAt = maxTime(session.LastSeenAt, now)
 
 	return session
 }
@@ -242,6 +242,17 @@ func mergeBase(existing Session, report Report, now time.Time) Session {
 	return existing
 }
 
+func shouldApplyReportState(session Session, report Report, observedAt time.Time) bool {
+	if report.State == "" {
+		return false
+	}
+	if observedAt.Before(session.StateChangedAt) {
+		return false
+	}
+
+	return report.State != StateUnknown || session.State == "" || session.State == StateUnknown
+}
+
 func mergeLifecycle(session Session, previousState State, report Report, now time.Time) Session {
 	if session.StateChangedAt.IsZero() {
 		session.StateChangedAt = legacyStateChangedAt(session, now)
@@ -250,7 +261,7 @@ func mergeLifecycle(session Session, previousState State, report Report, now tim
 		session.StateChangedAt = now
 	}
 
-	if report.Event != "" {
+	if report.Event != "" && !now.Before(session.LastEventAt) {
 		session.LastEvent = report.Event
 		session.LastEventAt = now
 	}
@@ -368,28 +379,51 @@ func sortSessions(sessions []Session) {
 	sort.Slice(sessions, func(i int, j int) bool {
 		left := sessions[i]
 		right := sessions[j]
-		leftKey := []string{
-			left.Tmux.SessionName,
-			left.Tmux.WindowIndex,
-			left.Tmux.PaneIndex,
-			string(left.Harness),
-			left.ID,
-		}
-		rightKey := []string{
-			right.Tmux.SessionName,
-			right.Tmux.WindowIndex,
-			right.Tmux.PaneIndex,
-			string(right.Harness),
-			right.ID,
-		}
-		for index := range leftKey {
-			if leftKey[index] == rightKey[index] {
-				continue
-			}
 
-			return leftKey[index] < rightKey[index]
+		if left.Tmux.SessionName != right.Tmux.SessionName {
+			return left.Tmux.SessionName < right.Tmux.SessionName
+		}
+		if cmp := compareNumericStrings(left.Tmux.WindowIndex, right.Tmux.WindowIndex); cmp != 0 {
+			return cmp < 0
+		}
+		if cmp := compareNumericStrings(left.Tmux.PaneIndex, right.Tmux.PaneIndex); cmp != 0 {
+			return cmp < 0
+		}
+		if left.Harness != right.Harness {
+			return left.Harness < right.Harness
+		}
+		if left.ID != right.ID {
+			return left.ID < right.ID
 		}
 
 		return left.UpdatedAt.Before(right.UpdatedAt)
 	})
+}
+
+func compareNumericStrings(left string, right string) int {
+	leftNumber, leftErr := strconv.Atoi(left)
+	rightNumber, rightErr := strconv.Atoi(right)
+	if leftErr == nil && rightErr == nil {
+		switch {
+		case leftNumber < rightNumber:
+			return -1
+		case leftNumber > rightNumber:
+			return 1
+		default:
+			return 0
+		}
+	}
+
+	return strings.Compare(left, right)
+}
+
+func maxTime(values ...time.Time) time.Time {
+	var latest time.Time
+	for _, value := range values {
+		if value.After(latest) {
+			latest = value
+		}
+	}
+
+	return latest
 }
