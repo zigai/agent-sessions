@@ -82,7 +82,9 @@ func (s *FileStore) Report(ctx context.Context, report Report) (Session, error) 
 
 		saved = mergeReportSession(snap, report, now)
 		snap.Sessions[saved.ID] = saved
-		snap.UpdatedAt = maxTime(snap.UpdatedAt, saved.UpdatedAt, now)
+		reconciledAt := reconcilePaneOccupants(snap.Sessions, saved.ID, report, now)
+		saved = snap.Sessions[saved.ID]
+		snap.UpdatedAt = maxTime(snap.UpdatedAt, saved.UpdatedAt, reconciledAt, now)
 
 		return nil
 	})
@@ -104,6 +106,98 @@ func mergeReportSession(snap *snapshot, report Report, now time.Time) Session {
 	}
 
 	return saved
+}
+
+// reconcilePaneOccupants enforces that one tmux pane has at most one live
+// harness occupant. A later live report in the same pane means older live
+// records in that pane are stale even if their harness did not emit an exit
+// event.
+func reconcilePaneOccupants(
+	sessions map[string]Session,
+	currentID string,
+	report Report,
+	observedAt time.Time,
+) time.Time {
+	if !reportOccupiesTmuxPane(report) {
+		return time.Time{}
+	}
+
+	winnerID, winnerTime := currentPaneOccupant(sessions, currentID, report.Tmux.PaneID)
+	if winnerID == "" {
+		return time.Time{}
+	}
+	if winnerTime.IsZero() {
+		winnerTime = observedAt
+	}
+
+	var latest time.Time
+	for id, session := range sessions {
+		if id == winnerID || session.State == StateExited || session.Tmux.PaneID != report.Tmux.PaneID {
+			continue
+		}
+
+		session.State = StateExited
+		session.StateChangedAt = winnerTime
+		session.EndedAt = winnerTime
+		session.UpdatedAt = maxTime(session.UpdatedAt, winnerTime)
+		session.LastSeenAt = maxTime(session.LastSeenAt, winnerTime)
+		sessions[id] = session
+		latest = maxTime(latest, session.UpdatedAt)
+	}
+
+	return latest
+}
+
+func reportOccupiesTmuxPane(report Report) bool {
+	return report.State != "" && report.State != StateExited && report.Tmux.PaneID != ""
+}
+
+func currentPaneOccupant(sessions map[string]Session, currentID string, paneID string) (string, time.Time) {
+	var winnerID string
+	var winnerTime time.Time
+	for id, session := range sessions {
+		if session.State == StateExited || session.Tmux.PaneID != paneID {
+			continue
+		}
+
+		observedAt := paneOccupantObservedAt(session)
+		if paneOccupantWins(id, observedAt, currentID, winnerID, winnerTime) {
+			winnerID = id
+			winnerTime = observedAt
+		}
+	}
+
+	return winnerID, winnerTime
+}
+
+func paneOccupantWins(
+	candidateID string,
+	candidateTime time.Time,
+	currentID string,
+	winnerID string,
+	winnerTime time.Time,
+) bool {
+	if winnerID == "" {
+		return true
+	}
+	if candidateTime.After(winnerTime) {
+		return true
+	}
+	if candidateTime.Before(winnerTime) {
+		return false
+	}
+	if candidateID == currentID && winnerID != currentID {
+		return true
+	}
+	if winnerID == currentID {
+		return false
+	}
+
+	return candidateID > winnerID
+}
+
+func paneOccupantObservedAt(session Session) time.Time {
+	return maxTime(session.LastSeenAt, session.UpdatedAt, session.StateChangedAt, session.CreatedAt)
 }
 
 func matchingSessionIDs(sessions map[string]Session, report Report, canonicalID string) []string {

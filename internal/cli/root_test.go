@@ -1096,9 +1096,9 @@ func reportStopAllTestSessions(t *testing.T, store *registry.FileStore) {
 	}); err != nil {
 		t.Fatalf("reporting tmux session: %v", err)
 	}
+	// State-less reports emulate legacy duplicate pane records for stop-all deduplication.
 	if _, err := store.Report(ctx, registry.Report{
 		Harness:   registry.HarnessClaude,
-		State:     registry.StateWaiting,
 		SessionID: "duplicate-tmux",
 		Tmux: registry.TmuxContext{
 			Inside: true,

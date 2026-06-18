@@ -547,6 +547,72 @@ func TestReportMergesSeparateIdentityRecords(t *testing.T) {
 	}
 }
 
+func TestReportSupersedesOtherHarnessInSameTmuxPane(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	base := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
+	store := NewFileStore(filepath.Join(t.TempDir(), "state.json"))
+	store.SetNowForTest(func() time.Time { return base })
+
+	grokReport := testReport(HarnessGrok, StateIdle)
+	grokReport.SessionID = "grok-session"
+	grokReport.Tmux = testSeshTmuxPane()
+	grok, err := store.Report(ctx, grokReport)
+	requireNoStoreError(t, err, "grok Report returned error")
+
+	piObservedAt := base.Add(time.Minute)
+	store.SetNowForTest(func() time.Time { return piObservedAt })
+	piReport := testReport(HarnessPi, StateIdle)
+	piReport.SessionPath = "/tmp/pi-session.jsonl"
+	piReport.Tmux = testSeshTmuxPane()
+	piSession, err := store.Report(ctx, piReport)
+	requireNoStoreError(t, err, "pi Report returned error")
+	if piSession.State != StateIdle {
+		t.Fatalf("expected current pane occupant to remain idle, got %q", piSession.State)
+	}
+
+	storedGrok, err := store.Get(ctx, grok.ID)
+	requireNoStoreError(t, err, "Get grok returned error")
+	assertSupersededPaneSession(t, storedGrok, piObservedAt)
+	assertSeshPaneSummary(t, store, ctx)
+}
+
+func TestStalePaneReportDoesNotSupersedeNewerOccupant(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	base := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
+	store := NewFileStore(filepath.Join(t.TempDir(), "state.json"))
+
+	piObservedAt := base.Add(time.Minute)
+	store.SetNowForTest(func() time.Time { return piObservedAt })
+	piReport := testReport(HarnessPi, StateIdle)
+	piReport.SessionPath = "/tmp/pi-session.jsonl"
+	piReport.Tmux = testSeshTmuxPane()
+	piSession, err := store.Report(ctx, piReport)
+	requireNoStoreError(t, err, "pi Report returned error")
+
+	staleGrokReport := testReport(HarnessGrok, StateIdle)
+	staleGrokReport.SessionID = "grok-session"
+	staleGrokReport.Tmux = testSeshTmuxPane()
+	staleGrokReport.ObservedAt = base
+	staleGrok, err := store.Report(ctx, staleGrokReport)
+	requireNoStoreError(t, err, "stale grok Report returned error")
+	if staleGrok.State != StateExited {
+		t.Fatalf("expected stale incoming pane occupant to be exited, got %q", staleGrok.State)
+	}
+
+	storedPi, err := store.Get(ctx, piSession.ID)
+	requireNoStoreError(t, err, "Get pi returned error")
+	if storedPi.State != StateIdle {
+		t.Fatalf("newer pane occupant should remain idle, got %q", storedPi.State)
+	}
+	if !staleGrok.EndedAt.Equal(piObservedAt) {
+		t.Fatalf("expected stale report to end at newer occupant time %s, got %s", piObservedAt, staleGrok.EndedAt)
+	}
+}
+
 func TestReportObservedAtPreventsStaleStateRegression(t *testing.T) {
 	t.Parallel()
 
@@ -605,6 +671,63 @@ func TestSortSessionsUsesNumericTmuxIndexes(t *testing.T) {
 	want := []string{"w2", "p2", "p10", "w10"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("expected numeric tmux order %#v, got %#v", want, got)
+	}
+}
+
+func requireNoStoreError(t *testing.T, err error, message string) {
+	t.Helper()
+	if err != nil {
+		t.Fatalf("%s: %v", message, err)
+	}
+}
+
+func assertSupersededPaneSession(t *testing.T, session Session, endedAt time.Time) {
+	t.Helper()
+	if session.State != StateExited {
+		t.Fatalf("expected old pane occupant to be exited, got %q", session.State)
+	}
+	if !session.StateChangedAt.Equal(endedAt) || !session.EndedAt.Equal(endedAt) || !session.LastSeenAt.Equal(endedAt) {
+		t.Fatalf(
+			"expected old pane occupant to end at %s, got state_changed_at=%s ended_at=%s last_seen_at=%s",
+			endedAt,
+			session.StateChangedAt,
+			session.EndedAt,
+			session.LastSeenAt,
+		)
+	}
+}
+
+func assertSeshPaneSummary(t *testing.T, store *FileStore, ctx context.Context) {
+	t.Helper()
+	summaries, err := store.SummaryByTmuxSession(ctx, Filter{
+		Harness:     "",
+		State:       "",
+		TmuxSession: "sesh",
+		ActiveOnly:  false,
+	})
+	requireNoStoreError(t, err, "SummaryByTmuxSession returned error")
+	if len(summaries) != 1 {
+		t.Fatalf("expected one summary, got %#v", summaries)
+	}
+	if summaries[0].Idle != 1 || summaries[0].Exited != 1 {
+		t.Fatalf("expected one open idle occupant and one exited stale occupant, got %#v", summaries[0])
+	}
+}
+
+func testSeshTmuxPane() TmuxContext {
+	return TmuxContext{
+		Inside:          true,
+		SessionID:       "$1",
+		SessionName:     "sesh",
+		WindowID:        "@1",
+		WindowIndex:     "1",
+		WindowName:      "zsh",
+		PaneID:          "%21",
+		PaneIndex:       "1",
+		PaneCurrentPath: "/repo",
+		PanePID:         1234,
+		PaneTTY:         "/dev/pts/1",
+		ClientTTY:       "/dev/pts/0",
 	}
 }
 
