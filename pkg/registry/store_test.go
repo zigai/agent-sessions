@@ -266,6 +266,107 @@ func TestFileStoreEndedAtFollowsExitedState(t *testing.T) {
 	}
 }
 
+func TestReportIdentityIgnoresTmuxWindowName(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	now := time.Date(2026, 6, 17, 10, 0, 0, 0, time.UTC)
+	store := NewFileStore(filepath.Join(t.TempDir(), "state.json"))
+	store.SetNowForTest(func() time.Time { return now })
+
+	first, err := store.Report(ctx, Report{
+		Harness:       HarnessCodex,
+		State:         StateRunning,
+		SessionID:     "",
+		SessionPath:   "",
+		ResumeCommand: nil,
+		CWD:           "",
+		ProjectRoot:   "",
+		PID:           0,
+		PPID:          0,
+		TTY:           "",
+		Tmux: TmuxContext{
+			Inside:          true,
+			SessionID:       "$1",
+			SessionName:     "work",
+			WindowID:        "@2",
+			WindowIndex:     "1",
+			WindowName:      "codex",
+			PaneID:          "%3",
+			PaneIndex:       "0",
+			PaneCurrentPath: "",
+			PanePID:         0,
+			PaneTTY:         "",
+			ClientTTY:       "",
+		},
+		Source:     "",
+		Confidence: "",
+		Event:      "",
+		Attributes: nil,
+		RawPayload: nil,
+		ObservedAt: time.Time{},
+	})
+	if err != nil {
+		t.Fatalf("first Report returned error: %v", err)
+	}
+
+	store.SetNowForTest(func() time.Time { return now.Add(time.Minute) })
+	second, err := store.Report(ctx, Report{
+		Harness:       HarnessCodex,
+		State:         StateWaiting,
+		SessionID:     "",
+		SessionPath:   "",
+		ResumeCommand: nil,
+		CWD:           "",
+		ProjectRoot:   "",
+		PID:           0,
+		PPID:          0,
+		TTY:           "",
+		Tmux: TmuxContext{
+			Inside:          true,
+			SessionID:       "$1",
+			SessionName:     "work",
+			WindowID:        "@2",
+			WindowIndex:     "1",
+			WindowName:      "claude",
+			PaneID:          "%3",
+			PaneIndex:       "0",
+			PaneCurrentPath: "",
+			PanePID:         0,
+			PaneTTY:         "",
+			ClientTTY:       "",
+		},
+		Source:     "",
+		Confidence: "",
+		Event:      "",
+		Attributes: nil,
+		RawPayload: nil,
+		ObservedAt: time.Time{},
+	})
+	if err != nil {
+		t.Fatalf("second Report returned error: %v", err)
+	}
+	if second.ID != first.ID {
+		t.Fatalf("window name change should not change session id: first=%q second=%q", first.ID, second.ID)
+	}
+
+	sessions, err := store.List(ctx, Filter{
+		Harness:     "",
+		State:       "",
+		TmuxSession: "",
+		ActiveOnly:  false,
+	})
+	if err != nil {
+		t.Fatalf("List returned error: %v", err)
+	}
+	if len(sessions) != 1 {
+		t.Fatalf("expected one session after window rename, got %#v", sessions)
+	}
+	if sessions[0].Harness != HarnessCodex {
+		t.Fatalf("window name should not affect harness, got %q", sessions[0].Harness)
+	}
+}
+
 func emptyTmuxContext() TmuxContext {
 	return TmuxContext{
 		Inside:          false,
