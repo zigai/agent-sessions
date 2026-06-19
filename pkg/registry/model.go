@@ -47,6 +47,7 @@ const (
 
 type TmuxContext struct {
 	Inside          bool   `json:"inside"`
+	ServerSocket    string `json:"server_socket,omitempty"`
 	SessionID       string `json:"session_id,omitempty"`
 	SessionName     string `json:"session_name,omitempty"`
 	WindowID        string `json:"window_id,omitempty"`
@@ -61,64 +62,58 @@ type TmuxContext struct {
 }
 
 func (c TmuxContext) Empty() bool {
-	return !c.Inside &&
-		c.SessionID == "" &&
-		c.SessionName == "" &&
-		c.WindowID == "" &&
-		c.WindowIndex == "" &&
-		c.WindowName == "" &&
-		c.PaneID == "" &&
-		c.PaneIndex == "" &&
-		c.PaneCurrentPath == "" &&
-		c.PanePID == 0 &&
-		c.PaneTTY == "" &&
-		c.ClientTTY == ""
+	var empty TmuxContext
+
+	return c == empty
 }
 
 type Session struct {
-	ID             string            `json:"id"`
-	Harness        Harness           `json:"harness"`
-	State          State             `json:"state"`
-	SessionID      string            `json:"session_id,omitempty"`
-	SessionPath    string            `json:"session_path,omitempty"`
-	ResumeCommand  []string          `json:"resume_command,omitempty"`
-	CWD            string            `json:"cwd,omitempty"`
-	ProjectRoot    string            `json:"project_root,omitempty"`
-	PID            int               `json:"pid,omitempty"`
-	PPID           int               `json:"ppid,omitempty"`
-	TTY            string            `json:"tty,omitempty"`
-	Tmux           TmuxContext       `json:"tmux,omitzero"`
-	Source         string            `json:"source,omitempty"`
-	Confidence     string            `json:"confidence,omitempty"`
-	LastEvent      string            `json:"last_event,omitempty"`
-	Attributes     map[string]string `json:"attributes,omitempty"`
-	RawPayload     json.RawMessage   `json:"raw_payload,omitempty"`
-	CreatedAt      time.Time         `json:"created_at"`
-	UpdatedAt      time.Time         `json:"updated_at"`
-	LastSeenAt     time.Time         `json:"last_seen_at"`
-	StateChangedAt time.Time         `json:"state_changed_at,omitzero"`
-	LastEventAt    time.Time         `json:"last_event_at,omitzero"`
-	EndedAt        time.Time         `json:"ended_at,omitzero"`
+	ID               string            `json:"id"`
+	Harness          Harness           `json:"harness"`
+	State            State             `json:"state"`
+	SessionID        string            `json:"session_id,omitempty"`
+	SessionPath      string            `json:"session_path,omitempty"`
+	ResumeCommand    []string          `json:"resume_command,omitempty"`
+	CWD              string            `json:"cwd,omitempty"`
+	ProjectRoot      string            `json:"project_root,omitempty"`
+	PID              int               `json:"pid,omitempty"`
+	ProcessStartTime string            `json:"process_start_time,omitempty"`
+	PPID             int               `json:"ppid,omitempty"`
+	TTY              string            `json:"tty,omitempty"`
+	Tmux             TmuxContext       `json:"tmux,omitzero"`
+	Source           string            `json:"source,omitempty"`
+	Confidence       string            `json:"confidence,omitempty"`
+	LastEvent        string            `json:"last_event,omitempty"`
+	Attributes       map[string]string `json:"attributes,omitempty"`
+	RawPayload       json.RawMessage   `json:"raw_payload,omitempty"`
+	CreatedAt        time.Time         `json:"created_at"`
+	UpdatedAt        time.Time         `json:"updated_at"`
+	LastSeenAt       time.Time         `json:"last_seen_at"`
+	LastObservedAt   time.Time         `json:"last_observed_at,omitzero"`
+	StateChangedAt   time.Time         `json:"state_changed_at,omitzero"`
+	LastEventAt      time.Time         `json:"last_event_at,omitzero"`
+	EndedAt          time.Time         `json:"ended_at,omitzero"`
 }
 
 type Report struct {
-	Harness       Harness
-	State         State
-	SessionID     string
-	SessionPath   string
-	ResumeCommand []string
-	CWD           string
-	ProjectRoot   string
-	PID           int
-	PPID          int
-	TTY           string
-	Tmux          TmuxContext
-	Source        string
-	Confidence    string
-	Event         string
-	Attributes    map[string]string
-	RawPayload    json.RawMessage
-	ObservedAt    time.Time
+	Harness          Harness
+	State            State
+	SessionID        string
+	SessionPath      string
+	ResumeCommand    []string
+	CWD              string
+	ProjectRoot      string
+	PID              int
+	ProcessStartTime string
+	PPID             int
+	TTY              string
+	Tmux             TmuxContext
+	Source           string
+	Confidence       string
+	Event            string
+	Attributes       map[string]string
+	RawPayload       json.RawMessage
+	ObservedAt       time.Time
 }
 
 type Filter struct {
@@ -201,7 +196,8 @@ func sessionIDForReport(report Report) string {
 	case report.SessionPath != "":
 		parts = append(parts, "path", filepath.Clean(report.SessionPath))
 	case report.Tmux.PaneID != "":
-		parts = append(parts, "tmux-pane", report.Tmux.PaneID)
+		parts = append(parts, "tmux-pane")
+		parts = append(parts, tmuxPaneIdentityParts(report.Tmux)...)
 	case report.PID > 0:
 		parts = append(parts, "pid", strconv.Itoa(report.PID))
 	default:
@@ -212,42 +208,66 @@ func sessionIDForReport(report Report) string {
 	return string(report.Harness) + "-" + hex.EncodeToString(sum[:8])
 }
 
-func mergeReport(existing Session, report Report, now time.Time) Session {
-	session := mergeBase(existing, report, now)
+func mergeReport(existing Session, report Report, observedAt time.Time, receivedAt time.Time, observedAtReliable bool) Session {
+	session := mergeBase(existing, report, receivedAt)
 	previousState := session.State
 	session.Harness = report.Harness
+	applyMutation := shouldApplyReportMutation(session, observedAt, observedAtReliable)
 
-	if shouldApplyReportState(session, report, now) {
+	if shouldApplyReportState(session, report, applyMutation) {
 		session.State = report.State
 	}
-	session = mergeLifecycle(session, previousState, report, now)
-
-	session = mergeIdentity(session, report)
-	session = mergeLocation(session, report)
-	session = mergeMetadata(session, report)
-	session.UpdatedAt = maxTime(session.UpdatedAt, now)
-	session.LastSeenAt = maxTime(session.LastSeenAt, now)
+	if applyMutation {
+		session = mergeLifecycle(session, previousState, report, observedAt)
+		session = mergeIdentity(session, report)
+		session = mergeLocation(session, report)
+		session = mergeMetadata(session, report)
+		if observedAtReliable {
+			session.LastObservedAt = maxTime(session.LastObservedAt, observedAt)
+		}
+	}
+	session.UpdatedAt = maxTime(session.UpdatedAt, receivedAt)
+	session.LastSeenAt = maxTime(session.LastSeenAt, receivedAt)
 
 	return session
 }
 
-func mergeBase(existing Session, report Report, now time.Time) Session {
+func mergeBase(existing Session, report Report, receivedAt time.Time) Session {
 	if existing.ID != "" {
 		return existing
 	}
 
 	existing.ID = sessionIDForReport(report)
-	existing.CreatedAt = now
+	existing.CreatedAt = receivedAt
 	existing.State = StateUnknown
 
 	return existing
 }
 
-func shouldApplyReportState(session Session, report Report, observedAt time.Time) bool {
-	if report.State == "" {
+func shouldApplyReportMutation(session Session, observedAt time.Time, observedAtReliable bool) bool {
+	if !observedAtReliable {
 		return false
 	}
-	if observedAt.Before(session.StateChangedAt) {
+
+	lastObservedAt := session.LastObservedAt
+	if lastObservedAt.IsZero() && session.ID == "" {
+		return true
+	}
+	if lastObservedAt.IsZero() {
+		lastObservedAt = legacyLastObservedAt(session)
+	}
+	if lastObservedAt.IsZero() {
+		return true
+	}
+
+	return !observedAt.Before(lastObservedAt)
+}
+
+func shouldApplyReportState(session Session, report Report, applyMutation bool) bool {
+	if !applyMutation {
+		return false
+	}
+	if report.State == "" {
 		return false
 	}
 
@@ -289,6 +309,10 @@ func legacyStateChangedAt(session Session, now time.Time) time.Time {
 	}
 }
 
+func legacyLastObservedAt(session Session) time.Time {
+	return maxTime(session.LastEventAt, session.StateChangedAt)
+}
+
 func mergeIdentity(session Session, report Report) Session {
 	if report.SessionID != "" {
 		session.SessionID = report.SessionID
@@ -312,6 +336,9 @@ func mergeLocation(session Session, report Report) Session {
 	}
 	if report.PID > 0 {
 		session.PID = report.PID
+	}
+	if report.ProcessStartTime != "" {
+		session.ProcessStartTime = report.ProcessStartTime
 	}
 	if report.PPID > 0 {
 		session.PPID = report.PPID

@@ -9,12 +9,14 @@ import (
 	"path/filepath"
 	"slices"
 	"sort"
+	"strings"
 	"time"
 )
 
 const (
 	storeVersion                    = 1
 	minimumPaneReconcileSessionSize = 2
+	maxObservedAtFutureSkew         = 5 * time.Minute
 )
 
 var (
@@ -73,7 +75,9 @@ func (s *FileStore) Report(ctx context.Context, report Report) (Session, error) 
 		return Session{}, fmt.Errorf("checking context: %w", err)
 	}
 
-	now := observedAtOrNow(report.ObservedAt, s.now)
+	report = enrichReportProcessIdentity(report)
+	receivedAt := s.now().UTC()
+	observedAt, observedAtReliable := observedAtOrReceivedAt(report.ObservedAt, receivedAt)
 	var saved Session
 	err := s.withSnapshot(func(snap *snapshot) error {
 		if report.Harness == "" {
@@ -83,11 +87,11 @@ func (s *FileStore) Report(ctx context.Context, report Report) (Session, error) 
 			return ErrReportIdentityRequired
 		}
 
-		saved = mergeReportSession(snap, report, now)
+		saved = mergeReportSession(snap, report, observedAt, receivedAt, observedAtReliable)
 		snap.Sessions[saved.ID] = saved
-		reconciledAt := reconcilePaneOccupants(snap.Sessions, saved.ID, report, now)
+		reconciledAt := reconcilePaneOccupants(snap.Sessions, saved.ID, report, observedAt)
 		saved = snap.Sessions[saved.ID]
-		snap.UpdatedAt = maxTime(snap.UpdatedAt, saved.UpdatedAt, reconciledAt, now)
+		snap.UpdatedAt = maxTime(snap.UpdatedAt, saved.UpdatedAt, reconciledAt, receivedAt)
 
 		return nil
 	})
@@ -98,17 +102,46 @@ func (s *FileStore) Report(ctx context.Context, report Report) (Session, error) 
 	return saved, nil
 }
 
-func mergeReportSession(snap *snapshot, report Report, now time.Time) Session {
-	canonicalID := sessionIDForReport(report)
-	matchingIDs := matchingSessionIDs(snap.Sessions, report, canonicalID)
+func mergeReportSession(
+	snap *snapshot,
+	report Report,
+	observedAt time.Time,
+	receivedAt time.Time,
+	observedAtReliable bool,
+) Session {
+	reportID := sessionIDForReport(report)
+	matchingIDs := matchingSessionIDs(snap.Sessions, report, reportID)
+	canonicalID := canonicalIDForReportMerge(snap.Sessions, matchingIDs, report, reportID)
 	base := mergedExistingSessions(snap.Sessions, matchingIDs, canonicalID)
-	saved := mergeReport(base, report, now)
+	saved := mergeReport(base, report, observedAt, receivedAt, observedAtReliable)
 
 	for _, id := range matchingIDs {
 		delete(snap.Sessions, id)
 	}
 
 	return saved
+}
+
+func canonicalIDForReportMerge(
+	sessions map[string]Session,
+	matchingIDs []string,
+	report Report,
+	reportID string,
+) string {
+	if reportHasStrongIdentity(report) {
+		return reportID
+	}
+
+	for _, id := range matchingIDs {
+		if sessionHasStrongIdentity(sessions[id]) {
+			return id
+		}
+	}
+	if len(matchingIDs) == 1 {
+		return matchingIDs[0]
+	}
+
+	return reportID
 }
 
 // reconcilePaneOccupants enforces that one tmux pane has at most one live
@@ -125,7 +158,7 @@ func reconcilePaneOccupants(
 		return time.Time{}
 	}
 
-	winnerID, winnerTime := currentPaneOccupant(sessions, currentID, report.Tmux.PaneID)
+	winnerID, winnerTime := currentPaneOccupant(sessions, currentID, report.Tmux)
 	if winnerID == "" {
 		return time.Time{}
 	}
@@ -135,7 +168,7 @@ func reconcilePaneOccupants(
 
 	var latest time.Time
 	for id, session := range sessions {
-		if id == winnerID || session.State == StateExited || session.Tmux.PaneID != report.Tmux.PaneID {
+		if id == winnerID || session.State == StateExited || !sameTmuxPane(session.Tmux, report.Tmux) {
 			continue
 		}
 
@@ -155,11 +188,11 @@ func reportOccupiesTmuxPane(report Report) bool {
 	return report.State != "" && report.State != StateExited && report.Tmux.PaneID != ""
 }
 
-func currentPaneOccupant(sessions map[string]Session, currentID string, paneID string) (string, time.Time) {
+func currentPaneOccupant(sessions map[string]Session, currentID string, tmux TmuxContext) (string, time.Time) {
 	var winnerID string
 	var winnerTime time.Time
 	for id, session := range sessions {
-		if session.State == StateExited || session.Tmux.PaneID != paneID {
+		if session.State == StateExited || !sameTmuxPane(session.Tmux, tmux) {
 			continue
 		}
 
@@ -200,7 +233,15 @@ func paneOccupantWins(
 }
 
 func paneOccupantObservedAt(session Session) time.Time {
-	return maxTime(session.LastSeenAt, session.UpdatedAt, session.StateChangedAt, session.CreatedAt)
+	observedAt := session.LastObservedAt
+	if observedAt.IsZero() {
+		observedAt = legacyLastObservedAt(session)
+	}
+	if observedAt.IsZero() {
+		return maxTime(session.UpdatedAt, session.LastSeenAt, session.CreatedAt)
+	}
+
+	return observedAt
 }
 
 func matchingSessionIDs(sessions map[string]Session, report Report, canonicalID string) []string {
@@ -211,22 +252,49 @@ func matchingSessionIDs(sessions map[string]Session, report Report, canonicalID 
 		}
 	}
 	sort.Strings(matchingIDs)
+	if !reportHasStrongIdentity(report) && len(matchingIDs) > 1 {
+		return []string{bestWeakIdentityMatch(sessions, matchingIDs)}
+	}
 
 	return matchingIDs
 }
 
+func bestWeakIdentityMatch(sessions map[string]Session, ids []string) string {
+	winnerID := ids[0]
+	for _, id := range ids[1:] {
+		if weakIdentityMatchWins(sessions[id], sessions[winnerID]) {
+			winnerID = id
+		}
+	}
+
+	return winnerID
+}
+
+func weakIdentityMatchWins(candidate Session, winner Session) bool {
+	if sessionHasStrongIdentity(candidate) != sessionHasStrongIdentity(winner) {
+		return sessionHasStrongIdentity(candidate)
+	}
+	if candidateAt, winnerAt := paneOccupantObservedAt(candidate), paneOccupantObservedAt(winner); !candidateAt.Equal(winnerAt) {
+		return candidateAt.After(winnerAt)
+	}
+	if !candidate.UpdatedAt.Equal(winner.UpdatedAt) {
+		return candidate.UpdatedAt.After(winner.UpdatedAt)
+	}
+
+	return candidate.ID > winner.ID
+}
+
 func sessionMatchesReportIdentity(session Session, report Report) bool {
-	if session.Harness != report.Harness {
+	if session.Harness != report.Harness || strongIdentityConflicts(session, report) {
 		return false
 	}
-	if report.SessionID != "" && session.SessionID == report.SessionID {
+	if reportMatchesStrongSessionIdentity(session, report) {
 		return true
 	}
-	if report.SessionPath != "" && session.SessionPath != "" &&
-		filepath.Clean(session.SessionPath) == filepath.Clean(report.SessionPath) {
-		return true
+	if bothHaveStrongIdentity(session, report) {
+		return false
 	}
-	if report.Tmux.PaneID != "" && session.Tmux.PaneID == report.Tmux.PaneID {
+	if sameTmuxPane(session.Tmux, report.Tmux) {
 		return true
 	}
 	if report.PID > 0 && session.PID == report.PID {
@@ -234,6 +302,67 @@ func sessionMatchesReportIdentity(session Session, report Report) bool {
 	}
 
 	return false
+}
+
+func reportMatchesStrongSessionIdentity(session Session, report Report) bool {
+	if report.SessionID != "" && session.SessionID == report.SessionID {
+		return true
+	}
+
+	return report.SessionPath != "" && session.SessionPath != "" && sameSessionPath(session.SessionPath, report.SessionPath)
+}
+
+func bothHaveStrongIdentity(session Session, report Report) bool {
+	return reportHasStrongIdentity(report) && sessionHasStrongIdentity(session)
+}
+
+func strongIdentityConflicts(session Session, report Report) bool {
+	if report.SessionID != "" && session.SessionID != "" && session.SessionID != report.SessionID {
+		return true
+	}
+	if report.SessionPath != "" && session.SessionPath != "" && !sameSessionPath(session.SessionPath, report.SessionPath) {
+		return true
+	}
+
+	return false
+}
+
+func reportHasStrongIdentity(report Report) bool {
+	return report.SessionID != "" || report.SessionPath != ""
+}
+
+func sessionHasStrongIdentity(session Session) bool {
+	return session.SessionID != "" || session.SessionPath != ""
+}
+
+func sameSessionPath(left string, right string) bool {
+	return filepath.Clean(left) == filepath.Clean(right)
+}
+
+func sameTmuxPane(left TmuxContext, right TmuxContext) bool {
+	if left.PaneID == "" || right.PaneID == "" || left.PaneID != right.PaneID {
+		return false
+	}
+	if left.ServerSocket != "" && right.ServerSocket != "" && left.ServerSocket != right.ServerSocket {
+		return false
+	}
+
+	return true
+}
+
+func tmuxPaneIdentityParts(tmux TmuxContext) []string {
+	var parts []string
+	switch {
+	case tmux.ServerSocket != "":
+		parts = append(parts, "socket", filepath.Clean(tmux.ServerSocket))
+	case tmux.SessionID != "":
+		parts = append(parts, "session-id", tmux.SessionID)
+	case tmux.SessionName != "":
+		parts = append(parts, "session-name", tmux.SessionName)
+	}
+	parts = append(parts, "pane", tmux.PaneID)
+
+	return parts
 }
 
 func mergedExistingSessions(sessions map[string]Session, ids []string, canonicalID string) Session {
@@ -275,6 +404,7 @@ func mergeStoredSession(merged Session, session Session) Session {
 	merged = mergeStoredMetadata(merged, session)
 	merged.UpdatedAt = maxTime(merged.UpdatedAt, session.UpdatedAt)
 	merged.LastSeenAt = maxTime(merged.LastSeenAt, session.LastSeenAt)
+	merged.LastObservedAt = maxTime(merged.LastObservedAt, session.LastObservedAt)
 	merged.EndedAt = maxTime(merged.EndedAt, session.EndedAt)
 
 	return merged
@@ -322,6 +452,9 @@ func mergeStoredLocation(merged Session, session Session) Session {
 	}
 	if session.PID > 0 {
 		merged.PID = session.PID
+	}
+	if session.ProcessStartTime != "" {
+		merged.ProcessStartTime = session.ProcessStartTime
 	}
 	if session.PPID > 0 {
 		merged.PPID = session.PPID
@@ -399,6 +532,8 @@ func (s *FileStore) SummaryByTmuxSessionWithOptions(ctx context.Context, options
 	if err != nil {
 		return nil, err
 	}
+
+	sessions = sessionsWithReconciledPaneOccupants(sessions)
 
 	return summariesForSessions(filterSessions(sessions, options.Filter)), nil
 }
@@ -618,12 +753,17 @@ func writeSnapshotAtomic(path string, snap snapshot) error {
 	return syncDir(dir)
 }
 
-func observedAtOrNow(observedAt time.Time, now func() time.Time) time.Time {
+func observedAtOrReceivedAt(observedAt time.Time, receivedAt time.Time) (time.Time, bool) {
 	if observedAt.IsZero() {
-		return now().UTC()
+		return receivedAt, true
 	}
 
-	return observedAt.UTC()
+	observedAt = observedAt.UTC()
+	if observedAt.After(receivedAt.Add(maxObservedAtFutureSkew)) {
+		return receivedAt, false
+	}
+
+	return observedAt, true
 }
 
 func sessionsWithReconciledPaneOccupants(sessions []Session) []Session {
@@ -638,7 +778,7 @@ func sessionsWithReconciledPaneOccupants(sessions []Session) []Session {
 			continue
 		}
 
-		paneID := session.Tmux.PaneID
+		paneID := tmuxPaneReconcileKey(session.Tmux)
 		observedAt := paneOccupantObservedAt(session)
 		if paneOccupantWins(session.ID, observedAt, "", winnerByPane[paneID], winnerTimeByPane[paneID]) {
 			winnerByPane[paneID] = session.ID
@@ -654,7 +794,7 @@ func sessionsWithReconciledPaneOccupants(sessions []Session) []Session {
 		if !sessionOccupiesTmuxPane(session) {
 			continue
 		}
-		if winnerByPane[session.Tmux.PaneID] == session.ID {
+		if winnerByPane[tmuxPaneReconcileKey(session.Tmux)] == session.ID {
 			continue
 		}
 
@@ -667,6 +807,40 @@ func sessionsWithReconciledPaneOccupants(sessions []Session) []Session {
 
 func sessionOccupiesTmuxPane(session Session) bool {
 	return session.State != StateExited && session.Tmux.PaneID != ""
+}
+
+func tmuxPaneReconcileKey(tmux TmuxContext) string {
+	return strings.Join(tmuxPaneIdentityParts(tmux), "\x00")
+}
+
+func enrichReportProcessIdentity(report Report) Report {
+	if report.PID <= 0 || report.ProcessStartTime != "" {
+		return report
+	}
+
+	report.ProcessStartTime = processStartTimeForPID(report.PID)
+
+	return report
+}
+
+func processStartTimeForPID(pid int) string {
+	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+	if err != nil {
+		return ""
+	}
+
+	stat := string(data)
+	closeParen := strings.LastIndexByte(stat, ')')
+	if closeParen < 0 || closeParen+2 >= len(stat) {
+		return ""
+	}
+	fields := strings.Fields(stat[closeParen+2:])
+	const startTimeFieldIndexAfterComm = 19
+	if len(fields) <= startTimeFieldIndexAfterComm {
+		return ""
+	}
+
+	return fields[startTimeFieldIndexAfterComm]
 }
 
 func summaryKeyForSession(session Session) string {
