@@ -12,7 +12,10 @@ import (
 	"time"
 )
 
-const storeVersion = 1
+const (
+	storeVersion                    = 1
+	minimumPaneReconcileSessionSize = 2
+)
 
 var (
 	// ErrSessionNotFound is returned when a session id is not present.
@@ -401,16 +404,12 @@ func (s *FileStore) SummaryByTmuxSessionWithOptions(ctx context.Context, options
 }
 
 func summariesForSessions(sessions []Session) []Summary {
+	sessions = sessionsWithReconciledPaneOccupants(sessions)
+
 	byKey := make(map[string]*Summary)
 	order := make([]string, 0)
 	for _, session := range sessions {
-		key := session.Tmux.SessionID
-		if key == "" {
-			key = "detached:" + session.Tmux.SessionName
-		}
-		if key == "detached:" {
-			key = "unknown"
-		}
+		key := summaryKeyForSession(session)
 
 		summary, ok := byKey[key]
 		if !ok {
@@ -452,7 +451,7 @@ func (s *FileStore) GC(ctx context.Context, deleteAfter time.Duration) (GCResult
 	err := s.withSnapshot(func(snap *snapshot) error {
 		for id, session := range snap.Sessions {
 			age := now.Sub(session.LastSeenAt)
-			if deleteAfter > 0 && session.State == StateExited && age >= deleteAfter {
+			if deleteAfter >= 0 && session.State == StateExited && age >= deleteAfter {
 				delete(snap.Sessions, id)
 				result.Deleted++
 			}
@@ -627,8 +626,66 @@ func observedAtOrNow(observedAt time.Time, now func() time.Time) time.Time {
 	return observedAt.UTC()
 }
 
+func sessionsWithReconciledPaneOccupants(sessions []Session) []Session {
+	if len(sessions) < minimumPaneReconcileSessionSize {
+		return sessions
+	}
+
+	winnerByPane := make(map[string]string)
+	winnerTimeByPane := make(map[string]time.Time)
+	for _, session := range sessions {
+		if !sessionOccupiesTmuxPane(session) {
+			continue
+		}
+
+		paneID := session.Tmux.PaneID
+		observedAt := paneOccupantObservedAt(session)
+		if paneOccupantWins(session.ID, observedAt, "", winnerByPane[paneID], winnerTimeByPane[paneID]) {
+			winnerByPane[paneID] = session.ID
+			winnerTimeByPane[paneID] = observedAt
+		}
+	}
+	if len(winnerByPane) == 0 {
+		return sessions
+	}
+
+	reconciled := slices.Clone(sessions)
+	for index, session := range reconciled {
+		if !sessionOccupiesTmuxPane(session) {
+			continue
+		}
+		if winnerByPane[session.Tmux.PaneID] == session.ID {
+			continue
+		}
+
+		session.State = StateExited
+		reconciled[index] = session
+	}
+
+	return reconciled
+}
+
+func sessionOccupiesTmuxPane(session Session) bool {
+	return session.State != StateExited && session.Tmux.PaneID != ""
+}
+
+func summaryKeyForSession(session Session) string {
+	switch {
+	case session.Tmux.SessionID != "" && session.Tmux.SessionName != "":
+		return "tmux:" + session.Tmux.SessionID + "\x00" + session.Tmux.SessionName
+	case session.Tmux.SessionID != "":
+		return "tmux:" + session.Tmux.SessionID
+	case session.Tmux.SessionName != "":
+		return "detached:" + session.Tmux.SessionName
+	default:
+		return "unknown"
+	}
+}
+
 func applySummaryState(summary *Summary, state State) {
-	summary.Total++
+	if state != StateExited {
+		summary.Total++
+	}
 	if IsActive(state) {
 		summary.Active++
 	}

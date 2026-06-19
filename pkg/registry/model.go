@@ -131,13 +131,14 @@ type Filter struct {
 type Summary struct {
 	TmuxSessionID   string `json:"tmux_session_id,omitempty"`
 	TmuxSessionName string `json:"tmux_session_name,omitempty"`
-	Total           int    `json:"total"`
-	Active          int    `json:"active"`
-	Running         int    `json:"running"`
-	Waiting         int    `json:"waiting"`
-	Idle            int    `json:"idle"`
-	Unknown         int    `json:"unknown"`
-	Exited          int    `json:"exited"`
+	// Total counts non-exited sessions; exited records are tracked separately.
+	Total   int `json:"total"`
+	Active  int `json:"active"`
+	Running int `json:"running"`
+	Waiting int `json:"waiting"`
+	Idle    int `json:"idle"`
+	Unknown int `json:"unknown"`
+	Exited  int `json:"exited"`
 }
 
 type SummaryOptions struct {

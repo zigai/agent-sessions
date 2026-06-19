@@ -458,14 +458,16 @@ func watchSummaryMap(summaries []registry.Summary) map[string]registry.Summary {
 }
 
 func watchSummaryKey(summary registry.Summary) string {
-	if summary.TmuxSessionID != "" {
-		return summary.TmuxSessionID
-	}
-	if summary.TmuxSessionName != "" {
+	switch {
+	case summary.TmuxSessionID != "" && summary.TmuxSessionName != "":
+		return "tmux:" + summary.TmuxSessionID + "\x00" + summary.TmuxSessionName
+	case summary.TmuxSessionID != "":
+		return "tmux:" + summary.TmuxSessionID
+	case summary.TmuxSessionName != "":
 		return "detached:" + summary.TmuxSessionName
+	default:
+		return "unknown"
 	}
-
-	return "unknown"
 }
 
 func snapshotWatchEvents(sessions []registry.Session, observedAt time.Time) []watchEvent {

@@ -240,6 +240,73 @@ func TestFileStoreGCDeletesOldExitedSessions(t *testing.T) {
 	}
 }
 
+func TestFileStoreGCZeroDeletesExitedSessionsImmediately(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	now := time.Date(2026, 6, 17, 10, 0, 0, 0, time.UTC)
+	store := NewFileStore(filepath.Join(t.TempDir(), "state.json"))
+	store.SetNowForTest(func() time.Time { return now })
+	exited, err := store.Report(ctx, Report{
+		Harness:       HarnessCodex,
+		State:         StateExited,
+		SessionID:     "exited",
+		SessionPath:   "",
+		ResumeCommand: nil,
+		CWD:           "",
+		ProjectRoot:   "",
+		PID:           0,
+		PPID:          0,
+		TTY:           "",
+		Tmux:          emptyTmuxContext(),
+		Source:        "",
+		Confidence:    "",
+		Event:         "",
+		Attributes:    nil,
+		RawPayload:    nil,
+		ObservedAt:    time.Time{},
+	})
+	if err != nil {
+		t.Fatalf("exited Report returned error: %v", err)
+	}
+	running, err := store.Report(ctx, Report{
+		Harness:       HarnessCodex,
+		State:         StateRunning,
+		SessionID:     "running",
+		SessionPath:   "",
+		ResumeCommand: nil,
+		CWD:           "",
+		ProjectRoot:   "",
+		PID:           0,
+		PPID:          0,
+		TTY:           "",
+		Tmux:          emptyTmuxContext(),
+		Source:        "",
+		Confidence:    "",
+		Event:         "",
+		Attributes:    nil,
+		RawPayload:    nil,
+		ObservedAt:    time.Time{},
+	})
+	if err != nil {
+		t.Fatalf("running Report returned error: %v", err)
+	}
+
+	result, err := store.GC(ctx, 0)
+	if err != nil {
+		t.Fatalf("GC returned error: %v", err)
+	}
+	if result.Deleted != 1 || result.Remaining != 1 {
+		t.Fatalf("expected immediate exited cleanup, got %#v", result)
+	}
+	if _, getErr := store.Get(ctx, exited.ID); !errors.Is(getErr, ErrSessionNotFound) {
+		t.Fatalf("expected exited session to be missing, got %v", getErr)
+	}
+	if _, getErr := store.Get(ctx, running.ID); getErr != nil {
+		t.Fatalf("expected running session to remain, got %v", getErr)
+	}
+}
+
 func TestFileStoreResetClearsSessions(t *testing.T) {
 	t.Parallel()
 
@@ -674,6 +741,63 @@ func TestSortSessionsUsesNumericTmuxIndexes(t *testing.T) {
 	}
 }
 
+func writeTestSnapshot(t *testing.T, store *FileStore, sessions ...Session) {
+	t.Helper()
+	snap := snapshot{
+		Version:   storeVersion,
+		UpdatedAt: time.Time{},
+		Sessions:  make(map[string]Session, len(sessions)),
+	}
+	for _, session := range sessions {
+		snap.Sessions[session.ID] = session
+		snap.UpdatedAt = maxTime(snap.UpdatedAt, session.UpdatedAt)
+	}
+	if err := writeSnapshotAtomic(store.Path(), snap); err != nil {
+		t.Fatalf("writing test snapshot: %v", err)
+	}
+}
+
+func testStoredPaneSession(id string, harness Harness, state State, paneID string, observedAt time.Time) Session {
+	return Session{
+		ID:            id,
+		Harness:       harness,
+		State:         state,
+		SessionID:     id + "-session",
+		SessionPath:   "",
+		ResumeCommand: nil,
+		CWD:           "/repo",
+		ProjectRoot:   "/repo",
+		PID:           0,
+		PPID:          0,
+		TTY:           "",
+		Tmux: TmuxContext{
+			Inside:          true,
+			SessionID:       "$1",
+			SessionName:     "sesh",
+			WindowID:        "@1",
+			WindowIndex:     "1",
+			WindowName:      "zsh",
+			PaneID:          paneID,
+			PaneIndex:       "1",
+			PaneCurrentPath: "/repo",
+			PanePID:         1234,
+			PaneTTY:         "/dev/pts/1",
+			ClientTTY:       "/dev/pts/0",
+		},
+		Source:         "test",
+		Confidence:     "test",
+		LastEvent:      "",
+		Attributes:     nil,
+		RawPayload:     nil,
+		CreatedAt:      observedAt,
+		UpdatedAt:      observedAt,
+		LastSeenAt:     observedAt,
+		StateChangedAt: observedAt,
+		LastEventAt:    time.Time{},
+		EndedAt:        time.Time{},
+	}
+}
+
 func requireNoStoreError(t *testing.T, err error, message string) {
 	t.Helper()
 	if err != nil {
@@ -709,7 +833,7 @@ func assertSeshPaneSummary(t *testing.T, store *FileStore, ctx context.Context) 
 	if len(summaries) != 1 {
 		t.Fatalf("expected one summary, got %#v", summaries)
 	}
-	if summaries[0].Idle != 1 || summaries[0].Exited != 1 {
+	if summaries[0].Total != 1 || summaries[0].Idle != 1 || summaries[0].Exited != 1 {
 		t.Fatalf("expected one open idle occupant and one exited stale occupant, got %#v", summaries[0])
 	}
 }
@@ -827,6 +951,112 @@ func TestFileStoreGetMissing(t *testing.T) {
 	_, err := store.Get(context.Background(), "missing")
 	if !errors.Is(err, ErrSessionNotFound) {
 		t.Fatalf("expected ErrSessionNotFound, got %v", err)
+	}
+}
+
+func TestSummaryTreatsOlderSamePaneOccupantAsExited(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	base := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
+	store := NewFileStore(filepath.Join(t.TempDir(), "state.json"))
+	older := testStoredPaneSession("grok", HarnessGrok, StateIdle, "%21", base)
+	newer := testStoredPaneSession("codex", HarnessCodex, StateRunning, "%21", base.Add(time.Minute))
+	writeTestSnapshot(t, store, older, newer)
+
+	summaries, err := store.SummaryByTmuxSession(ctx, Filter{
+		Harness:     "",
+		State:       "",
+		TmuxSession: "sesh",
+		ActiveOnly:  false,
+	})
+	if err != nil {
+		t.Fatalf("SummaryByTmuxSession returned error: %v", err)
+	}
+	if len(summaries) != 1 {
+		t.Fatalf("expected one summary, got %#v", summaries)
+	}
+	if summaries[0].Total != 1 || summaries[0].Active != 1 ||
+		summaries[0].Running != 1 || summaries[0].Idle != 0 || summaries[0].Exited != 1 {
+		t.Fatalf("expected newer same-pane occupant to win summary, got %#v", summaries[0])
+	}
+
+	stored, err := store.Get(ctx, older.ID)
+	if err != nil {
+		t.Fatalf("Get older session returned error: %v", err)
+	}
+	if stored.State != StateIdle {
+		t.Fatalf("summary should not rewrite legacy stale record, got %q", stored.State)
+	}
+}
+
+func TestSummaryKeepsSeparatePaneOccupantsOpen(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	base := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
+	store := NewFileStore(filepath.Join(t.TempDir(), "state.json"))
+	left := testStoredPaneSession("left", HarnessCodex, StateIdle, "%21", base)
+	right := testStoredPaneSession("right", HarnessCodex, StateRunning, "%22", base.Add(time.Minute))
+	writeTestSnapshot(t, store, left, right)
+
+	summaries, err := store.SummaryByTmuxSession(ctx, Filter{
+		Harness:     "",
+		State:       "",
+		TmuxSession: "sesh",
+		ActiveOnly:  false,
+	})
+	if err != nil {
+		t.Fatalf("SummaryByTmuxSession returned error: %v", err)
+	}
+	if len(summaries) != 1 {
+		t.Fatalf("expected one summary, got %#v", summaries)
+	}
+	if summaries[0].Total != 2 || summaries[0].Idle != 1 || summaries[0].Running != 1 || summaries[0].Exited != 0 {
+		t.Fatalf("expected separate pane occupants to stay open, got %#v", summaries[0])
+	}
+}
+
+func TestSummarySeparatesReusedTmuxSessionIDWithDifferentNames(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	base := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
+	store := NewFileStore(filepath.Join(t.TempDir(), "state.json"))
+	kwinl := testStoredPaneSession("kwinl-grok", HarnessGrok, StateIdle, "%8", base)
+	kwinl.Tmux.SessionID = "$4"
+	kwinl.Tmux.SessionName = "kwinl"
+	kwinl.CWD = "/home/zigai/Projects/kwinl"
+	kwinl.ProjectRoot = "/home/zigai/Projects/kwinl"
+	lab := testStoredPaneSession("lab-codex", HarnessCodex, StateIdle, "%16", base.Add(-time.Hour))
+	lab.Tmux.SessionID = "$4"
+	lab.Tmux.SessionName = "lab"
+	lab.CWD = "/home/zigai/Projects/lab"
+	lab.ProjectRoot = "/home/zigai/Projects/lab"
+	writeTestSnapshot(t, store, kwinl, lab)
+
+	summaries, err := store.SummaryByTmuxSession(ctx, Filter{
+		Harness:     "",
+		State:       "",
+		TmuxSession: "",
+		ActiveOnly:  false,
+	})
+	if err != nil {
+		t.Fatalf("SummaryByTmuxSession returned error: %v", err)
+	}
+	if len(summaries) != 2 {
+		t.Fatalf("expected reused tmux id to produce two summaries, got %#v", summaries)
+	}
+
+	byName := make(map[string]Summary, len(summaries))
+	for _, summary := range summaries {
+		byName[summary.TmuxSessionName] = summary
+	}
+	if byName["kwinl"].Total != 1 || byName["kwinl"].Idle != 1 {
+		t.Fatalf("expected kwinl summary to include only kwinl session, got %#v", byName["kwinl"])
+	}
+	if byName["lab"].Total != 1 || byName["lab"].Idle != 1 {
+		t.Fatalf("expected lab summary to include only lab session, got %#v", byName["lab"])
 	}
 }
 

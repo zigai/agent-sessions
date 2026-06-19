@@ -147,6 +147,18 @@ func TestSnapshotWatchSummaryEvents(t *testing.T) {
 	}
 }
 
+func TestWatchSummaryMapSeparatesReusedTmuxIDs(t *testing.T) {
+	t.Parallel()
+
+	mapped := watchSummaryMap([]registry.Summary{
+		watchTestSummary("$4", "kwinl", 0, 1),
+		watchTestSummary("$4", "lab", 0, 1),
+	})
+	if len(mapped) != 2 {
+		t.Fatalf("expected reused tmux ids with different names to stay separate, got %#v", mapped)
+	}
+}
+
 func TestFormatWatchPlainEvent(t *testing.T) {
 	t.Parallel()
 
