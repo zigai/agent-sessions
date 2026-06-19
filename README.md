@@ -14,6 +14,8 @@ Supported harnesses: `claude`, `codex`, `cursor`, `kimi-code`, `grok`, `pi`, `op
 
 ## Installation
 
+`agent-sessions` supports Linux and macOS.
+
 ### Go install
 
 ```bash
@@ -82,8 +84,9 @@ agent-sessions manage stop-all
 agent-sessions manage stop-all --dry-run
 ```
 
-`manage stop-all` sends `C-c` to tmux-backed sessions and `SIGINT` to sessions
-with a reported process id. Exited sessions are ignored.
+`manage stop-all` validates targets immediately before signaling them. It sends
+`C-c` to matching tmux-backed sessions and `SIGINT` to matching process-id
+sessions. Exited, stale, missing, reused, or mismatched targets are skipped.
 
 ## Hook Installation
 
@@ -104,12 +107,12 @@ Each session record stores:
 - harness session id and/or session path when known
 - resume command when a harness adapter can derive one from session id/path
 - cwd and project root
-- process ids and tty when reported
-- tmux session/window/pane ids, names, indexes, pane cwd, pane pid, and pane tty
+- process ids, process start identity, and tty when reported
+- tmux server socket, session/window/pane ids, names, indexes, pane cwd, pane pid, and pane tty
 - source/confidence labels
 - last native harness event and event timestamp
 - extra attributes and optional raw JSON payload
-- created, updated, last-seen, state-changed, and ended timestamps
+- created, updated, last-seen, last-observed, state-changed, and ended timestamps
 
 ## License
 
