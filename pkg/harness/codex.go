@@ -1,33 +1,117 @@
 package harness
 
-import "github.com/zigai/agent-sessions/pkg/registry"
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
 
-const codexCommand = "codex"
+	"github.com/zigai/agent-sessions/pkg/registry"
+)
+
+const (
+	codexCommand           = "codex"
+	codexIntegrationSource = "codex-hook"
+)
+
+type codexHarness struct {
+	baseAdapter
+}
 
 func codexAdapter() Adapter {
-	return Adapter{
-		ID:           registry.HarnessCodex,
-		Aliases:      nil,
-		ProcessNames: []string{codexCommand},
-		Env: EnvKeys{
-			SessionID:   []string{"CODEX_SESSION_ID"},
-			SessionPath: []string{"CODEX_SESSION_PATH"},
-			ProjectRoot: nil,
-			PID:         []string{"CODEX_PID"},
-			Event:       nil,
-		},
-		Installable: true,
-		ResumeCommand: func(sessionID string, _ string) []string {
-			if sessionID == "" {
-				return nil
-			}
-
-			return []string{codexCommand, "resume", sessionID}
-		},
-		PayloadValidator: payloadValidator[codexHookPayload](),
-		PayloadDefaults:  codexPayloadDefaults,
-		Hook:             nil,
+	return codexHarness{
+		baseAdapter: newBaseAdapter(Definition{
+			ID:           registry.HarnessCodex,
+			Aliases:      nil,
+			ProcessNames: []string{codexCommand},
+			Env: EnvKeys{
+				SessionID:   []string{"CODEX_SESSION_ID"},
+				SessionPath: []string{"CODEX_SESSION_PATH"},
+				ProjectRoot: nil,
+				PID:         []string{"CODEX_PID"},
+				Event:       nil,
+			},
+		}),
 	}
+}
+
+func (codexHarness) InstallPlan(binary string) InstallPlan {
+	return InstallPlan{
+		JSONCommandHooks: &JSONCommandHookInstallPlan{
+			Path:          filepath.Join(codexHome(), "hooks.json"),
+			Source:        codexIntegrationSource,
+			Label:         "codex hooks",
+			ConfigLabel:   "codex config",
+			StatusMessage: "Recording agent session",
+			Hooks: []CommandHookInstallSpec{
+				{
+					Event:   HookEventSessionStart,
+					Matcher: "startup|resume|clear|compact",
+					Command: ReportHookCommand(
+						binary,
+						registry.HarnessCodex,
+						registry.StateIdle,
+						HookEventSessionStart,
+						codexIntegrationSource,
+					),
+				},
+				{
+					Event:   "UserPromptSubmit",
+					Matcher: "",
+					Command: ReportHookCommand(
+						binary,
+						registry.HarnessCodex,
+						registry.StateRunning,
+						"UserPromptSubmit",
+						codexIntegrationSource,
+					),
+				},
+				{
+					Event:   "PermissionRequest",
+					Matcher: "*",
+					Command: ReportHookCommand(
+						binary,
+						registry.HarnessCodex,
+						registry.StateWaiting,
+						"PermissionRequest",
+						codexIntegrationSource,
+					),
+				},
+				{
+					Event:   HookEventStop,
+					Matcher: "",
+					Command: ReportHookCommand(
+						binary,
+						registry.HarnessCodex,
+						registry.StateIdle,
+						HookEventStop,
+						codexIntegrationSource,
+					),
+				},
+			},
+		},
+		CursorJSONHooks:  nil,
+		ManagedTextBlock: nil,
+		RenderedFile:     nil,
+		PluginDirectory:  nil,
+		Shim:             nil,
+	}
+}
+
+func (codexHarness) ResumeCommand(sessionID string, _ string) []string {
+	if sessionID == "" {
+		return nil
+	}
+
+	return []string{codexCommand, "resume", sessionID}
+}
+
+func (codexHarness) PayloadCompatible(rawPayload json.RawMessage) bool {
+	return payloadValidator[codexHookPayload]()(rawPayload)
+}
+
+func (codexHarness) PayloadDefaults(payload map[string]any) PayloadDefaults {
+	return codexPayloadDefaults(payload)
 }
 
 func codexPayloadDefaults(payload map[string]any) PayloadDefaults {
@@ -46,4 +130,15 @@ func codexPayloadDefaults(payload map[string]any) PayloadDefaults {
 		Event:       payloadString(payload, "hook_event_name"),
 		Attributes:  attributes,
 	}
+}
+
+func codexHome() string {
+	if value := strings.TrimSpace(os.Getenv("CODEX_HOME")); value != "" {
+		return value
+	}
+	if home := strings.TrimSpace(os.Getenv("HOME")); home != "" {
+		return filepath.Join(home, ".codex")
+	}
+
+	return ".codex"
 }

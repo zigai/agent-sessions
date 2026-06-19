@@ -2,13 +2,11 @@ package install
 
 import (
 	"bytes"
-	"embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
-	"text/template"
 
 	"github.com/zigai/agent-sessions/pkg/registry"
 )
@@ -121,48 +119,27 @@ func writeInstallFile(path string, data []byte, changed bool, dryRun bool, creat
 	return nil
 }
 
-type templateArtifactOptions struct {
-	Assets             embed.FS
-	TemplatePath       string
-	TemplateName       string
-	Label              string
-	IntegrationID      string
-	IntegrationVersion int
-	Binary             string
-	Source             string
-}
-
-type templateArtifactData struct {
-	ManagedMarker      string
-	IntegrationID      string
-	IntegrationVersion int
-	Binary             string
-	Source             string
-}
-
-func renderTemplateArtifact(options templateArtifactOptions) (string, error) {
-	rawTemplate, err := options.Assets.ReadFile(options.TemplatePath)
+func readJSONObject(path string) (map[string]any, error) {
+	data, err := os.ReadFile(path)
 	if err != nil {
-		return "", fmt.Errorf("reading %s template: %w", options.Label, err)
+		if errors.Is(err, os.ErrNotExist) {
+			return map[string]any{"hooks": map[string]any{}}, nil
+		}
+
+		return nil, fmt.Errorf("reading %s: %w", path, err)
+	}
+	if len(bytes.TrimSpace(data)) == 0 {
+		return map[string]any{"hooks": map[string]any{}}, nil
 	}
 
-	parsedTemplate, err := template.New(options.TemplateName).Parse(string(rawTemplate))
-	if err != nil {
-		return "", fmt.Errorf("parsing %s template: %w", options.Label, err)
+	var config map[string]any
+	unmarshalErr := json.Unmarshal(data, &config)
+	if unmarshalErr != nil {
+		return nil, fmt.Errorf("parsing %s: %w", path, unmarshalErr)
+	}
+	if config == nil {
+		config = map[string]any{"hooks": map[string]any{}}
 	}
 
-	data := templateArtifactData{
-		ManagedMarker:      managedMarker,
-		IntegrationID:      options.IntegrationID,
-		IntegrationVersion: options.IntegrationVersion,
-		Binary:             strconv.Quote(options.Binary),
-		Source:             strconv.Quote(options.Source),
-	}
-
-	var rendered bytes.Buffer
-	if executeErr := parsedTemplate.Execute(&rendered, data); executeErr != nil {
-		return "", fmt.Errorf("rendering %s template: %w", options.Label, executeErr)
-	}
-
-	return rendered.String(), nil
+	return config, nil
 }

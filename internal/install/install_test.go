@@ -13,7 +13,20 @@ import (
 	"github.com/zigai/agent-sessions/pkg/registry"
 )
 
-const testInstallBinary = "/usr/local/bin/agent-sessions"
+const (
+	testInstallBinary     = "/usr/local/bin/agent-sessions"
+	piExtensionName       = "agent-sessions-state.ts"
+	openCodePluginName    = "agent-sessions-state.ts"
+	kiloPluginName        = "agent-sessions-state.ts"
+	agyPluginName         = "agent-sessions-state"
+	agyMarkerFileName     = ".agent-sessions-managed"
+	agyImportManifestName = "import_manifest.json"
+	agyImportSource       = "antigravity"
+	agyImportComponent    = "hooks"
+	kimiCodeManagedStart  = "# BEGIN agent-sessions managed integration: kimi-code"
+	kimiCodeManagedEnd    = "# END agent-sessions managed integration: kimi-code"
+	grokHookFileName      = "agent-sessions-state.json"
+)
 
 func TestInstallCodexMergesHooks(t *testing.T) {
 	t.Setenv("CODEX_HOME", t.TempDir())
@@ -976,29 +989,22 @@ func TestRunAllInstallsEveryHarness(t *testing.T) {
 	}
 }
 
-func TestInstallersMatchHarnessCatalog(t *testing.T) {
+func TestInstallPlansMatchHarnessCatalog(t *testing.T) {
 	t.Parallel()
 
-	catalog := make(map[registry.Harness]bool)
 	for _, adapter := range harnesspkg.All() {
-		catalog[adapter.ID] = true
-		if !adapter.Installable {
-			continue
-		}
-		if _, ok := installers[adapter.ID]; !ok {
-			t.Fatalf("installable harness %q has no installer", adapter.ID)
-		}
-	}
-
-	for harness := range installers {
-		if !catalog[harness] {
-			t.Fatalf("installer %q is not present in harness catalog", harness)
+		if _, ok := adapter.(harnesspkg.Installable); !ok {
+			t.Fatalf("harness %q has no install plan", adapter.Definition().ID)
 		}
 	}
 
 	for _, harness := range AllHarnesses {
-		if _, ok := installers[harness]; !ok {
-			t.Fatalf("AllHarnesses contains %q without installer", harness)
+		adapter, ok := harnesspkg.Find(harness)
+		if !ok {
+			t.Fatalf("AllHarnesses contains unknown harness %q", harness)
+		}
+		if _, installable := adapter.(harnesspkg.Installable); !installable {
+			t.Fatalf("AllHarnesses contains %q without install plan", harness)
 		}
 	}
 }

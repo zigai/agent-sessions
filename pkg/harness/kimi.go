@@ -11,31 +11,166 @@ import (
 	"github.com/zigai/agent-sessions/pkg/registry"
 )
 
-const kimiCommand = "kimi"
+const (
+	kimiCommand     = "kimi"
+	kimiSessionFlag = "--session"
+)
 
 const (
+	kimiCodeIntegrationSource             = "kimi-code-hook"
+	kimiCodeManagedIntegrationStart       = "# BEGIN agent-sessions managed integration: kimi-code"
+	kimiCodeManagedIntegrationEnd         = "# END agent-sessions managed integration: kimi-code"
 	kimiCodeSessionIndexInitialBufferSize = 64 * 1024
 	kimiCodeSessionIndexMaxBufferSize     = 1024 * 1024
 )
 
-func kimiCodeAdapter() Adapter {
-	return Adapter{
-		ID:           registry.HarnessKimiCode,
-		Aliases:      []string{"kimi", "kimi_code", "kimicode"},
-		ProcessNames: []string{kimiCommand},
-		Env:          emptyEnvKeys(),
-		Installable:  true,
-		ResumeCommand: func(sessionID string, _ string) []string {
-			if sessionID == "" {
-				return nil
-			}
+type kimiCodeHarness struct {
+	baseAdapter
+}
 
-			return []string{kimiCommand, sessionFlag, sessionID}
-		},
-		PayloadValidator: payloadValidator[kimiCodeHookPayload](),
-		PayloadDefaults:  kimiCodePayloadDefaults,
-		Hook:             nil,
+func kimiCodeAdapter() Adapter {
+	return kimiCodeHarness{
+		baseAdapter: newBaseAdapter(Definition{
+			ID:           registry.HarnessKimiCode,
+			Aliases:      []string{"kimi", "kimi_code", "kimicode"},
+			ProcessNames: []string{kimiCommand},
+			Env:          emptyEnvKeys(),
+		}),
 	}
+}
+
+func (kimiCodeHarness) InstallPlan(binary string) InstallPlan {
+	return InstallPlan{
+		JSONCommandHooks: nil,
+		CursorJSONHooks:  nil,
+		ManagedTextBlock: &ManagedTextBlockInstallPlan{
+			Path:        filepath.Join(kimiCodeHome(), "config.toml"),
+			Label:       "kimi-code hooks",
+			ConfigLabel: "kimi-code config",
+			StartMarker: kimiCodeManagedIntegrationStart,
+			EndMarker:   kimiCodeManagedIntegrationEnd,
+			Block:       kimiCodeHookBlock(binary),
+		},
+		RenderedFile:    nil,
+		PluginDirectory: nil,
+		Shim:            nil,
+	}
+}
+
+func (kimiCodeHarness) ResumeCommand(sessionID string, _ string) []string {
+	if sessionID == "" {
+		return nil
+	}
+
+	return []string{kimiCommand, kimiSessionFlag, sessionID}
+}
+
+func (kimiCodeHarness) PayloadCompatible(rawPayload json.RawMessage) bool {
+	return payloadValidator[kimiCodeHookPayload]()(rawPayload)
+}
+
+func (kimiCodeHarness) PayloadDefaults(payload map[string]any) PayloadDefaults {
+	return kimiCodePayloadDefaults(payload)
+}
+
+type kimiCodeHookSpec struct {
+	event   string
+	matcher string
+	command string
+	timeout int
+}
+
+func kimiCodeHookBlock(binary string) string {
+	specs := []kimiCodeHookSpec{
+		{
+			event:   HookEventSessionStart,
+			matcher: "startup|resume",
+			command: SelfRefreshCommand(binary, registry.HarnessKimiCode, true),
+			timeout: HookTimeoutSeconds,
+		},
+		{
+			event:   HookEventSessionStart,
+			matcher: "startup|resume",
+			command: kimiCodeHookCommand(binary, registry.StateIdle, HookEventSessionStart),
+			timeout: HookTimeoutSeconds,
+		},
+		{
+			event:   "UserPromptSubmit",
+			matcher: "",
+			command: kimiCodeHookCommand(binary, registry.StateRunning, "UserPromptSubmit"),
+			timeout: HookTimeoutSeconds,
+		},
+		{
+			event:   "PermissionRequest",
+			matcher: "",
+			command: kimiCodeHookCommand(binary, registry.StateWaiting, "PermissionRequest"),
+			timeout: HookTimeoutSeconds,
+		},
+		{
+			event:   "PermissionResult",
+			matcher: "",
+			command: kimiCodeHookCommand(binary, registry.StateRunning, "PermissionResult"),
+			timeout: HookTimeoutSeconds,
+		},
+		{
+			event:   HookEventStop,
+			matcher: "",
+			command: kimiCodeHookCommand(binary, registry.StateIdle, HookEventStop),
+			timeout: HookTimeoutSeconds,
+		},
+		{
+			event:   "StopFailure",
+			matcher: "",
+			command: kimiCodeHookCommand(binary, registry.StateIdle, "StopFailure"),
+			timeout: HookTimeoutSeconds,
+		},
+		{
+			event:   "Interrupt",
+			matcher: "",
+			command: kimiCodeHookCommand(binary, registry.StateIdle, "Interrupt"),
+			timeout: HookTimeoutSeconds,
+		},
+		{
+			event:   "SessionEnd",
+			matcher: "",
+			command: kimiCodeHookCommand(binary, registry.StateExited, "SessionEnd"),
+			timeout: HookTimeoutSeconds,
+		},
+	}
+
+	var builder strings.Builder
+	builder.WriteString(kimiCodeManagedIntegrationStart)
+	builder.WriteByte('\n')
+	builder.WriteString("# ")
+	builder.WriteString(ManagedMarker)
+	builder.WriteByte('\n')
+	for _, spec := range specs {
+		builder.WriteByte('\n')
+		builder.WriteString("[[hooks]]\n")
+		builder.WriteString("event = ")
+		builder.WriteString(strconv.Quote(spec.event))
+		builder.WriteByte('\n')
+		if spec.matcher != "" {
+			builder.WriteString("matcher = ")
+			builder.WriteString(strconv.Quote(spec.matcher))
+			builder.WriteByte('\n')
+		}
+		builder.WriteString("command = ")
+		builder.WriteString(strconv.Quote(spec.command))
+		builder.WriteByte('\n')
+		builder.WriteString("timeout = ")
+		builder.WriteString(strconv.Itoa(spec.timeout))
+		builder.WriteByte('\n')
+	}
+	builder.WriteByte('\n')
+	builder.WriteString(kimiCodeManagedIntegrationEnd)
+	builder.WriteByte('\n')
+
+	return builder.String()
+}
+
+func kimiCodeHookCommand(binary string, state registry.State, event string) string {
+	return ReportHookCommand(binary, registry.HarnessKimiCode, state, event, kimiCodeIntegrationSource)
 }
 
 func kimiCodePayloadDefaults(payload map[string]any) PayloadDefaults {

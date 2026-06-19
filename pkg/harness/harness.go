@@ -19,8 +19,6 @@ const (
 	EnvEvent       EnvField = "event"
 )
 
-const sessionFlag = "--session"
-
 type EnvKeys struct {
 	SessionID   []string
 	SessionPath []string
@@ -38,46 +36,66 @@ type PayloadDefaults struct {
 	Attributes  map[string]string
 }
 
-type Adapter struct {
-	ID               registry.Harness
-	Aliases          []string
-	ProcessNames     []string
-	Env              EnvKeys
-	Installable      bool
-	ResumeCommand    func(sessionID string, sessionPath string) []string
-	PayloadValidator HookPayloadValidator
-	PayloadDefaults  func(payload map[string]any) PayloadDefaults
-	Hook             *HookAdapter
+type Definition struct {
+	ID           registry.Harness
+	Aliases      []string
+	ProcessNames []string
+	Env          EnvKeys
+}
+
+type Adapter interface {
+	Definition() Definition
+}
+
+type Installable interface {
+	InstallPlan(binary string) InstallPlan
+}
+
+type Resumable interface {
+	ResumeCommand(sessionID string, sessionPath string) []string
+}
+
+type PayloadAdapter interface {
+	PayloadCompatible(rawPayload json.RawMessage) bool
+	PayloadDefaults(payload map[string]any) PayloadDefaults
+}
+
+type baseAdapter struct {
+	definition Definition
+}
+
+func (adapter baseAdapter) Definition() Definition {
+	return cloneDefinition(adapter.definition)
+}
+
+func newBaseAdapter(definition Definition) baseAdapter {
+	return baseAdapter{definition: cloneDefinition(definition)}
 }
 
 func All() []Adapter {
-	result := make([]Adapter, 0, len(adapters))
-	for _, adapter := range adapters {
-		result = append(result, cloneAdapter(adapter))
-	}
-
-	return result
+	return append([]Adapter(nil), adapters...)
 }
 
 func Find(harness registry.Harness) (Adapter, bool) {
 	for _, adapter := range adapters {
-		if adapter.ID == harness {
-			return cloneAdapter(adapter), true
+		if adapter.Definition().ID == harness {
+			return adapter, true
 		}
 	}
 
-	return emptyAdapter(), false
+	return nil, false
 }
 
 func Normalize(value string) (registry.Harness, error) {
 	normalized := normalizeToken(value)
 	for _, adapter := range adapters {
-		if normalized == normalizeToken(string(adapter.ID)) {
-			return adapter.ID, nil
+		definition := adapter.Definition()
+		if normalized == normalizeToken(string(definition.ID)) {
+			return definition.ID, nil
 		}
-		for _, alias := range adapter.Aliases {
+		for _, alias := range definition.Aliases {
 			if normalized == normalizeToken(alias) {
-				return adapter.ID, nil
+				return definition.ID, nil
 			}
 		}
 	}
@@ -88,7 +106,7 @@ func Normalize(value string) (registry.Harness, error) {
 func SupportedNames() []string {
 	names := make([]string, 0, len(adapters))
 	for _, adapter := range adapters {
-		names = append(names, string(adapter.ID))
+		names = append(names, string(adapter.Definition().ID))
 	}
 
 	return names
@@ -97,7 +115,7 @@ func SupportedNames() []string {
 func EnvNames(field EnvField) []string {
 	names := genericEnvNames(field)
 	for _, adapter := range adapters {
-		names = appendUnique(names, envNamesForField(adapter.Env, field)...)
+		names = appendUnique(names, envNamesForField(adapter.Definition().Env, field)...)
 	}
 
 	return names
@@ -106,9 +124,10 @@ func EnvNames(field EnvField) []string {
 func FromCommand(command string) (registry.Harness, bool) {
 	normalized := normalizeToken(filepath.Base(command))
 	for _, adapter := range adapters {
-		for _, processName := range adapter.ProcessNames {
+		definition := adapter.Definition()
+		for _, processName := range definition.ProcessNames {
 			if normalized == normalizeToken(processName) {
-				return adapter.ID, true
+				return definition.ID, true
 			}
 		}
 	}
@@ -122,7 +141,11 @@ func DefaultsFromPayload(harness registry.Harness, rawPayload json.RawMessage) P
 	}
 
 	adapter, ok := Find(harness)
-	if !ok || adapter.PayloadDefaults == nil {
+	if !ok {
+		return emptyPayloadDefaults()
+	}
+	payloadAdapter, ok := adapter.(PayloadAdapter)
+	if !ok {
 		return emptyPayloadDefaults()
 	}
 
@@ -131,7 +154,7 @@ func DefaultsFromPayload(harness registry.Harness, rawPayload json.RawMessage) P
 		return emptyPayloadDefaults()
 	}
 
-	return adapter.PayloadDefaults(payload)
+	return payloadAdapter.PayloadDefaults(payload)
 }
 
 func PayloadCompatibleWithHarness(harness registry.Harness, rawPayload json.RawMessage) bool {
@@ -140,20 +163,28 @@ func PayloadCompatibleWithHarness(harness registry.Harness, rawPayload json.RawM
 	}
 
 	adapter, ok := Find(harness)
-	if !ok || adapter.PayloadValidator == nil {
+	if !ok {
+		return true
+	}
+	payloadAdapter, ok := adapter.(PayloadAdapter)
+	if !ok {
 		return true
 	}
 
-	return adapter.PayloadValidator(rawPayload)
+	return payloadAdapter.PayloadCompatible(rawPayload)
 }
 
 func ResumeCommandFor(harness registry.Harness, sessionID string, sessionPath string) []string {
 	adapter, ok := Find(harness)
-	if !ok || adapter.ResumeCommand == nil {
+	if !ok {
+		return nil
+	}
+	resumable, ok := adapter.(Resumable)
+	if !ok {
 		return nil
 	}
 
-	return adapter.ResumeCommand(sessionID, sessionPath)
+	return resumable.ResumeCommand(sessionID, sessionPath)
 }
 
 func WithResumeCommand(report registry.Report) registry.Report {
@@ -164,29 +195,12 @@ func WithResumeCommand(report registry.Report) registry.Report {
 	return report
 }
 
-func cloneAdapter(adapter Adapter) Adapter {
-	adapter.Aliases = cloneStrings(adapter.Aliases)
-	adapter.ProcessNames = cloneStrings(adapter.ProcessNames)
-	adapter.Env = cloneEnvKeys(adapter.Env)
-	if adapter.Hook != nil {
-		hook := *adapter.Hook
-		adapter.Hook = &hook
-	}
-
-	return adapter
-}
-
-func emptyAdapter() Adapter {
-	return Adapter{
-		ID:               "",
-		Aliases:          nil,
-		ProcessNames:     nil,
-		Env:              emptyEnvKeys(),
-		Installable:      false,
-		ResumeCommand:    nil,
-		PayloadValidator: nil,
-		PayloadDefaults:  nil,
-		Hook:             nil,
+func cloneDefinition(definition Definition) Definition {
+	return Definition{
+		ID:           definition.ID,
+		Aliases:      cloneStrings(definition.Aliases),
+		ProcessNames: cloneStrings(definition.ProcessNames),
+		Env:          cloneEnvKeys(definition.Env),
 	}
 }
 

@@ -48,7 +48,7 @@ func TestResumeCommandFor(t *testing.T) {
 			harness:     registry.HarnessKimiCode,
 			sessionID:   testSessionID,
 			sessionPath: "",
-			want:        []string{kimiCommand, sessionFlag, testSessionID},
+			want:        []string{kimiCommand, "--session", testSessionID},
 		},
 		{
 			name:        "grok",
@@ -62,14 +62,14 @@ func TestResumeCommandFor(t *testing.T) {
 			harness:     registry.HarnessPi,
 			sessionID:   testSessionID,
 			sessionPath: "/tmp/session.jsonl",
-			want:        []string{"pi", sessionFlag, "/tmp/session.jsonl"},
+			want:        []string{"pi", "--session", "/tmp/session.jsonl"},
 		},
 		{
 			name:        "opencode",
 			harness:     registry.HarnessOpenCode,
 			sessionID:   testSessionID,
 			sessionPath: "",
-			want:        []string{"opencode", sessionFlag, testSessionID},
+			want:        []string{"opencode", "--session", testSessionID},
 		},
 		{
 			name:        "agy",
@@ -83,7 +83,7 @@ func TestResumeCommandFor(t *testing.T) {
 			harness:     registry.HarnessKilo,
 			sessionID:   testSessionID,
 			sessionPath: "",
-			want:        []string{kiloCommand, sessionFlag, testSessionID},
+			want:        []string{kiloCommand, "--session", testSessionID},
 		},
 	}
 

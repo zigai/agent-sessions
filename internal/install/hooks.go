@@ -3,29 +3,14 @@ package install
 import (
 	"maps"
 	"reflect"
-	"strings"
 
-	"github.com/zigai/agent-sessions/pkg/registry"
+	harnesspkg "github.com/zigai/agent-sessions/pkg/harness"
 )
 
 const (
-	hookEventSessionStart = "SessionStart"
-	hookEventStop         = "Stop"
+	hookEventSessionStart = harnesspkg.HookEventSessionStart
+	hookEventStop         = harnesspkg.HookEventStop
 )
-
-func reportHookCommand(binary string, harness registry.Harness, state registry.State, event string, source string) string {
-	return strings.Join([]string{
-		shellQuote(binary),
-		"report",
-		"--harness", shellQuote(string(harness)),
-		"--state", shellQuote(string(state)),
-		"--event", shellQuote(event),
-		"--source", shellQuote(source),
-		"--attribute", shellQuote("agent_sessions_integration=" + source),
-		"--raw-stdin",
-		"--quiet",
-	}, " ")
-}
 
 func commandHookGroup(command string, matcher string, statusMessage string) map[string]any {
 	group := map[string]any{
@@ -33,7 +18,7 @@ func commandHookGroup(command string, matcher string, statusMessage string) map[
 			map[string]any{
 				"type":          "command",
 				"command":       command,
-				"timeout":       float64(hookTimeoutSeconds),
+				"timeout":       float64(harnesspkg.HookTimeoutSeconds),
 				"statusMessage": statusMessage,
 			},
 		},

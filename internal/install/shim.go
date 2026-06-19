@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"strings"
 
+	harnesspkg "github.com/zigai/agent-sessions/pkg/harness"
 	"github.com/zigai/agent-sessions/pkg/registry"
 )
 
@@ -189,5 +190,5 @@ harness_bin=%s
 status=$?
 "$agent_sessions_bin" report --harness %s --state exited --event process.exit --source %s-shim >/dev/null 2>&1 || true
 exit "$status"
-`, shellQuote(managedMarker), harness, shellQuote(binary), shellQuote(target), shellQuote(harness), shellQuote(harness), shellQuote(harness), shellQuote(harness))
+`, harnesspkg.ShellQuote(managedMarker), harness, harnesspkg.ShellQuote(binary), harnesspkg.ShellQuote(target), harnesspkg.ShellQuote(harness), harnesspkg.ShellQuote(harness), harnesspkg.ShellQuote(harness), harnesspkg.ShellQuote(harness))
 }

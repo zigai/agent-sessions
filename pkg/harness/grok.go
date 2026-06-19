@@ -1,31 +1,145 @@
 package harness
 
-import "github.com/zigai/agent-sessions/pkg/registry"
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
+
+	"github.com/zigai/agent-sessions/pkg/registry"
+)
+
+const (
+	grokHookFileName      = "agent-sessions-state.json"
+	grokIntegrationSource = "grok-hook"
+)
+
+type grokHarness struct {
+	baseAdapter
+}
 
 func grokAdapter() Adapter {
-	return Adapter{
-		ID:           registry.HarnessGrok,
-		Aliases:      []string{"grok-build", "grok_build"},
-		ProcessNames: []string{"grok", "grok-build"},
-		Env: EnvKeys{
-			SessionID:   []string{"GROK_SESSION_ID"},
-			SessionPath: nil,
-			ProjectRoot: []string{"GROK_WORKSPACE_ROOT"},
-			PID:         nil,
-			Event:       []string{"GROK_HOOK_EVENT"},
-		},
-		Installable: true,
-		ResumeCommand: func(sessionID string, _ string) []string {
-			if sessionID == "" {
-				return nil
-			}
-
-			return []string{"grok", "--resume", sessionID}
-		},
-		PayloadValidator: grokPayloadValidator,
-		PayloadDefaults:  grokPayloadDefaults,
-		Hook:             nil,
+	return grokHarness{
+		baseAdapter: newBaseAdapter(Definition{
+			ID:           registry.HarnessGrok,
+			Aliases:      []string{"grok-build", "grok_build"},
+			ProcessNames: []string{"grok", "grok-build"},
+			Env: EnvKeys{
+				SessionID:   []string{"GROK_SESSION_ID"},
+				SessionPath: nil,
+				ProjectRoot: []string{"GROK_WORKSPACE_ROOT"},
+				PID:         nil,
+				Event:       []string{"GROK_HOOK_EVENT"},
+			},
+		}),
 	}
+}
+
+func (grokHarness) InstallPlan(binary string) InstallPlan {
+	return InstallPlan{
+		JSONCommandHooks: nil,
+		CursorJSONHooks:  nil,
+		ManagedTextBlock: nil,
+		RenderedFile: &RenderedFileInstallPlan{
+			Path:        filepath.Join(grokHome(), "hooks", grokHookFileName),
+			Label:       "grok hooks",
+			ConfigLabel: "grok hooks",
+			Content:     "",
+			JSONContent: grokHookConfig(binary),
+		},
+		PluginDirectory: nil,
+		Shim:            nil,
+	}
+}
+
+func (grokHarness) ResumeCommand(sessionID string, _ string) []string {
+	if sessionID == "" {
+		return nil
+	}
+
+	return []string{"grok", "--resume", sessionID}
+}
+
+func (grokHarness) PayloadCompatible(rawPayload json.RawMessage) bool {
+	return grokPayloadValidator(rawPayload)
+}
+
+func (grokHarness) PayloadDefaults(payload map[string]any) PayloadDefaults {
+	return grokPayloadDefaults(payload)
+}
+
+type grokHookSpec struct {
+	event   string
+	matcher string
+	command string
+}
+
+func grokHookConfig(binary string) map[string]any {
+	specs := []grokHookSpec{
+		{
+			event:   HookEventSessionStart,
+			matcher: "",
+			command: SelfRefreshCommand(binary, registry.HarnessGrok, false),
+		},
+		{
+			event:   HookEventSessionStart,
+			matcher: "",
+			command: grokHookCommand(binary, registry.StateIdle, HookEventSessionStart),
+		},
+		{
+			event:   "UserPromptSubmit",
+			matcher: "",
+			command: grokHookCommand(binary, registry.StateRunning, "UserPromptSubmit"),
+		},
+		{
+			event:   "Notification",
+			matcher: "approval_required",
+			command: grokHookCommand(binary, registry.StateWaiting, "Notification"),
+		},
+		{
+			event:   HookEventStop,
+			matcher: "",
+			command: grokHookCommand(binary, registry.StateIdle, HookEventStop),
+		},
+		{
+			event:   "SessionEnd",
+			matcher: "",
+			command: grokHookCommand(binary, registry.StateExited, "SessionEnd"),
+		},
+	}
+
+	hooks := make(map[string]any)
+	for _, spec := range specs {
+		existing, ok := hooks[spec.event].([]any)
+		if !ok {
+			existing = nil
+		}
+		hooks[spec.event] = append(existing, grokCommandHookGroup(spec.command, spec.matcher))
+	}
+
+	return map[string]any{"hooks": hooks}
+}
+
+func grokCommandHookGroup(command string, matcher string) map[string]any {
+	group := map[string]any{
+		"hooks": []any{
+			map[string]any{
+				"type":          "command",
+				"command":       command,
+				"timeout":       float64(HookTimeoutSeconds),
+				"statusMessage": ManagedMarker,
+			},
+		},
+	}
+	if matcher != "" {
+		group["matcher"] = matcher
+	}
+
+	return group
+}
+
+func grokHookCommand(binary string, state registry.State, event string) string {
+	return ReportHookCommand(binary, registry.HarnessGrok, state, event, grokIntegrationSource)
 }
 
 func grokPayloadDefaults(payload map[string]any) PayloadDefaults {
@@ -47,4 +161,15 @@ func grokPayloadDefaults(payload map[string]any) PayloadDefaults {
 		Event:       payloadStringAny(payload, "hookEventName", "hook_event_name"),
 		Attributes:  attributes,
 	}
+}
+
+func grokHome() string {
+	if value := strings.TrimSpace(os.Getenv("GROK_HOME")); value != "" {
+		return value
+	}
+	if home := strings.TrimSpace(os.Getenv("HOME")); home != "" {
+		return filepath.Join(home, ".grok")
+	}
+
+	return ".grok"
 }

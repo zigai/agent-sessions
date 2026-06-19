@@ -19,9 +19,8 @@ type HookResult struct {
 	Response map[string]any
 }
 
-type HookAdapter struct {
-	Event  func(payload map[string]any, explicitEvent string) string
-	Handle func(invocation HookInvocation) HookResult
+type HookAdapter interface {
+	HandleHook(invocation HookInvocation) HookResult
 }
 
 func HandleHook(
@@ -32,19 +31,20 @@ func HandleHook(
 	parentArgs []string,
 ) (HookResult, bool) {
 	adapter, ok := Find(harness)
-	if !ok || adapter.Hook == nil || adapter.Hook.Handle == nil {
+	if !ok {
+		var result HookResult
+
+		return result, false
+	}
+	hookAdapter, ok := adapter.(HookAdapter)
+	if !ok {
 		var result HookResult
 
 		return result, false
 	}
 
-	event := explicitEvent
-	if adapter.Hook.Event != nil {
-		event = adapter.Hook.Event(payload, explicitEvent)
-	}
-
-	result := adapter.Hook.Handle(HookInvocation{
-		Event:      event,
+	result := hookAdapter.HandleHook(HookInvocation{
+		Event:      explicitEvent,
 		RawPayload: rawPayload,
 		Payload:    payload,
 		ParentArgs: parentArgs,

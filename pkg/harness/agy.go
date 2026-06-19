@@ -1,8 +1,11 @@
 package harness
 
 import (
+	"encoding/json"
 	"fmt"
 	"maps"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -12,36 +15,160 @@ import (
 
 const (
 	agyCommand                     = "agy"
+	agyPluginName                  = "agent-sessions-state"
+	agyMarkerFileName              = ".agent-sessions-managed"
+	agyImportManifestName          = "import_manifest.json"
+	agyImportSource                = "antigravity"
+	agyImportComponent             = "hooks"
+	agyIntegrationID               = "agy"
+	agyIntegrationVersion          = 2
 	agyHookSource                  = "agy-hook"
 	agyHookAdditionalAttributeKeys = 4
 )
 
+type agyHarness struct {
+	baseAdapter
+}
+
 func agyAdapter() Adapter {
-	return Adapter{
-		ID: registry.HarnessAgy,
-		Aliases: []string{
-			"antigravity",
-			"antigravity-cli",
-			"antigravity_cli",
-			"google-antigravity",
-			"google_antigravity",
-		},
-		ProcessNames: []string{agyCommand},
-		Env: EnvKeys{
-			SessionID:   nil,
-			SessionPath: nil,
-			ProjectRoot: nil,
-			PID:         nil,
-			Event:       nil,
-		},
-		Installable: true,
-		ResumeCommand: func(sessionID string, _ string) []string {
-			return agyResumeCommand(sessionID)
-		},
-		PayloadValidator: agyPayloadValidator,
-		PayloadDefaults:  agyPayloadDefaults,
-		Hook:             agyHookAdapter(),
+	return agyHarness{
+		baseAdapter: newBaseAdapter(Definition{
+			ID: registry.HarnessAgy,
+			Aliases: []string{
+				"antigravity",
+				"antigravity-cli",
+				"antigravity_cli",
+				"google-antigravity",
+				"google_antigravity",
+			},
+			ProcessNames: []string{agyCommand},
+			Env: EnvKeys{
+				SessionID:   nil,
+				SessionPath: nil,
+				ProjectRoot: nil,
+				PID:         nil,
+				Event:       nil,
+			},
+		}),
 	}
+}
+
+func (agyHarness) InstallPlan(binary string) InstallPlan {
+	configDir := agyConfigDir()
+
+	return InstallPlan{
+		JSONCommandHooks: nil,
+		CursorJSONHooks:  nil,
+		ManagedTextBlock: nil,
+		RenderedFile:     nil,
+		PluginDirectory: &PluginDirectoryInstallPlan{
+			Dir:   filepath.Join(configDir, "plugins", agyPluginName),
+			Label: "agy plugin",
+			Files: []PluginFileInstallSpec{
+				{
+					Name:        "plugin.json",
+					Content:     "",
+					JSONContent: map[string]any{"name": agyPluginName},
+				},
+				{
+					Name:        "hooks.json",
+					Content:     "",
+					JSONContent: agyHookConfig(binary),
+				},
+				{
+					Name:        agyMarkerFileName,
+					Content:     agyMarkerContent(),
+					JSONContent: nil,
+				},
+			},
+			SnippetOrder: []string{"plugin.json", "hooks.json", agyMarkerFileName},
+			MarkerFile:   agyMarkerFileName,
+			ImportManifest: &ImportManifestInstallPlan{
+				Path:       filepath.Join(configDir, agyImportManifestName),
+				Name:       agyPluginName,
+				Source:     agyImportSource,
+				Components: []string{agyImportComponent},
+			},
+		},
+		Shim: nil,
+	}
+}
+
+func (agyHarness) ResumeCommand(sessionID string, _ string) []string {
+	return agyResumeCommand(sessionID)
+}
+
+func (agyHarness) PayloadCompatible(rawPayload json.RawMessage) bool {
+	return agyPayloadValidator(rawPayload)
+}
+
+func (agyHarness) PayloadDefaults(payload map[string]any) PayloadDefaults {
+	return agyPayloadDefaults(payload)
+}
+
+func (agyHarness) HandleHook(invocation HookInvocation) HookResult {
+	invocation.Event = agyHookEvent(invocation.Payload, invocation.Event)
+
+	return agyHandleHook(invocation)
+}
+
+func agyHookConfig(binary string) map[string]any {
+	return map[string]any{
+		agyPluginName: map[string]any{
+			"PreInvocation":  []any{agyHookHandler(binary, "PreInvocation")},
+			"PostInvocation": []any{agyHookHandler(binary, "PostInvocation")},
+			"PreToolUse":     []any{agyToolHookGroup(binary, "PreToolUse")},
+			"PostToolUse":    []any{agyToolHookGroup(binary, "PostToolUse")},
+			HookEventStop:    []any{agyHookHandler(binary, HookEventStop)},
+		},
+	}
+}
+
+func agyToolHookGroup(binary string, event string) map[string]any {
+	return map[string]any{
+		"matcher": "*",
+		"hooks": []any{
+			agyHookHandler(binary, event),
+		},
+	}
+}
+
+func agyHookHandler(binary string, event string) map[string]any {
+	return map[string]any{
+		"type":    "command",
+		"command": agyHookCommand(binary, event),
+		"timeout": float64(HookTimeoutSeconds),
+	}
+}
+
+func agyHookCommand(binary string, event string) string {
+	return strings.Join([]string{
+		ShellQuote(binary),
+		"hook",
+		string(registry.HarnessAgy),
+		"--event", ShellQuote(event),
+	}, " ")
+}
+
+func agyMarkerContent() string {
+	return strings.Join([]string{
+		ManagedMarker,
+		"AGENT_SESSIONS_INTEGRATION_ID=" + agyIntegrationID,
+		"AGENT_SESSIONS_INTEGRATION_VERSION=" + strconv.Itoa(agyIntegrationVersion),
+		"AGENT_SESSIONS_SOURCE=" + agyHookSource,
+		"",
+	}, "\n")
+}
+
+func agyConfigDir() string {
+	if value := strings.TrimSpace(os.Getenv("AGY_CONFIG_HOME")); value != "" {
+		return value
+	}
+	if home := strings.TrimSpace(os.Getenv("HOME")); home != "" {
+		return filepath.Join(home, ".gemini", "config")
+	}
+
+	return filepath.Join(".gemini", "config")
 }
 
 func agyPayloadDefaults(payload map[string]any) PayloadDefaults {
@@ -63,13 +190,6 @@ func agyPayloadDefaults(payload map[string]any) PayloadDefaults {
 		ProjectRoot: workspacePath,
 		Event:       payloadStringAny(payload, "hookEventName", "hook_event_name", "event"),
 		Attributes:  attributes,
-	}
-}
-
-func agyHookAdapter() *HookAdapter {
-	return &HookAdapter{
-		Event:  agyHookEvent,
-		Handle: agyHandleHook,
 	}
 }
 

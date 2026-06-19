@@ -1,40 +1,105 @@
 package harness
 
 import (
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
 	"github.com/zigai/agent-sessions/pkg/registry"
 )
 
-const cursorCommand = "cursor-agent"
+const (
+	cursorCommand           = "cursor-agent"
+	cursorIntegrationSource = "cursor-hook"
+)
+
+type cursorHarness struct {
+	baseAdapter
+}
 
 func cursorAdapter() Adapter {
-	return Adapter{
-		ID:      registry.HarnessCursor,
-		Aliases: []string{"cursor-agent", "cursor_agent", "cursor-cli", "cursor_cli"},
-		ProcessNames: []string{
-			cursorCommand,
-		},
-		Env: EnvKeys{
-			SessionID:   nil,
-			SessionPath: []string{"CURSOR_TRANSCRIPT_PATH"},
-			ProjectRoot: []string{"CURSOR_PROJECT_DIR", "CLAUDE_PROJECT_DIR"},
-			PID:         nil,
-			Event:       nil,
-		},
-		Installable: true,
-		ResumeCommand: func(sessionID string, _ string) []string {
-			if sessionID == "" {
-				return nil
-			}
-
-			return []string{cursorCommand, "--resume", sessionID}
-		},
-		PayloadValidator: payloadValidator[cursorHookPayload](),
-		PayloadDefaults:  cursorPayloadDefaults,
-		Hook:             nil,
+	return cursorHarness{
+		baseAdapter: newBaseAdapter(Definition{
+			ID:      registry.HarnessCursor,
+			Aliases: []string{"cursor-agent", "cursor_agent", "cursor-cli", "cursor_cli"},
+			ProcessNames: []string{
+				cursorCommand,
+			},
+			Env: EnvKeys{
+				SessionID:   nil,
+				SessionPath: []string{"CURSOR_TRANSCRIPT_PATH"},
+				ProjectRoot: []string{"CURSOR_PROJECT_DIR", "CLAUDE_PROJECT_DIR"},
+				PID:         nil,
+				Event:       nil,
+			},
+		}),
 	}
+}
+
+func (cursorHarness) InstallPlan(binary string) InstallPlan {
+	return InstallPlan{
+		JSONCommandHooks: nil,
+		CursorJSONHooks: &CursorJSONHookInstallPlan{
+			Path:        filepath.Join(cursorHome(), "hooks.json"),
+			Source:      cursorIntegrationSource,
+			Label:       "cursor hooks",
+			ConfigLabel: "cursor config",
+			Hooks: []CursorCommandHookInstallSpec{
+				{
+					Event:   "sessionStart",
+					Command: cursorHookCommand(binary, registry.StateIdle, "sessionStart", "{}"),
+				},
+				{
+					Event:   "beforeSubmitPrompt",
+					Command: cursorHookCommand(binary, registry.StateRunning, "beforeSubmitPrompt", `{"continue":true}`),
+				},
+				{
+					Event:   "beforeShellExecution",
+					Command: cursorHookCommand(binary, registry.StateWaiting, "beforeShellExecution", `{"permission":"allow"}`),
+				},
+				{
+					Event:   "afterShellExecution",
+					Command: cursorHookCommand(binary, registry.StateRunning, "afterShellExecution", "{}"),
+				},
+				{
+					Event:   "stop",
+					Command: cursorHookCommand(binary, registry.StateIdle, "stop", "{}"),
+				},
+				{
+					Event:   "sessionEnd",
+					Command: cursorHookCommand(binary, registry.StateExited, "sessionEnd", "{}"),
+				},
+			},
+		},
+		ManagedTextBlock: nil,
+		RenderedFile:     nil,
+		PluginDirectory:  nil,
+		Shim:             nil,
+	}
+}
+
+func (cursorHarness) ResumeCommand(sessionID string, _ string) []string {
+	if sessionID == "" {
+		return nil
+	}
+
+	return []string{cursorCommand, "--resume", sessionID}
+}
+
+func (cursorHarness) PayloadCompatible(rawPayload json.RawMessage) bool {
+	return payloadValidator[cursorHookPayload]()(rawPayload)
+}
+
+func (cursorHarness) PayloadDefaults(payload map[string]any) PayloadDefaults {
+	return cursorPayloadDefaults(payload)
+}
+
+func cursorHookCommand(binary string, state registry.State, event string, hookOutput string) string {
+	report := RawStdinDefaultsReportHookCommand(binary, registry.HarnessCursor, state, event, cursorIntegrationSource)
+
+	return report + " >/dev/null 2>&1 || true; printf '%s\\n' " + ShellQuote(hookOutput)
 }
 
 func cursorPayloadDefaults(payload map[string]any) PayloadDefaults {
@@ -91,4 +156,12 @@ func addAttributeBool(attributes map[string]string, attributeKey string, payload
 	}
 
 	attributes[attributeKey] = strconv.FormatBool(value)
+}
+
+func cursorHome() string {
+	if home := strings.TrimSpace(os.Getenv("HOME")); home != "" {
+		return filepath.Join(home, ".cursor")
+	}
+
+	return ".cursor"
 }

@@ -1,11 +1,11 @@
-"{{ .ManagedMarker }}";
-"AGENT_SESSIONS_INTEGRATION_ID={{ .IntegrationID }}";
-"AGENT_SESSIONS_INTEGRATION_VERSION={{ .IntegrationVersion }}";
+"{{MANAGED_MARKER}}";
+"AGENT_SESSIONS_INTEGRATION_ID={{INTEGRATION_ID}}";
+"AGENT_SESSIONS_INTEGRATION_VERSION={{INTEGRATION_VERSION}}";
 
 import { spawn } from "node:child_process";
 
-const agentSessionsBin = {{ .Binary }};
-const source = {{ .Source }};
+const agentSessionsBin = {{BINARY}};
+const source = {{SOURCE}};
 const disableSelfRefreshEnv = "AGENT_SESSIONS_DISABLE_OPENCODE_SELF_REFRESH";
 
 let currentSessionId: string | undefined;

@@ -12,7 +12,7 @@ import (
 
 const (
 	defaultBinary = "agent-sessions"
-	managedMarker = "agent-sessions managed integration"
+	managedMarker = harnesspkg.ManagedMarker
 )
 
 var (
@@ -20,20 +20,6 @@ var (
 	errForeignFile        = errors.New("file exists and is not managed by agent-sessions")
 	errInstallFailed      = errors.New("one or more integrations failed to install")
 )
-
-type installer func(Options) (Result, error)
-
-var installers = map[registry.Harness]installer{
-	registry.HarnessClaude:   installClaude,
-	registry.HarnessCodex:    installCodex,
-	registry.HarnessCursor:   installCursor,
-	registry.HarnessKimiCode: installKimiCode,
-	registry.HarnessGrok:     installGrok,
-	registry.HarnessPi:       installPi,
-	registry.HarnessOpenCode: installOpenCode,
-	registry.HarnessAgy:      installAgy,
-	registry.HarnessKilo:     installKilo,
-}
 
 var AllHarnesses = installableHarnesses()
 
@@ -60,12 +46,7 @@ func Run(options Options) (Result, error) {
 		options.Binary = defaultBinary
 	}
 
-	runInstaller, ok := installers[options.Harness]
-	if !ok {
-		return Result{}, fmt.Errorf("%w: %q", errUnsupportedHarness, options.Harness)
-	}
-
-	return runInstaller(options)
+	return installHarnessAdapter(options)
 }
 
 func RunAll(options Options) ([]Result, error) {
@@ -100,13 +81,10 @@ func RunAll(options Options) ([]Result, error) {
 }
 
 func installableHarnesses() []registry.Harness {
-	harnesses := make([]registry.Harness, 0, len(installers))
+	harnesses := make([]registry.Harness, 0, len(harnesspkg.All()))
 	for _, adapter := range harnesspkg.All() {
-		if !adapter.Installable {
-			continue
-		}
-		if _, ok := installers[adapter.ID]; ok {
-			harnesses = append(harnesses, adapter.ID)
+		if _, ok := adapter.(harnesspkg.Installable); ok {
+			harnesses = append(harnesses, adapter.Definition().ID)
 		}
 	}
 
@@ -132,41 +110,4 @@ func fileNeedsUpdate(path string, content string, force bool) (bool, error) {
 	}
 
 	return true, nil
-}
-
-func shellQuote(value string) string {
-	if value == "" {
-		return "''"
-	}
-
-	if isSafeShellWord(value) {
-		return value
-	}
-
-	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
-}
-
-func isSafeShellWord(value string) bool {
-	for _, r := range value {
-		if !isSafeShellRune(r) {
-			return false
-		}
-	}
-
-	return true
-}
-
-func isSafeShellRune(r rune) bool {
-	switch {
-	case r == '/', r == '.', r == '_', r == '-', r == '+', r == ':', r == '=':
-		return true
-	case r >= '0' && r <= '9':
-		return true
-	case r >= 'A' && r <= 'Z':
-		return true
-	case r >= 'a' && r <= 'z':
-		return true
-	default:
-		return false
-	}
 }
