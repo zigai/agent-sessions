@@ -13,7 +13,9 @@ import (
 
 	"github.com/spf13/cobra"
 
+	harnesspkg "github.com/zigai/agent-sessions/pkg/harness"
 	"github.com/zigai/agent-sessions/pkg/registry"
+	"github.com/zigai/agent-sessions/pkg/tmuxctx"
 )
 
 const (
@@ -33,6 +35,189 @@ func TestRootCommandHasUse(t *testing.T) {
 	cmd := NewRootCommand(&bytes.Buffer{}, &bytes.Buffer{})
 	if cmd.Use != "agent-sessions" {
 		t.Fatalf("expected root command use to be agent-sessions, got %q", cmd.Use)
+	}
+}
+
+func TestHeadlessTerminalIdleReportsExited(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name            string
+		harness         registry.Harness
+		event           string
+		attributes      map[string]string
+		parentArgs      []string
+		attributePrefix string
+	}{
+		{
+			name:            "codex exec stop",
+			harness:         registry.HarnessCodex,
+			event:           "Stop",
+			attributes:      map[string]string{"codex_hook_event": "Stop"},
+			parentArgs:      []string{string(registry.HarnessCodex), "exec", "hello"},
+			attributePrefix: headlessAttributePrefix(registry.HarnessCodex),
+		},
+		{
+			name:            "grok single stop",
+			harness:         registry.HarnessGrok,
+			event:           "Stop",
+			attributes:      map[string]string{"grok_hook_event": "stop"},
+			parentArgs:      []string{string(registry.HarnessGrok), "-p", "hello"},
+			attributePrefix: headlessAttributePrefix(registry.HarnessGrok),
+		},
+		{
+			name:            "opencode run idle",
+			harness:         registry.HarnessOpenCode,
+			event:           "session.updated",
+			attributes:      map[string]string{"opencode_event": "session.updated"},
+			parentArgs:      []string{string(registry.HarnessOpenCode), "run", "hello"},
+			attributePrefix: headlessAttributePrefix(registry.HarnessOpenCode),
+		},
+		{
+			name:            "kilo run idle",
+			harness:         registry.HarnessKilo,
+			event:           "session.idle",
+			attributes:      map[string]string{"kilo_event": "session.idle"},
+			parentArgs:      []string{string(registry.HarnessKilo), "run", "hello"},
+			attributePrefix: headlessAttributePrefix(registry.HarnessKilo),
+		},
+		{
+			name:            "kimi print stop",
+			harness:         registry.HarnessKimiCode,
+			event:           "Stop",
+			attributes:      map[string]string{"kimi_code_hook_event": "Stop"},
+			parentArgs:      []string{"kimi", "--print", "hello"},
+			attributePrefix: headlessAttributePrefix(registry.HarnessKimiCode),
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			state := adjustReportStateForRuntime(
+				test.harness,
+				registry.StateIdle,
+				test.event,
+				test.attributes,
+				test.parentArgs,
+			)
+			if state != registry.StateExited {
+				t.Fatalf("adjustReportStateForRuntime() = %q, want exited", state)
+			}
+			if test.attributes[test.attributePrefix+"_headless"] != "true" ||
+				test.attributes[test.attributePrefix+"_stop_state_override"] != "headless-parent" {
+				t.Fatalf("expected headless override attributes, got %#v", test.attributes)
+			}
+		})
+	}
+}
+
+func TestInteractiveTerminalIdleStaysIdle(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		harness    registry.Harness
+		event      string
+		attributes map[string]string
+		parentArgs []string
+	}{
+		{
+			name:       "grok interactive stop",
+			harness:    registry.HarnessGrok,
+			event:      "Stop",
+			attributes: map[string]string{"grok_hook_event": "stop"},
+			parentArgs: []string{string(registry.HarnessGrok)},
+		},
+		{
+			name:       "opencode interactive run",
+			harness:    registry.HarnessOpenCode,
+			event:      "session.idle",
+			attributes: map[string]string{"opencode_event": "session.idle"},
+			parentArgs: []string{string(registry.HarnessOpenCode), "run", "--interactive", "hello"},
+		},
+		{
+			name:       "claude print stop uses session end",
+			harness:    registry.HarnessClaude,
+			event:      "Stop",
+			attributes: map[string]string{"claude_hook_event": "Stop"},
+			parentArgs: []string{string(registry.HarnessClaude), "-p", "hello"},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			state := adjustReportStateForRuntime(
+				test.harness,
+				registry.StateIdle,
+				test.event,
+				test.attributes,
+				test.parentArgs,
+			)
+			if state != registry.StateIdle {
+				t.Fatalf("adjustReportStateForRuntime() = %q, want idle", state)
+			}
+		})
+	}
+}
+
+func TestAgyHeadlessStopReportsExited(t *testing.T) {
+	t.Parallel()
+
+	result, ok := harnesspkg.HandleHook(
+		registry.HarnessAgy,
+		"Stop",
+		json.RawMessage(`{"conversationId":"agy-session","workspacePaths":["/repo"],"fullyIdle":true}`),
+		map[string]any{"conversationId": "agy-session", "workspacePaths": []any{"/repo"}, "fullyIdle": true},
+		[]string{string(registry.HarnessAgy), "--print", "hello"},
+	)
+	if !ok || !result.ReportOK || result.Report.State != registry.StateExited {
+		t.Fatalf("HandleHook() = %#v, %v; want exited report", result, ok)
+	}
+}
+
+func TestAgyInteractiveStopStaysIdle(t *testing.T) {
+	t.Parallel()
+
+	result, ok := harnesspkg.HandleHook(
+		registry.HarnessAgy,
+		"Stop",
+		json.RawMessage(`{"conversationId":"agy-session","workspacePaths":["/repo"],"fullyIdle":true}`),
+		map[string]any{"conversationId": "agy-session", "workspacePaths": []any{"/repo"}, "fullyIdle": true},
+		[]string{string(registry.HarnessAgy)},
+	)
+	if !ok || !result.ReportOK || result.Report.State != registry.StateIdle {
+		t.Fatalf("HandleHook() = %#v, %v; want idle report", result, ok)
+	}
+}
+
+func TestHeadlessArgsForHarness(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		harness registry.Harness
+		args    []string
+		want    bool
+	}{
+		{name: "codex exec", harness: registry.HarnessCodex, args: []string{string(registry.HarnessCodex), "exec", "hi"}, want: true},
+		{name: "codex interactive prompt", harness: registry.HarnessCodex, args: []string{string(registry.HarnessCodex), "hi"}, want: false},
+		{name: "grok single short", harness: registry.HarnessGrok, args: []string{string(registry.HarnessGrok), "-p", "hi"}, want: true},
+		{name: "grok prompt json", harness: registry.HarnessGrok, args: []string{string(registry.HarnessGrok), "--prompt-json={}"}, want: true},
+		{name: "opencode run", harness: registry.HarnessOpenCode, args: []string{string(registry.HarnessOpenCode), "run", "hi"}, want: true},
+		{name: "opencode interactive run", harness: registry.HarnessOpenCode, args: []string{string(registry.HarnessOpenCode), "run", "-i", "hi"}, want: false},
+		{name: "kilo run", harness: registry.HarnessKilo, args: []string{string(registry.HarnessKilo), "run", "hi"}, want: true},
+		{name: "kimi print", harness: registry.HarnessKimiCode, args: []string{"kimi", "--print", "hi"}, want: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			if got := headlessArgsForHarness(test.harness, test.args); got != test.want {
+				t.Fatalf("headlessArgsForHarness(%q, %#v) = %v, want %v", test.harness, test.args, got, test.want)
+			}
+		})
 	}
 }
 
@@ -374,6 +559,140 @@ func TestListSummary(t *testing.T) {
 	output := listOut.String()
 	if !strings.Contains(output, testTmuxSessionName) || !strings.Contains(output, "1/2") {
 		t.Fatalf("expected summary output to include work active/total counts, got %q", output)
+	}
+}
+
+func TestWriteSummaryTableDisambiguatesDuplicateNames(t *testing.T) {
+	t.Parallel()
+
+	var output bytes.Buffer
+	app := &application{stdout: &output}
+	err := app.writeSummaryTable([]registry.Summary{
+		{
+			TmuxSessionID:   "$3",
+			TmuxSessionName: "kwinl",
+			Exited:          1,
+		},
+		{
+			TmuxSessionID:   "$4",
+			TmuxSessionName: "kwinl",
+			Total:           1,
+			Idle:            1,
+		},
+	})
+	if err != nil {
+		t.Fatalf("writeSummaryTable returned error: %v", err)
+	}
+
+	got := output.String()
+	if !strings.Contains(got, "kwinl ($3)") || !strings.Contains(got, "kwinl ($4)") {
+		t.Fatalf("expected duplicate summary labels to include tmux ids, got %q", got)
+	}
+}
+
+func TestGCExplicitZeroDeletesExitedSessions(t *testing.T) {
+	t.Parallel()
+
+	storePath := filepath.Join(t.TempDir(), "state.json")
+	store := registry.NewFileStore(storePath)
+	ctx := context.Background()
+	if _, err := store.Report(ctx, registry.Report{
+		Harness:   registry.HarnessCodex,
+		State:     registry.StateExited,
+		SessionID: "exited",
+	}); err != nil {
+		t.Fatalf("reporting exited session: %v", err)
+	}
+	if _, err := store.Report(ctx, registry.Report{
+		Harness:   registry.HarnessCodex,
+		State:     registry.StateRunning,
+		SessionID: "running",
+	}); err != nil {
+		t.Fatalf("reporting running session: %v", err)
+	}
+
+	var noFlagOut bytes.Buffer
+	noFlagCmd := NewRootCommand(&noFlagOut, &bytes.Buffer{})
+	noFlagCmd.SetArgs([]string{storeFlag, storePath, "gc"})
+	if err := noFlagCmd.Execute(); err != nil {
+		t.Fatalf("gc command without delete-after failed: %v", err)
+	}
+	if !strings.Contains(noFlagOut.String(), "deleted=0 remaining=2") {
+		t.Fatalf("expected no-flag gc to keep store unchanged, got %q", noFlagOut.String())
+	}
+
+	var zeroOut bytes.Buffer
+	zeroCmd := NewRootCommand(&zeroOut, &bytes.Buffer{})
+	zeroCmd.SetArgs([]string{storeFlag, storePath, "gc", "--delete-after", "0s"})
+	if err := zeroCmd.Execute(); err != nil {
+		t.Fatalf("gc command with zero delete-after failed: %v", err)
+	}
+	if !strings.Contains(zeroOut.String(), "deleted=1 remaining=1") {
+		t.Fatalf("expected explicit zero gc to delete exited session, got %q", zeroOut.String())
+	}
+}
+
+func TestScanMarksMissingTmuxPaneSessionsExited(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	storePath := filepath.Join(t.TempDir(), "state.json")
+	store := registry.NewFileStore(storePath)
+	stale, err := store.Report(ctx, registry.Report{
+		Harness:   registry.HarnessGrok,
+		State:     registry.StateIdle,
+		SessionID: "old-grok",
+		CWD:       "/home/zigai/Projects/sesh",
+		Tmux: registry.TmuxContext{
+			Inside:      true,
+			SessionID:   "$11",
+			SessionName: "sesh",
+			PaneID:      "%27",
+		},
+	})
+	if err != nil {
+		t.Fatalf("reporting stale session: %v", err)
+	}
+
+	var output bytes.Buffer
+	app := &application{
+		storePath: storePath,
+		stdout:    &output,
+		stderr:    &bytes.Buffer{},
+		listTmuxPanes: func(context.Context) ([]tmuxctx.Pane, error) {
+			return []tmuxctx.Pane{
+				{
+					Tmux: registry.TmuxContext{
+						Inside:          true,
+						SessionID:       "$8",
+						SessionName:     "sesh",
+						WindowIndex:     "1",
+						PaneID:          "%15",
+						PaneCurrentPath: "/home/zigai/Projects/sesh",
+					},
+					CurrentCommand: "codex",
+				},
+			}, nil
+		},
+	}
+	if scanErr := app.runScan(ctx, scanOptions{state: string(registry.StateIdle)}); scanErr != nil {
+		t.Fatalf("runScan returned error: %v", scanErr)
+	}
+
+	updated, err := store.Get(ctx, stale.ID)
+	if err != nil {
+		t.Fatalf("getting stale session: %v", err)
+	}
+	if updated.State != registry.StateExited || updated.LastEvent != "tmux-pane-missing" {
+		t.Fatalf("expected missing tmux pane session to be exited, got %#v", updated)
+	}
+
+	summaries, err := store.SummaryByTmuxSession(ctx, registry.Filter{TmuxSession: "sesh"})
+	if err != nil {
+		t.Fatalf("summarizing sessions: %v", err)
+	}
+	if len(summaries) != 2 {
+		t.Fatalf("expected current and exited summary rows before gc, got %#v", summaries)
 	}
 }
 
@@ -723,7 +1042,7 @@ func TestAgyHookPreInvocationReportsRunningSession(t *testing.T) {
 	cmd := NewRootCommand(&output, &bytes.Buffer{})
 	cmd.SetArgs([]string{
 		storeFlag, storePath,
-		"agy-hook",
+		hookCommandName, "agy",
 		"--event", "PreInvocation",
 	})
 	cmd.SetIn(strings.NewReader(`{"conversationId":"agy-session","transcriptPath":"/repo/.gemini/antigravity/transcript.jsonl","workspacePaths":["/repo"],"invocationNum":3}`))
@@ -764,7 +1083,7 @@ func TestAgyHookPreInvocationReportsRunningSession(t *testing.T) {
 	}
 }
 
-func TestAgyHookPreToolUsePermissionReportsWaiting(t *testing.T) {
+func TestAgyHookCompatibilityCommandDelegates(t *testing.T) {
 	t.Parallel()
 
 	storePath := filepath.Join(t.TempDir(), "state.json")
@@ -773,6 +1092,44 @@ func TestAgyHookPreToolUsePermissionReportsWaiting(t *testing.T) {
 	cmd.SetArgs([]string{
 		storeFlag, storePath,
 		"agy-hook",
+		"--event", "PreInvocation",
+	})
+	cmd.SetIn(strings.NewReader(`{"conversationId":"agy-session","workspacePaths":["/repo"]}`))
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("agy-hook compatibility command failed: %v", err)
+	}
+
+	sessions := listAgyTestSessions(t, storePath)
+	if len(sessions) != 1 || sessions[0].State != registry.StateRunning {
+		t.Fatalf("expected compatibility command to report running agy session, got %#v", sessions)
+	}
+}
+
+func TestHookUnsupportedHarnessReturnsError(t *testing.T) {
+	t.Parallel()
+
+	var output bytes.Buffer
+	var stderr bytes.Buffer
+	cmd := NewRootCommand(&output, &stderr)
+	cmd.SetArgs([]string{
+		hookCommandName, string(registry.HarnessCodex),
+		"--event", "Stop",
+	})
+	cmd.SetIn(strings.NewReader(`{"session_id":"codex-session"}`))
+	if err := cmd.Execute(); err == nil {
+		t.Fatal("expected unsupported hook harness error")
+	}
+}
+
+func TestAgyHookPreToolUsePermissionReportsWaiting(t *testing.T) {
+	t.Parallel()
+
+	storePath := filepath.Join(t.TempDir(), "state.json")
+	var output bytes.Buffer
+	cmd := NewRootCommand(&output, &bytes.Buffer{})
+	cmd.SetArgs([]string{
+		storeFlag, storePath,
+		hookCommandName, "agy",
 		"--event", "PreToolUse",
 	})
 	cmd.SetIn(strings.NewReader(`{"conversationId":"agy-session","transcriptPath":"/repo/.gemini/antigravity/transcript.jsonl","workspacePaths":["/repo"],"toolCall":{"name":"ask_permission","args":{"Cwd":"/repo/pkg"}}}`))
@@ -812,7 +1169,7 @@ func TestAgyHookStopFullyIdleReportsIdle(t *testing.T) {
 	cmd := NewRootCommand(&output, &bytes.Buffer{})
 	cmd.SetArgs([]string{
 		storeFlag, storePath,
-		"agy-hook",
+		hookCommandName, "agy",
 		"--event", "Stop",
 	})
 	cmd.SetIn(strings.NewReader(`{"conversationId":"agy-session","transcriptPath":"/repo/.gemini/antigravity/transcript.jsonl","workspacePaths":["/repo"],"terminationReason":"model_stop","fullyIdle":true}`))
@@ -852,7 +1209,7 @@ func TestAgyHookEmptyPostToolUseDoesNotOverwriteIdleStop(t *testing.T) {
 	cmd := NewRootCommand(&output, &bytes.Buffer{})
 	cmd.SetArgs([]string{
 		storeFlag, storePath,
-		"agy-hook",
+		hookCommandName, "agy",
 		"--event", "Stop",
 	})
 	cmd.SetIn(strings.NewReader(`{"conversationId":"agy-session","transcriptPath":"/repo/.gemini/antigravity/transcript.jsonl","workspacePaths":["/repo"],"terminationReason":"NO_TOOL_CALL","fullyIdle":true}`))
@@ -864,7 +1221,7 @@ func TestAgyHookEmptyPostToolUseDoesNotOverwriteIdleStop(t *testing.T) {
 	cmd = NewRootCommand(&output, &bytes.Buffer{})
 	cmd.SetArgs([]string{
 		storeFlag, storePath,
-		"agy-hook",
+		hookCommandName, "agy",
 		"--event", "PostToolUse",
 	})
 	cmd.SetIn(strings.NewReader(`{"conversationId":"agy-session","transcriptPath":"/repo/.gemini/antigravity/transcript.jsonl","workspacePaths":["/repo"],"toolCall":null}`))
@@ -893,7 +1250,7 @@ func TestAgyHookMalformedPayloadStillReturnsJSON(t *testing.T) {
 	cmd := NewRootCommand(&output, &bytes.Buffer{})
 	cmd.SetArgs([]string{
 		storeFlag, storePath,
-		"agy-hook",
+		hookCommandName, "agy",
 		"--event", "PreToolUse",
 	})
 	cmd.SetIn(strings.NewReader(`not json`))

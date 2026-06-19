@@ -8,7 +8,9 @@ import (
 	"io"
 	"maps"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -38,8 +40,9 @@ var (
 )
 
 const (
-	tabPadding    = 2
-	maxReportArgs = 2
+	tabPadding                    = 2
+	maxReportArgs                 = 2
+	minimumProcessArgsWithCommand = 2
 )
 
 const (
@@ -62,11 +65,17 @@ const (
 	listSortUpdated = "updated"
 )
 
+const (
+	hookCommandName = "hook"
+	hookConfidence  = "hook"
+)
+
 type application struct {
-	storePath  string
-	outputJSON bool
-	stdout     io.Writer
-	stderr     io.Writer
+	storePath     string
+	outputJSON    bool
+	stdout        io.Writer
+	stderr        io.Writer
+	listTmuxPanes func(context.Context) ([]tmuxctx.Pane, error)
 }
 
 func NewRootCommand(stdout io.Writer, stderr io.Writer) *cobra.Command {
@@ -105,6 +114,7 @@ func NewRootCommand(stdout io.Writer, stderr io.Writer) *cobra.Command {
 		app.newManageCommand(),
 		app.newPathCommand(),
 		app.newInstallHooksCommand(),
+		app.newHookCommand(),
 		app.newAgyHookCommand(),
 	)
 
@@ -379,6 +389,7 @@ func (app *application) runReport(ctx context.Context, stdin io.Reader, options 
 	if err != nil {
 		return err
 	}
+	state = adjustReportStateForRuntime(harness, state, options.event, attributes, parentProcessArgs(ctx))
 
 	source := options.source
 	if source == "" {
@@ -387,7 +398,7 @@ func (app *application) runReport(ctx context.Context, stdin io.Reader, options 
 
 	confidence := options.confidence
 	if confidence == "" {
-		confidence = "hook"
+		confidence = hookConfidence
 	}
 
 	report := harnesspkg.WithResumeCommand(registry.Report{
@@ -441,6 +452,160 @@ func parseObservedAt(value string) (time.Time, error) {
 	}
 
 	return observedAt, nil
+}
+
+func adjustReportStateForRuntime(
+	harness registry.Harness,
+	state registry.State,
+	event string,
+	attributes map[string]string,
+	parentArgs []string,
+) registry.State {
+	if state != registry.StateIdle || !headlessArgsForHarness(harness, parentArgs) {
+		return state
+	}
+	if !isHeadlessTerminalIdleEvent(harness, event, attributes) {
+		return state
+	}
+
+	prefix := headlessAttributePrefix(harness)
+	attributes[prefix+"_headless"] = "true"
+	attributes[prefix+"_stop_state_override"] = "headless-parent"
+
+	return registry.StateExited
+}
+
+func headlessArgsForHarness(harness registry.Harness, args []string) bool {
+	switch harness {
+	case registry.HarnessCodex:
+		return argsContainCommand(args, "exec", "e", "review")
+	case registry.HarnessGrok:
+		return argsContainHeadlessPromptFlag(args, "--single", "--prompt-json", "--prompt-file")
+	case registry.HarnessOpenCode, registry.HarnessKilo:
+		return argsContainCommand(args, "run") && !argsContainFlag(args, "-i", "--interactive")
+	case registry.HarnessKimiCode:
+		return argsContainHeadlessPromptFlag(args, "--print")
+	case registry.HarnessClaude, registry.HarnessCursor, registry.HarnessPi, registry.HarnessAgy:
+		return false
+	default:
+		return false
+	}
+}
+
+func isHeadlessTerminalIdleEvent(harness registry.Harness, event string, attributes map[string]string) bool {
+	switch harness {
+	case registry.HarnessCodex:
+		return eventOrAttributeMatches(event, attributes, "codex_hook_event", "Stop")
+	case registry.HarnessGrok:
+		return eventOrAttributeMatches(event, attributes, "grok_hook_event", "Stop")
+	case registry.HarnessOpenCode:
+		return eventOrAttributeMatches(event, attributes, "opencode_event", "session.idle", "session.updated", "session.status", "session.error")
+	case registry.HarnessKilo:
+		return eventOrAttributeMatches(event, attributes, "kilo_event", "session.idle", "session.updated", "session.status", "session.error")
+	case registry.HarnessKimiCode:
+		return eventOrAttributeMatches(event, attributes, "kimi_code_hook_event", "Stop", "StopFailure", "Interrupt")
+	case registry.HarnessClaude, registry.HarnessCursor, registry.HarnessPi, registry.HarnessAgy:
+		return false
+	default:
+		return false
+	}
+}
+
+func eventOrAttributeMatches(event string, attributes map[string]string, attributeKey string, values ...string) bool {
+	for _, value := range values {
+		if strings.EqualFold(strings.TrimSpace(event), value) {
+			return true
+		}
+		if strings.EqualFold(strings.TrimSpace(attributes[attributeKey]), value) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func argsContainHeadlessPromptFlag(args []string, longFlags ...string) bool {
+	for _, arg := range args {
+		if arg == "-p" || strings.HasPrefix(arg, "-p") && arg != "-p" {
+			return true
+		}
+		for _, flag := range longFlags {
+			if arg == flag || strings.HasPrefix(arg, flag+"=") {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+func argsContainCommand(args []string, commands ...string) bool {
+	if len(args) < minimumProcessArgsWithCommand {
+		return false
+	}
+	for _, arg := range args[1:] {
+		if strings.HasPrefix(arg, "-") {
+			continue
+		}
+		if slices.Contains(commands, arg) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func argsContainFlag(args []string, flags ...string) bool {
+	for _, arg := range args {
+		for _, flag := range flags {
+			if arg == flag || strings.HasPrefix(arg, flag+"=") {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+func headlessAttributePrefix(harness registry.Harness) string {
+	return strings.ReplaceAll(string(harness), "-", "_")
+}
+
+func parentProcessArgs(ctx context.Context) []string {
+	return processArgs(ctx, os.Getppid())
+}
+
+func processArgs(ctx context.Context, pid int) []string {
+	if pid <= 0 {
+		return nil
+	}
+	if args := procProcessArgs(pid); len(args) > 0 {
+		return args
+	}
+
+	return psProcessArgs(ctx, pid)
+}
+
+func procProcessArgs(pid int) []string {
+	data, err := os.ReadFile(filepath.Join("/proc", strconv.Itoa(pid), "cmdline"))
+	if err != nil || len(data) == 0 {
+		return nil
+	}
+	trimmed := strings.TrimRight(string(data), "\x00")
+	if trimmed == "" {
+		return nil
+	}
+
+	return strings.Split(trimmed, "\x00")
+}
+
+func psProcessArgs(ctx context.Context, pid int) []string {
+	output, err := exec.CommandContext(ctx, "ps", "-o", "args=", "-p", strconv.Itoa(pid)).Output()
+	if err != nil {
+		return nil
+	}
+
+	return strings.Fields(strings.TrimSpace(string(output)))
 }
 
 func normalizeReportHarnessAndState(options reportOptions) (registry.Harness, registry.State, error) {
@@ -701,11 +866,12 @@ func (app *application) writeSummaryTable(summaries []registry.Summary) error {
 		return fmt.Errorf("writing output: %w", headerErr)
 	}
 
-	for _, summary := range summaries {
+	labels := summaryTableLabels(summaries)
+	for index, summary := range summaries {
 		_, rowErr := fmt.Fprintf(
 			writer,
 			"%s\t%d/%d\t%d\t%d\t%d\t%d\t%d\n",
-			summaryLabel(summary),
+			labels[index],
 			summary.Active,
 			summary.Total,
 			summary.Running,
@@ -725,6 +891,24 @@ func (app *application) writeSummaryTable(summaries []registry.Summary) error {
 	}
 
 	return nil
+}
+
+func summaryTableLabels(summaries []registry.Summary) []string {
+	baseCounts := make(map[string]int, len(summaries))
+	for _, summary := range summaries {
+		baseCounts[summaryLabel(summary)]++
+	}
+
+	labels := make([]string, 0, len(summaries))
+	for _, summary := range summaries {
+		label := summaryLabel(summary)
+		if baseCounts[label] > 1 && summary.TmuxSessionID != "" && summary.TmuxSessionName != "" {
+			label = fmt.Sprintf("%s (%s)", label, summary.TmuxSessionID)
+		}
+		labels = append(labels, label)
+	}
+
+	return labels
 }
 
 func (app *application) newGetCommand() *cobra.Command {
@@ -775,9 +959,20 @@ func (app *application) runScan(ctx context.Context, options scanOptions) error 
 		return fmt.Errorf("normalizing state: %w", err)
 	}
 
-	panes, err := tmuxctx.ListPanes(ctx)
+	listPanes := app.listTmuxPanes
+	if listPanes == nil {
+		listPanes = tmuxctx.ListPanes
+	}
+
+	panes, err := listPanes(ctx)
 	if err != nil {
 		return fmt.Errorf("listing tmux panes: %w", err)
+	}
+
+	store := app.registryStore()
+	_, err = markMissingTmuxPaneSessionsExited(ctx, store, panes)
+	if err != nil {
+		return err
 	}
 
 	sessions := make([]registry.Session, 0, len(panes))
@@ -787,7 +982,7 @@ func (app *application) runScan(ctx context.Context, options scanOptions) error 
 			continue
 		}
 
-		session, reportErr := app.registryStore().Report(ctx, registry.Report{
+		session, reportErr := store.Report(ctx, registry.Report{
 			Harness:     harness,
 			State:       state,
 			CWD:         pane.Tmux.PaneCurrentPath,
@@ -812,13 +1007,103 @@ func (app *application) runScan(ctx context.Context, options scanOptions) error 
 	return app.writef("reported %d session(s)\n", len(sessions))
 }
 
+func markMissingTmuxPaneSessionsExited(
+	ctx context.Context,
+	store registry.Store,
+	panes []tmuxctx.Pane,
+) ([]registry.Session, error) {
+	sessions, err := store.List(ctx, registry.Filter{})
+	if err != nil {
+		return nil, fmt.Errorf("listing sessions for tmux reconciliation: %w", err)
+	}
+
+	livePanes := liveTmuxPaneKeys(panes)
+	exited := make([]registry.Session, 0)
+	for _, session := range sessions {
+		if session.State == registry.StateExited || session.Tmux.PaneID == "" {
+			continue
+		}
+		if _, ok := livePanes[tmuxPaneKey(session.Tmux)]; ok {
+			continue
+		}
+
+		updated, reportErr := store.Report(ctx, registry.Report{
+			Harness:       session.Harness,
+			State:         registry.StateExited,
+			SessionID:     session.SessionID,
+			SessionPath:   session.SessionPath,
+			ResumeCommand: session.ResumeCommand,
+			CWD:           session.CWD,
+			ProjectRoot:   session.ProjectRoot,
+			PID:           session.PID,
+			PPID:          session.PPID,
+			TTY:           session.TTY,
+			Tmux:          session.Tmux,
+			Source:        "tmux-scan",
+			Confidence:    "process",
+			Event:         "tmux-pane-missing",
+			Attributes: map[string]string{
+				"agent_sessions_reconcile": "tmux-pane-missing",
+			},
+		})
+		if reportErr != nil {
+			return nil, fmt.Errorf("marking missing tmux pane session exited: %w", reportErr)
+		}
+		exited = append(exited, updated)
+	}
+
+	return exited, nil
+}
+
+func liveTmuxPaneKeys(panes []tmuxctx.Pane) map[string]struct{} {
+	keys := make(map[string]struct{}, len(panes))
+	for _, pane := range panes {
+		key := tmuxPaneKey(pane.Tmux)
+		if key != "" {
+			keys[key] = struct{}{}
+		}
+		fallbackKey := tmuxPaneFallbackKey(pane.Tmux)
+		if fallbackKey != "" {
+			keys[fallbackKey] = struct{}{}
+		}
+	}
+
+	return keys
+}
+
+func tmuxPaneKey(tmux registry.TmuxContext) string {
+	if tmux.PaneID == "" {
+		return ""
+	}
+	if tmux.SessionID != "" && tmux.SessionName != "" {
+		return "tmux:" + tmux.SessionID + "\x00" + tmux.SessionName + "\x00" + tmux.PaneID
+	}
+	if tmux.SessionID != "" {
+		return "tmux:" + tmux.SessionID + "\x00" + tmux.PaneID
+	}
+
+	return tmuxPaneFallbackKey(tmux)
+}
+
+func tmuxPaneFallbackKey(tmux registry.TmuxContext) string {
+	if tmux.PaneID == "" {
+		return ""
+	}
+
+	return "pane:" + tmux.PaneID
+}
+
 func (app *application) newGCCommand() *cobra.Command {
 	var deleteAfter time.Duration
 	cmd := &cobra.Command{
 		Use:   "gc",
 		Short: "Delete old exited session records",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			result, err := app.registryStore().GC(cmd.Context(), deleteAfter)
+			effectiveDeleteAfter := deleteAfter
+			if !cmd.Flags().Changed("delete-after") {
+				effectiveDeleteAfter = -1
+			}
+			result, err := app.registryStore().GC(cmd.Context(), effectiveDeleteAfter)
 			if err != nil {
 				return fmt.Errorf("garbage collecting sessions: %w", err)
 			}
