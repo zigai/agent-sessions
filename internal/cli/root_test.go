@@ -519,6 +519,46 @@ func TestManageStopAllReportsFailures(t *testing.T) {
 	}
 }
 
+func TestManageStopAllSkipsInvalidatedTargets(t *testing.T) {
+	t.Parallel()
+
+	storePath := filepath.Join(t.TempDir(), "state.json")
+	store := registry.NewFileStore(storePath)
+	ctx := context.Background()
+	if _, err := store.Report(ctx, registry.Report{
+		Harness:   registry.HarnessCodex,
+		State:     registry.StateRunning,
+		SessionID: "tmux",
+		Tmux: registry.TmuxContext{
+			Inside: true,
+			PaneID: "%1",
+		},
+	}); err != nil {
+		t.Fatalf("reporting tmux session: %v", err)
+	}
+
+	signaler := &fakeSessionStopSignaler{
+		validation: stopTargetValidation{
+			OK:     false,
+			Reason: "tmux pane identity changed",
+		},
+	}
+	app := &application{storePath: storePath, stdout: &bytes.Buffer{}, stderr: &bytes.Buffer{}}
+	result, err := app.runManageStopAll(ctx, manageStopAllOptions{signaler: signaler})
+	if err != nil {
+		t.Fatalf("runManageStopAll returned error: %v", err)
+	}
+	if result.Stoppable != 0 || result.Stopped != 0 || result.Skipped != 1 || result.Failed != 0 {
+		t.Fatalf("unexpected skipped stop-all result: %#v", result)
+	}
+	if len(signaler.tmuxPanes) != 0 || len(signaler.pids) != 0 {
+		t.Fatalf("invalidated target should not be signaled: tmux=%#v pids=%#v", signaler.tmuxPanes, signaler.pids)
+	}
+	if len(result.Results) != 1 || result.Results[0].Reason != "tmux pane identity changed" {
+		t.Fatalf("unexpected invalidation result: %#v", result.Results)
+	}
+}
+
 func TestListSummary(t *testing.T) {
 	t.Parallel()
 
@@ -1508,10 +1548,27 @@ func reportStopAllTestSessions(t *testing.T, store *registry.FileStore) {
 }
 
 type fakeSessionStopSignaler struct {
-	tmuxPanes []string
-	pids      []int
-	tmuxErr   error
-	pidErr    error
+	tmuxPanes   []string
+	pids        []int
+	tmuxErr     error
+	pidErr      error
+	validation  stopTargetValidation
+	validateErr error
+}
+
+func (s *fakeSessionStopSignaler) ValidateStopTarget(
+	_ context.Context,
+	_ registry.Session,
+	_ stopTarget,
+) (stopTargetValidation, error) {
+	if s.validateErr != nil {
+		return stopTargetValidation{}, s.validateErr
+	}
+	if !s.validation.OK && s.validation.Reason == "" {
+		return stopTargetValidation{OK: true}, nil
+	}
+
+	return s.validation, nil
 }
 
 func (s *fakeSessionStopSignaler) SendTmuxInterrupt(_ context.Context, paneID string) error {

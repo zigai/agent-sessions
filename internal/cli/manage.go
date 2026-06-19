@@ -5,8 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
+	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -18,6 +22,10 @@ var (
 	errManageStopAllFailed = errors.New("one or more sessions failed to stop")
 	errUnknownStopMethod   = errors.New("unknown stop method")
 )
+
+const stopTargetMaxAge = 30 * time.Minute
+
+const agyCommandName = "agy"
 
 type manageResetResult struct {
 	registry.ResetResult
@@ -31,11 +39,36 @@ type manageStopAllOptions struct {
 }
 
 type sessionStopSignaler interface {
+	ValidateStopTarget(ctx context.Context, session registry.Session, target stopTarget) (stopTargetValidation, error)
 	SendTmuxInterrupt(ctx context.Context, paneID string) error
 	SendProcessInterrupt(pid int) error
 }
 
 type defaultSessionStopSignaler struct{}
+
+type stopTargetValidation struct {
+	OK     bool
+	Reason string
+}
+
+func (defaultSessionStopSignaler) ValidateStopTarget(
+	ctx context.Context,
+	session registry.Session,
+	target stopTarget,
+) (stopTargetValidation, error) {
+	if reason := staleStopTargetReason(session, time.Now().UTC()); reason != "" {
+		return stopTargetValidation{OK: false, Reason: reason}, nil
+	}
+
+	switch target.Method {
+	case "tmux-interrupt":
+		return validateTmuxStopTarget(ctx, session)
+	case "pid-interrupt":
+		return validateProcessStopTarget(session)
+	default:
+		return stopTargetValidation{}, fmt.Errorf("%w: %q", errUnknownStopMethod, target.Method)
+	}
+}
 
 func (defaultSessionStopSignaler) SendTmuxInterrupt(ctx context.Context, paneID string) error {
 	if err := tmuxctx.SendInterrupt(ctx, paneID); err != nil {
@@ -200,6 +233,24 @@ func (app *application) runManageStopAll(ctx context.Context, options manageStop
 			continue
 		}
 
+		validation, validateErr := options.signaler.ValidateStopTarget(ctx, session, target)
+		if validateErr != nil {
+			entry.Status = "failed"
+			entry.Error = validateErr.Error()
+			result.Failed++
+			result.Results = append(result.Results, entry)
+
+			continue
+		}
+		if !validation.OK {
+			entry.Reason = validation.Reason
+			result.Skipped++
+			result.Stoppable--
+			result.Results = append(result.Results, entry)
+
+			continue
+		}
+
 		stopErr := sendStopSignal(ctx, options.signaler, target)
 		if stopErr != nil {
 			entry.Status = "failed"
@@ -220,6 +271,158 @@ func (app *application) runManageStopAll(ctx context.Context, options manageStop
 	}
 
 	return result, nil
+}
+
+func staleStopTargetReason(session registry.Session, now time.Time) string {
+	if session.LastSeenAt.IsZero() {
+		return "missing last-seen timestamp"
+	}
+	if now.Sub(session.LastSeenAt) > stopTargetMaxAge {
+		return "last seen too long ago"
+	}
+
+	return ""
+}
+
+func validateTmuxStopTarget(ctx context.Context, session registry.Session) (stopTargetValidation, error) {
+	panes, err := tmuxctx.ListPanes(ctx)
+	if err != nil {
+		return stopTargetValidation{}, fmt.Errorf("listing tmux panes: %w", err)
+	}
+	for _, pane := range panes {
+		if pane.Tmux.PaneID != session.Tmux.PaneID {
+			continue
+		}
+		if !tmuxTargetMatchesSession(session.Tmux, pane.Tmux) {
+			return stopTargetValidation{OK: false, Reason: "tmux pane identity changed"}, nil
+		}
+		if !harnessCommandMatches(session.Harness, pane.CurrentCommand) {
+			return stopTargetValidation{OK: false, Reason: "tmux pane command changed"}, nil
+		}
+
+		return stopTargetValidation{OK: true}, nil
+	}
+
+	return stopTargetValidation{OK: false, Reason: "tmux pane no longer exists"}, nil
+}
+
+func validateProcessStopTarget(session registry.Session) (stopTargetValidation, error) {
+	if session.ProcessStartTime == "" {
+		return stopTargetValidation{OK: false, Reason: "missing process start identity"}, nil
+	}
+
+	currentStartTime := processStartTimeForPID(session.PID)
+	if currentStartTime == "" {
+		return stopTargetValidation{OK: false, Reason: "process no longer exists"}, nil
+	}
+	if currentStartTime != session.ProcessStartTime {
+		return stopTargetValidation{OK: false, Reason: "process identity changed"}, nil
+	}
+
+	command, err := processCommandName(session.PID)
+	if err != nil {
+		return stopTargetValidation{}, err
+	}
+	if !harnessCommandMatches(session.Harness, command) {
+		return stopTargetValidation{OK: false, Reason: "process command changed"}, nil
+	}
+
+	return stopTargetValidation{OK: true}, nil
+}
+
+func tmuxTargetMatchesSession(stored registry.TmuxContext, current registry.TmuxContext) bool {
+	if stored.ServerSocket != "" && current.ServerSocket == "" {
+		return false
+	}
+	if stored.PanePID > 0 && current.PanePID > 0 && stored.PanePID != current.PanePID {
+		return false
+	}
+
+	return matchingOptionalStringPairs([][2]string{
+		{stored.ServerSocket, current.ServerSocket},
+		{stored.SessionID, current.SessionID},
+		{stored.SessionName, current.SessionName},
+		{stored.WindowID, current.WindowID},
+		{stored.WindowIndex, current.WindowIndex},
+		{stored.PaneIndex, current.PaneIndex},
+	})
+}
+
+func matchingOptionalStringPairs(pairs [][2]string) bool {
+	for _, pair := range pairs {
+		if pair[0] != "" && pair[1] != "" && pair[0] != pair[1] {
+			return false
+		}
+	}
+
+	return true
+}
+
+func harnessCommandMatches(harness registry.Harness, command string) bool {
+	command = filepath.Base(strings.TrimSpace(command))
+	if command == "" {
+		return false
+	}
+
+	return slices.Contains(harnessCommandNames(harness), command)
+}
+
+func harnessCommandNames(harness registry.Harness) []string {
+	switch harness {
+	case registry.HarnessClaude:
+		return []string{"claude", "claude-code"}
+	case registry.HarnessCodex:
+		return []string{"codex"}
+	case registry.HarnessCursor:
+		return []string{"cursor", "cursor-agent", "cursor-cli"}
+	case registry.HarnessKimiCode:
+		return []string{"kimi", "kimi-code", "kimi_code", "kimicode"}
+	case registry.HarnessGrok:
+		return []string{"grok", "grok-build"}
+	case registry.HarnessPi:
+		return []string{"pi"}
+	case registry.HarnessOpenCode:
+		return []string{"opencode", "open-code"}
+	case registry.HarnessAgy:
+		return []string{agyCommandName, "antigravity", "antigravity-cli"}
+	case registry.HarnessKilo:
+		return []string{"kilo", "kilo-code", "kilocode"}
+	default:
+		return nil
+	}
+}
+
+func processCommandName(pid int) (string, error) {
+	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/comm", pid))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", nil
+		}
+
+		return "", fmt.Errorf("reading process command: %w", err)
+	}
+
+	return strings.TrimSpace(string(data)), nil
+}
+
+func processStartTimeForPID(pid int) string {
+	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+	if err != nil {
+		return ""
+	}
+
+	stat := string(data)
+	closeParen := strings.LastIndexByte(stat, ')')
+	if closeParen < 0 || closeParen+2 >= len(stat) {
+		return ""
+	}
+	fields := strings.Fields(stat[closeParen+2:])
+	const startTimeFieldIndexAfterComm = 19
+	if len(fields) <= startTimeFieldIndexAfterComm {
+		return ""
+	}
+
+	return fields[startTimeFieldIndexAfterComm]
 }
 
 func (app *application) writeManageStopAllResult(result manageStopAllResult) error {
