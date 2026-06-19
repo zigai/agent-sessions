@@ -34,6 +34,7 @@ func kimiCodeAdapter() Adapter {
 		},
 		PayloadValidator: payloadValidator[kimiCodeHookPayload](),
 		PayloadDefaults:  kimiCodePayloadDefaults,
+		Hook:             nil,
 	}
 }
 

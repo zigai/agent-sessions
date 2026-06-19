@@ -539,6 +539,167 @@ func TestPayloadCompatibleWithHarness(t *testing.T) {
 	}
 }
 
+type agyHookTestCase struct {
+	name         string
+	event        string
+	payload      map[string]any
+	parentArgs   []string
+	wantReport   bool
+	wantState    registry.State
+	wantDecision string
+	wantEmpty    bool
+	wantHeadless bool
+}
+
+func TestHandleHookAgy(t *testing.T) {
+	t.Parallel()
+
+	tests := []agyHookTestCase{
+		{
+			name:  "pre invocation reports running",
+			event: "PreInvocation",
+			payload: map[string]any{
+				"conversationId": "agy-session",
+				"transcriptPath": "/repo/.gemini/antigravity/transcript.jsonl",
+				"workspacePaths": []any{"/repo"},
+				"invocationNum":  float64(3),
+			},
+			parentArgs:   nil,
+			wantReport:   true,
+			wantState:    registry.StateRunning,
+			wantDecision: "",
+			wantEmpty:    true,
+			wantHeadless: false,
+		},
+		{
+			name:  "pre tool use permission reports waiting",
+			event: "PreToolUse",
+			payload: map[string]any{
+				"conversationId": "agy-session",
+				"transcriptPath": "/repo/.gemini/antigravity/transcript.jsonl",
+				"workspacePaths": []any{"/repo"},
+				"toolCall": map[string]any{
+					"name": "ask_permission",
+					"args": map[string]any{"Cwd": "/repo/pkg"},
+				},
+			},
+			parentArgs:   nil,
+			wantReport:   true,
+			wantState:    registry.StateWaiting,
+			wantDecision: "allow",
+			wantEmpty:    false,
+			wantHeadless: false,
+		},
+		{
+			name:  "fully idle stop reports idle",
+			event: "Stop",
+			payload: map[string]any{
+				"conversationId":    "agy-session",
+				"transcriptPath":    "/repo/.gemini/antigravity/transcript.jsonl",
+				"workspacePaths":    []any{"/repo"},
+				"terminationReason": "model_stop",
+				"fullyIdle":         true,
+			},
+			parentArgs:   nil,
+			wantReport:   true,
+			wantState:    registry.StateIdle,
+			wantDecision: "",
+			wantEmpty:    false,
+			wantHeadless: false,
+		},
+		{
+			name:  "headless fully idle stop reports exited",
+			event: "Stop",
+			payload: map[string]any{
+				"conversationId": "agy-session",
+				"transcriptPath": "/repo/.gemini/antigravity/transcript.jsonl",
+				"workspacePaths": []any{"/repo"},
+				"fullyIdle":      true,
+			},
+			parentArgs:   []string{"agy", "--print", "hello"},
+			wantReport:   true,
+			wantState:    registry.StateExited,
+			wantDecision: "",
+			wantEmpty:    false,
+			wantHeadless: true,
+		},
+		{
+			name:  "empty post tool use does not report",
+			event: "PostToolUse",
+			payload: map[string]any{
+				"conversationId": "agy-session",
+				"transcriptPath": "/repo/.gemini/antigravity/transcript.jsonl",
+				"workspacePaths": []any{"/repo"},
+				"toolCall":       nil,
+			},
+			parentArgs:   nil,
+			wantReport:   false,
+			wantState:    "",
+			wantDecision: "",
+			wantEmpty:    true,
+			wantHeadless: false,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			assertAgyHookResult(t, test)
+		})
+	}
+}
+
+func assertAgyHookResult(t *testing.T, test agyHookTestCase) {
+	t.Helper()
+
+	result, ok := HandleHook(
+		registry.HarnessAgy,
+		test.event,
+		json.RawMessage(`{"test":true}`),
+		test.payload,
+		test.parentArgs,
+	)
+	if !ok {
+		t.Fatal("expected agy hook adapter")
+	}
+	if result.ReportOK != test.wantReport {
+		t.Fatalf("expected report ok %v, got %v", test.wantReport, result.ReportOK)
+	}
+	if result.ReportOK && result.Report.State != test.wantState {
+		t.Fatalf("expected state %q, got %q", test.wantState, result.Report.State)
+	}
+	assertAgyHookResponse(t, result.Response, test)
+	if test.wantHeadless && result.Report.Attributes["agy_headless"] != "true" {
+		t.Fatalf("expected headless attribute, got %#v", result.Report.Attributes)
+	}
+}
+
+func assertAgyHookResponse(t *testing.T, response map[string]any, test agyHookTestCase) {
+	t.Helper()
+
+	if test.wantEmpty {
+		if len(response) != 0 {
+			t.Fatalf("expected empty response, got %#v", response)
+		}
+
+		return
+	}
+	if response["decision"] != test.wantDecision {
+		t.Fatalf("expected decision %q, got %#v", test.wantDecision, response)
+	}
+}
+
+func TestHandleHookUnsupportedHarness(t *testing.T) {
+	t.Parallel()
+
+	var rawPayload json.RawMessage
+	var payload map[string]any
+	if _, ok := HandleHook(registry.HarnessCodex, "Stop", rawPayload, payload, nil); ok {
+		t.Fatal("expected codex to have no managed hook adapter")
+	}
+}
+
 func strconvQuoteForTest(value string) string {
 	data, err := json.Marshal(value)
 	if err != nil {

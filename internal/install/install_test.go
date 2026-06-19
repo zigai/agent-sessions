@@ -611,7 +611,7 @@ func TestInstallAgyWritesPlugin(t *testing.T) {
 	if result.Path != filepath.Join(home, ".gemini", "config", "plugins", agyPluginName) {
 		t.Fatalf("unexpected path %q", result.Path)
 	}
-	requireTextContainsAll(t, result.Snippet, []string{"agy-hook"}, "agy snippet")
+	requireTextContainsAll(t, result.Snippet, []string{"hook agy"}, "agy snippet")
 	requireAgyPluginManifest(t, result.Path)
 	requireAgyPluginHooks(t, result.Path)
 	requireAgyPluginMarker(t, result.Path)
@@ -1134,6 +1134,9 @@ func requireAgyPluginMarker(t *testing.T, dir string) {
 	marker := readTestFile(t, filepath.Join(dir, agyMarkerFileName), "reading agy marker")
 	if !strings.Contains(string(marker), managedMarker) {
 		t.Fatalf("expected managed marker, got %q", marker)
+	}
+	if !strings.Contains(string(marker), "AGENT_SESSIONS_INTEGRATION_VERSION=2") {
+		t.Fatalf("expected agy integration version 2 marker, got %q", marker)
 	}
 }
 

@@ -21,7 +21,7 @@ const (
 	agyImportSource       = "antigravity"
 	agyImportComponent    = "hooks"
 	agyIntegrationID      = "agy"
-	agyIntegrationVersion = 1
+	agyIntegrationVersion = 2
 	agyIntegrationSource  = "agy-hook"
 )
 
@@ -272,7 +272,8 @@ func agyHookHandler(binary string, event string) map[string]any {
 func agyHookCommand(binary string, event string) string {
 	return strings.Join([]string{
 		shellQuote(binary),
-		"agy-hook",
+		"hook",
+		string(registry.HarnessAgy),
 		"--event", shellQuote(event),
 	}, " ")
 }

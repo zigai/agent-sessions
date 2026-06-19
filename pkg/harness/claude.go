@@ -24,6 +24,7 @@ func claudeAdapter() Adapter {
 		},
 		PayloadValidator: payloadValidator[claudeHookPayload](),
 		PayloadDefaults:  claudePayloadDefaults,
+		Hook:             nil,
 	}
 }
 

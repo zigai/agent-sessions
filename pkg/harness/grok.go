@@ -24,6 +24,7 @@ func grokAdapter() Adapter {
 		},
 		PayloadValidator: grokPayloadValidator,
 		PayloadDefaults:  grokPayloadDefaults,
+		Hook:             nil,
 	}
 }
 

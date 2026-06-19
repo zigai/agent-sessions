@@ -33,6 +33,7 @@ func cursorAdapter() Adapter {
 		},
 		PayloadValidator: payloadValidator[cursorHookPayload](),
 		PayloadDefaults:  cursorPayloadDefaults,
+		Hook:             nil,
 	}
 }
 

@@ -2,13 +2,19 @@ package harness
 
 import (
 	"fmt"
+	"maps"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/zigai/agent-sessions/pkg/registry"
 )
 
-const agyCommand = "agy"
+const (
+	agyCommand                     = "agy"
+	agyHookSource                  = "agy-hook"
+	agyHookAdditionalAttributeKeys = 4
+)
 
 func agyAdapter() Adapter {
 	return Adapter{
@@ -30,14 +36,11 @@ func agyAdapter() Adapter {
 		},
 		Installable: true,
 		ResumeCommand: func(sessionID string, _ string) []string {
-			if sessionID == "" {
-				return nil
-			}
-
-			return []string{agyCommand, "--conversation", sessionID}
+			return agyResumeCommand(sessionID)
 		},
 		PayloadValidator: agyPayloadValidator,
 		PayloadDefaults:  agyPayloadDefaults,
+		Hook:             agyHookAdapter(),
 	}
 }
 
@@ -61,6 +64,178 @@ func agyPayloadDefaults(payload map[string]any) PayloadDefaults {
 		Event:       payloadStringAny(payload, "hookEventName", "hook_event_name", "event"),
 		Attributes:  attributes,
 	}
+}
+
+func agyHookAdapter() *HookAdapter {
+	return &HookAdapter{
+		Event:  agyHookEvent,
+		Handle: agyHandleHook,
+	}
+}
+
+func agyHookEvent(payload map[string]any, explicitEvent string) string {
+	return firstNonEmpty(explicitEvent, payloadStringAny(payload, "hookEventName", "hook_event_name", "event"))
+}
+
+func agyHandleHook(invocation HookInvocation) HookResult {
+	report, ok := agyHookReport(invocation)
+
+	return HookResult{
+		Report:   report,
+		ReportOK: ok,
+		Response: agyHookResponse(invocation.Event),
+	}
+}
+
+func agyHookReport(invocation HookInvocation) (registry.Report, bool) {
+	state := agyStateForHook(invocation.Event, invocation.Payload, invocation.ParentArgs)
+	if state == "" {
+		var report registry.Report
+
+		return report, false
+	}
+
+	defaults := agyPayloadDefaults(invocation.Payload)
+	if defaults.SessionID == "" && defaults.SessionPath == "" {
+		var report registry.Report
+
+		return report, false
+	}
+
+	var tmux registry.TmuxContext
+	var observedAt time.Time
+
+	return registry.Report{
+		Harness:       registry.HarnessAgy,
+		State:         state,
+		SessionID:     defaults.SessionID,
+		SessionPath:   defaults.SessionPath,
+		ResumeCommand: agyResumeCommand(defaults.SessionID),
+		CWD:           defaults.CWD,
+		ProjectRoot:   defaults.ProjectRoot,
+		PID:           0,
+		PPID:          0,
+		TTY:           "",
+		Tmux:          tmux,
+		Source:        agyHookSource,
+		Confidence:    "hook",
+		Event:         invocation.Event,
+		Attributes:    agyHookAttributes(defaults.Attributes, invocation.Event, state, invocation.ParentArgs),
+		RawPayload:    invocation.RawPayload,
+		ObservedAt:    observedAt,
+	}, true
+}
+
+func agyResumeCommand(sessionID string) []string {
+	if sessionID == "" {
+		return nil
+	}
+
+	return []string{agyCommand, "--conversation", sessionID}
+}
+
+func agyStateForHook(event string, payload map[string]any, parentArgs []string) registry.State {
+	switch event {
+	case "PreInvocation", "PostInvocation":
+		return registry.StateRunning
+	case "PreToolUse":
+		if isAgyInputWaitingTool(payload) {
+			return registry.StateWaiting
+		}
+
+		return registry.StateRunning
+	case "PostToolUse":
+		if _, ok := payload["toolCall"].(map[string]any); !ok {
+			return ""
+		}
+
+		return registry.StateRunning
+	case "Stop":
+		if payloadBool(payload, "fullyIdle", "fully_idle") {
+			if agyArgsIndicateHeadless(parentArgs) {
+				return registry.StateExited
+			}
+
+			return registry.StateIdle
+		}
+
+		return registry.StateRunning
+	default:
+		return ""
+	}
+}
+
+func agyHookResponse(event string) map[string]any {
+	switch event {
+	case "PreToolUse":
+		return map[string]any{"decision": "allow"}
+	case "Stop":
+		return map[string]any{"decision": ""}
+	default:
+		return map[string]any{}
+	}
+}
+
+func agyHookAttributes(
+	defaultAttributes map[string]string,
+	event string,
+	state registry.State,
+	parentArgs []string,
+) map[string]string {
+	attributes := make(map[string]string, len(defaultAttributes)+agyHookAdditionalAttributeKeys)
+	maps.Copy(attributes, defaultAttributes)
+	if event != "" {
+		attributes["agy_hook_event"] = event
+	}
+	if state == registry.StateExited && agyArgsIndicateHeadless(parentArgs) {
+		attributes["agy_headless"] = "true"
+		attributes["agy_stop_state_override"] = "headless-parent"
+	}
+	attributes["agent_sessions_integration"] = agyHookSource
+
+	return attributes
+}
+
+func isAgyInputWaitingTool(payload map[string]any) bool {
+	switch agyToolName(payload) {
+	case "ask_permission", "ask_question":
+		return true
+	default:
+		return false
+	}
+}
+
+func agyToolName(payload map[string]any) string {
+	toolCall, ok := payload["toolCall"].(map[string]any)
+	if !ok {
+		return ""
+	}
+
+	name, ok := toolCall["name"].(string)
+	if !ok {
+		return ""
+	}
+
+	return strings.TrimSpace(name)
+}
+
+func agyArgsIndicateHeadless(args []string) bool {
+	return argsContainHeadlessPromptFlag(args, "--print", "--prompt")
+}
+
+func argsContainHeadlessPromptFlag(args []string, longFlags ...string) bool {
+	for _, arg := range args {
+		if arg == "-p" || strings.HasPrefix(arg, "-p") && arg != "-p" {
+			return true
+		}
+		for _, flag := range longFlags {
+			if arg == flag || strings.HasPrefix(arg, flag+"=") {
+				return true
+			}
+		}
+	}
+
+	return false
 }
 
 func nestedString(payload map[string]any, path ...string) string {
@@ -125,6 +300,25 @@ func payloadBoolString(payload map[string]any, keys ...string) string {
 	}
 
 	return ""
+}
+
+func payloadBool(payload map[string]any, keys ...string) bool {
+	for _, key := range keys {
+		value, ok := payload[key]
+		if !ok {
+			continue
+		}
+		switch typed := value.(type) {
+		case bool:
+			return typed
+		case string:
+			return strings.EqualFold(strings.TrimSpace(typed), "true")
+		default:
+			return strings.EqualFold(fmt.Sprint(typed), "true")
+		}
+	}
+
+	return false
 }
 
 func firstNonEmpty(values ...string) string {

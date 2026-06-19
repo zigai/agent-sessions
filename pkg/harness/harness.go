@@ -47,6 +47,7 @@ type Adapter struct {
 	ResumeCommand    func(sessionID string, sessionPath string) []string
 	PayloadValidator HookPayloadValidator
 	PayloadDefaults  func(payload map[string]any) PayloadDefaults
+	Hook             *HookAdapter
 }
 
 func All() []Adapter {
@@ -167,6 +168,10 @@ func cloneAdapter(adapter Adapter) Adapter {
 	adapter.Aliases = cloneStrings(adapter.Aliases)
 	adapter.ProcessNames = cloneStrings(adapter.ProcessNames)
 	adapter.Env = cloneEnvKeys(adapter.Env)
+	if adapter.Hook != nil {
+		hook := *adapter.Hook
+		adapter.Hook = &hook
+	}
 
 	return adapter
 }
@@ -181,6 +186,7 @@ func emptyAdapter() Adapter {
 		ResumeCommand:    nil,
 		PayloadValidator: nil,
 		PayloadDefaults:  nil,
+		Hook:             nil,
 	}
 }
 

@@ -26,6 +26,7 @@ func codexAdapter() Adapter {
 		},
 		PayloadValidator: payloadValidator[codexHookPayload](),
 		PayloadDefaults:  codexPayloadDefaults,
+		Hook:             nil,
 	}
 }
 

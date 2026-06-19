@@ -24,5 +24,6 @@ func openCodeAdapter() Adapter {
 		},
 		PayloadValidator: nil,
 		PayloadDefaults:  nil,
+		Hook:             nil,
 	}
 }

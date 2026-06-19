@@ -26,5 +26,6 @@ func kiloAdapter() Adapter {
 		},
 		PayloadValidator: nil,
 		PayloadDefaults:  nil,
+		Hook:             nil,
 	}
 }
