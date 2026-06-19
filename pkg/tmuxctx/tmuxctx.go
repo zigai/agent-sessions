@@ -39,24 +39,13 @@ func Current(ctx context.Context) (registry.TmuxContext, error) {
 		return registry.TmuxContext{}, ErrNoTmuxContext
 	}
 
-	format := tmuxFormat([]string{
-		"#{session_id}",
-		"#{session_name}",
-		"#{window_id}",
-		"#{window_index}",
-		"#{window_name}",
-		"#{pane_id}",
-		"#{pane_index}",
-		"#{pane_current_path}",
-		"#{pane_pid}",
-		"#{pane_tty}",
-		"#{client_tty}",
-	})
+	format := currentFormat()
 	output, err := runTmux(ctx, currentDisplayMessageArgs(format, os.Getenv("TMUX_PANE"))...)
 	if err != nil {
 		if paneID := os.Getenv("TMUX_PANE"); paneID != "" {
 			return registry.TmuxContext{
 				Inside:          true,
+				ServerSocket:    tmuxServerSocketFromEnv(),
 				SessionID:       "",
 				SessionName:     "",
 				WindowID:        "",
@@ -74,7 +63,13 @@ func Current(ctx context.Context) (registry.TmuxContext, error) {
 		return registry.TmuxContext{}, err
 	}
 
-	return ParseCurrent(output)
+	current, err := ParseCurrent(output)
+	if err != nil {
+		return registry.TmuxContext{}, err
+	}
+	current.ServerSocket = tmuxServerSocketFromEnv()
+
+	return current, nil
 }
 
 func currentDisplayMessageArgs(format string, paneID string) []string {
@@ -87,25 +82,54 @@ func currentDisplayMessageArgs(format string, paneID string) []string {
 }
 
 func ListPanes(ctx context.Context) ([]Pane, error) {
-	format := tmuxFormat([]string{
-		"#{session_id}",
-		"#{session_name}",
-		"#{window_id}",
-		"#{window_index}",
-		"#{window_name}",
-		"#{pane_id}",
-		"#{pane_index}",
-		"#{pane_current_path}",
-		"#{pane_pid}",
-		"#{pane_tty}",
-		"#{pane_current_command}",
-	})
+	format := listPanesFormat()
 	output, err := runTmux(ctx, "list-panes", "-a", "-F", format)
 	if err != nil {
 		return nil, err
 	}
 
-	return ParseListPanes(output)
+	panes, err := ParseListPanes(output)
+	if err != nil {
+		return nil, err
+	}
+	serverSocket := tmuxServerSocketFromEnv()
+	for index := range panes {
+		panes[index].Tmux.ServerSocket = serverSocket
+	}
+
+	return panes, nil
+}
+
+func currentFormat() string {
+	return tmuxFormat([]string{
+		"session_id",
+		"session_name",
+		"window_id",
+		"window_index",
+		"window_name",
+		"pane_id",
+		"pane_index",
+		"pane_current_path",
+		"pane_pid",
+		"pane_tty",
+		"client_tty",
+	})
+}
+
+func listPanesFormat() string {
+	return tmuxFormat([]string{
+		"session_id",
+		"session_name",
+		"window_id",
+		"window_index",
+		"window_name",
+		"pane_id",
+		"pane_index",
+		"pane_current_path",
+		"pane_pid",
+		"pane_tty",
+		"pane_current_command",
+	})
 }
 
 func SendInterrupt(ctx context.Context, paneID string) error {
@@ -132,6 +156,7 @@ func ParseCurrent(output string) (registry.TmuxContext, error) {
 
 	return registry.TmuxContext{
 		Inside:          true,
+		ServerSocket:    "",
 		SessionID:       fields[0],
 		SessionName:     fields[1],
 		WindowID:        fields[2],
@@ -176,6 +201,7 @@ func panesFromFields(fields []string) ([]Pane, error) {
 		panes = append(panes, Pane{
 			Tmux: registry.TmuxContext{
 				Inside:          true,
+				ServerSocket:    "",
 				SessionID:       paneFields[0],
 				SessionName:     paneFields[1],
 				WindowID:        paneFields[2],
@@ -221,6 +247,17 @@ func tmuxFormat(fields []string) string {
 	}
 
 	return strings.Join(parts, " ")
+}
+
+func tmuxServerSocketFromEnv() string {
+	tmuxEnv := strings.TrimSpace(os.Getenv("TMUX"))
+	if tmuxEnv == "" {
+		return ""
+	}
+
+	socket, _, _ := strings.Cut(tmuxEnv, ",")
+
+	return socket
 }
 
 func parseTmuxFields(output string, expectedFields int) ([]string, error) {
@@ -339,7 +376,7 @@ func appendDoubleQuotedShellWord(current *strings.Builder, input string, index i
 }
 
 func isShellWhitespace(char byte) bool {
-	return char == ' ' || char == '\t' || char == '\n' || char == '\r'
+	return char == ' ' || char == '\n' || char == '\r'
 }
 
 func splitLegacyFields(output string, expectedFields int) []string {
