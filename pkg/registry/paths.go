@@ -3,7 +3,6 @@ package registry
 import (
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 )
 
@@ -21,12 +20,6 @@ func DefaultStateDir() string {
 
 	if value := stringsTrimmedEnv("XDG_STATE_HOME"); value != "" {
 		return filepath.Join(value, "agent-sessions")
-	}
-
-	if runtime.GOOS == "windows" {
-		if value := stringsTrimmedEnv("LOCALAPPDATA"); value != "" {
-			return filepath.Join(value, "agent-sessions")
-		}
 	}
 
 	if home := stringsTrimmedEnv("HOME"); home != "" {

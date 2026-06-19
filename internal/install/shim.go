@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 
 	harnesspkg "github.com/zigai/agent-sessions/pkg/harness"
@@ -108,25 +107,7 @@ func lookPathExcludingShimDir(file string, shimDir string) (string, error) {
 }
 
 func executableCandidates(path string) []string {
-	if runtime.GOOS != "windows" || filepath.Ext(path) != "" {
-		return []string{path}
-	}
-
-	extensions := filepath.SplitList(os.Getenv("PATHEXT"))
-	if len(extensions) == 0 {
-		extensions = []string{".COM", ".EXE", ".BAT", ".CMD"}
-	}
-
-	candidates := make([]string, 0, len(extensions)+1)
-	candidates = append(candidates, path)
-	for _, extension := range extensions {
-		if extension == "" {
-			continue
-		}
-		candidates = append(candidates, path+extension)
-	}
-
-	return candidates
+	return []string{path}
 }
 
 func isExecutable(path string) bool {
@@ -134,10 +115,6 @@ func isExecutable(path string) bool {
 	if err != nil || info.IsDir() {
 		return false
 	}
-	if runtime.GOOS == "windows" {
-		return true
-	}
-
 	return info.Mode()&0o111 != 0
 }
 
@@ -155,10 +132,6 @@ func pathInDir(path string, dir string) bool {
 func samePath(left string, right string) bool {
 	left = canonicalPath(left)
 	right = canonicalPath(right)
-	if runtime.GOOS == "windows" {
-		return strings.EqualFold(left, right)
-	}
-
 	return left == right
 }
 
