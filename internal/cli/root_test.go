@@ -239,6 +239,25 @@ func TestReportHelpListsSupportedHarnesses(t *testing.T) {
 	}
 }
 
+func TestRootHelpShowsGenericHookOnly(t *testing.T) {
+	t.Parallel()
+
+	var output bytes.Buffer
+	cmd := NewRootCommand(&output, &bytes.Buffer{})
+	cmd.SetArgs([]string{"--help"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("help command failed: %v", err)
+	}
+
+	got := output.String()
+	if !strings.Contains(got, "hook") {
+		t.Fatalf("expected root help to include hook command, got %q", got)
+	}
+	if strings.Contains(got, "agy-hook") {
+		t.Fatalf("expected root help to hide agy-hook compatibility command, got %q", got)
+	}
+}
+
 func TestReportRequiresHarness(t *testing.T) {
 	t.Parallel()
 

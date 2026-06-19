@@ -1,12 +1,13 @@
-// Package cli implements command-line entrypoints for agent-sessions.
 package cli
 
-// Managed hook commands are hidden entrypoints for harness-native request/response
-// hooks. These hooks must write protocol JSON such as {"decision":"allow"} while
-// recording session state, so they cannot use the one-way `agent-sessions report`
-// command directly. Keep this file as CLI transport glue; harness protocol rules
-// belong in pkg/harness. The agy-hook command remains as a compatibility alias
-// for already-installed Antigravity plugins.
+// Managed hook commands are integration entrypoints for harness-native
+// request/response hooks. These hooks must write protocol JSON such as
+// {"decision":"allow"} while recording session state, so they cannot use the
+// one-way `agent-sessions report` command directly. Keep this file as CLI
+// transport glue; harness protocol rules belong in pkg/harness.
+//
+// The agy-hook command remains hidden as a compatibility alias for
+// already-installed Antigravity plugins.
 
 import (
 	"context"
@@ -33,10 +34,9 @@ func (app *application) newHookCommand() *cobra.Command {
 	options := managedHookOptions{}
 
 	cmd := &cobra.Command{
-		Use:    hookCommandName + " <harness>",
-		Short:  "Run a managed native harness hook",
-		Hidden: true,
-		Args:   cobra.ExactArgs(1),
+		Use:   hookCommandName + " <harness>",
+		Short: "Run a request/response hook for a harness",
+		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return app.runManagedHook(cmd.Context(), cmd.InOrStdin(), args[0], options)
 		},
