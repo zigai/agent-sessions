@@ -206,3 +206,9 @@ linters:
 
       - path: "internal/install/.*\\.go"
         linters: [dupl]
+
+      - linters: [goconst]
+        text: "string `Stop` has .* occurrences"
+
+      - path: "_test\\.go"
+        linters: [goconst]
