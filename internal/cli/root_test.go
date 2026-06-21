@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -348,7 +349,7 @@ func TestReadCommandsAreMergedIntoList(t *testing.T) {
 	}
 
 	listCommand := findRootTestCommand(t, cmd, listCommandName)
-	for _, flagName := range []string{"summary", "watch", "no-snapshot", "format"} {
+	for _, flagName := range []string{"summary", "watch", "live", "no-snapshot", "format"} {
 		if listCommand.Flags().Lookup(flagName) == nil {
 			t.Fatalf("expected list flag %s to be registered", flagName)
 		}
@@ -392,6 +393,114 @@ func TestReportAndList(t *testing.T) {
 	}
 	if rfc3339Pattern().MatchString(output) {
 		t.Fatalf("expected default list output not to include RFC3339 timestamp, got %q", output)
+	}
+}
+
+func TestListShortensHomeCWDInTextOutput(t *testing.T) {
+	t.Parallel()
+
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		t.Skip("user home directory unavailable")
+	}
+
+	storePath := filepath.Join(t.TempDir(), "state.json")
+	store := registry.NewFileStore(storePath)
+	store.SetNowForTest(func() time.Time { return time.Date(2026, 6, 17, 10, 0, 0, 0, time.UTC) })
+	cwd := filepath.Join(home, "Projects", "sesh")
+	if _, reportErr := store.Report(context.Background(), registry.Report{
+		Harness:   registry.HarnessCodex,
+		State:     registry.StateRunning,
+		SessionID: testSessionID,
+		CWD:       cwd,
+	}); reportErr != nil {
+		t.Fatalf("reporting session: %v", reportErr)
+	}
+
+	var listOut bytes.Buffer
+	listCmd := NewRootCommand(&listOut, &bytes.Buffer{})
+	listCmd.SetArgs([]string{storeFlag, storePath, listCommandName})
+	if executeErr := listCmd.Execute(); executeErr != nil {
+		t.Fatalf("list command failed: %v", executeErr)
+	}
+
+	output := listOut.String()
+	want := filepath.Join("~", "Projects", "sesh")
+	if !strings.Contains(output, want) {
+		t.Fatalf("expected list output to shorten home cwd to %q, got %q", want, output)
+	}
+	if strings.Contains(output, cwd) {
+		t.Fatalf("expected list text output not to include absolute home cwd %q, got %q", cwd, output)
+	}
+}
+
+func TestListLiveExcludesExitedSessions(t *testing.T) {
+	t.Parallel()
+
+	storePath := filepath.Join(t.TempDir(), "state.json")
+	store := registry.NewFileStore(storePath)
+	store.SetNowForTest(func() time.Time { return time.Date(2026, 6, 17, 10, 0, 0, 0, time.UTC) })
+	ownedTmux := func(pane string) registry.TmuxContext {
+		return registry.TmuxContext{Inside: true, SessionName: "work", PaneID: pane}
+	}
+	var ownerlessIdle registry.Session
+	for _, report := range []registry.Report{
+		{Harness: registry.HarnessCodex, State: registry.StateIdle, SessionID: "idle", Tmux: ownedTmux("%1")},
+		{Harness: registry.HarnessPi, State: registry.StateRunning, SessionID: "running", Tmux: ownedTmux("%2")},
+		{Harness: registry.HarnessGrok, State: registry.StateWaiting, SessionID: "waiting", Tmux: ownedTmux("%3")},
+		{Harness: registry.HarnessOpenCode, State: registry.StateUnknown, SessionID: "unknown", Tmux: ownedTmux("%4")},
+		{Harness: registry.HarnessAgy, State: registry.StateExited, SessionID: "exited", Tmux: ownedTmux("%5")},
+		{Harness: registry.HarnessKimiCode, State: registry.StateIdle, SessionID: "ownerless-idle"},
+	} {
+		session, err := store.Report(context.Background(), report)
+		if err != nil {
+			t.Fatalf("reporting %s session: %v", report.State, err)
+		}
+		if report.SessionID == "ownerless-idle" {
+			ownerlessIdle = session
+		}
+	}
+
+	var listOut bytes.Buffer
+	listCmd := NewRootCommand(&listOut, &bytes.Buffer{})
+	listCmd.SetArgs([]string{storeFlag, storePath, listCommandName, "--live"})
+	if err := listCmd.Execute(); err != nil {
+		t.Fatalf("list command failed: %v", err)
+	}
+
+	output := listOut.String()
+	for _, state := range []string{"idle", "running", "waiting", "unknown"} {
+		if !regexp.MustCompile(`\s` + regexp.QuoteMeta(state) + `\s`).MatchString(output) {
+			t.Fatalf("expected live output to include %s session, got %q", state, output)
+		}
+	}
+	if regexp.MustCompile(`\sexited\s`).MatchString(output) {
+		t.Fatalf("expected live output to exclude exited sessions, got %q", output)
+	}
+	if strings.Contains(output, ownerlessIdle.ID) {
+		t.Fatalf("expected live output to exclude ownerless idle sessions, got %q", output)
+	}
+}
+
+func TestFormatHumanPathOnlyShortensHome(t *testing.T) {
+	t.Parallel()
+
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		t.Skip("user home directory unavailable")
+	}
+
+	nested := filepath.Join(home, "Projects", "sesh")
+	wantNested := filepath.Join("~", "Projects", "sesh")
+	if got := formatHumanPath(nested); got != wantNested {
+		t.Fatalf("expected nested home path %q, got %q", wantNested, got)
+	}
+	if got := formatHumanPath(home); got != "~" {
+		t.Fatalf("expected home path to become ~, got %q", got)
+	}
+	notHome := home + "-suffix"
+	if got := formatHumanPath(notHome); got != notHome {
+		t.Fatalf("expected non-home prefix path to stay unchanged, got %q", got)
 	}
 }
 
@@ -755,6 +864,70 @@ func TestScanMarksMissingTmuxPaneSessionsExited(t *testing.T) {
 	}
 }
 
+func TestScanMarksStaleOwnerlessSessionsExited(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	storePath := filepath.Join(t.TempDir(), "state.json")
+	store := registry.NewFileStore(storePath)
+	staleAt := time.Now().UTC().Add(-time.Hour)
+	store.SetNowForTest(func() time.Time { return staleAt })
+	stale, err := store.Report(ctx, registry.Report{
+		Harness:    registry.HarnessCodex,
+		State:      registry.StateIdle,
+		SessionID:  "stale-ownerless",
+		CWD:        "/repo/stale",
+		Source:     "codex-hook",
+		Confidence: "hook",
+	})
+	if err != nil {
+		t.Fatalf("reporting stale ownerless session: %v", err)
+	}
+	freshAt := time.Now().UTC()
+	store.SetNowForTest(func() time.Time { return freshAt })
+	fresh, err := store.Report(ctx, registry.Report{
+		Harness:    registry.HarnessGrok,
+		State:      registry.StateIdle,
+		SessionID:  "fresh-ownerless",
+		CWD:        "/repo/fresh",
+		Source:     "grok-hook",
+		Confidence: "hook",
+	})
+	if err != nil {
+		t.Fatalf("reporting fresh ownerless session: %v", err)
+	}
+
+	app := &application{
+		storePath: storePath,
+		stdout:    &bytes.Buffer{},
+		stderr:    &bytes.Buffer{},
+		listTmuxPanes: func(context.Context) ([]tmuxctx.Pane, error) {
+			return nil, nil
+		},
+	}
+	if scanErr := app.runScan(ctx, scanOptions{
+		state:               string(registry.StateIdle),
+		staleOwnerlessAfter: defaultStaleOwnerlessAfter,
+	}); scanErr != nil {
+		t.Fatalf("runScan returned error: %v", scanErr)
+	}
+
+	updatedStale, err := store.Get(ctx, stale.ID)
+	if err != nil {
+		t.Fatalf("getting stale session: %v", err)
+	}
+	if updatedStale.State != registry.StateExited || updatedStale.LastEvent != "ownerless-stale" {
+		t.Fatalf("expected stale ownerless session to be exited, got %#v", updatedStale)
+	}
+	updatedFresh, err := store.Get(ctx, fresh.ID)
+	if err != nil {
+		t.Fatalf("getting fresh session: %v", err)
+	}
+	if updatedFresh.State != registry.StateIdle {
+		t.Fatalf("expected fresh ownerless session to stay idle, got %#v", updatedFresh)
+	}
+}
+
 func TestListAbsoluteTime(t *testing.T) {
 	t.Parallel()
 
@@ -776,8 +949,8 @@ func TestListAbsoluteTime(t *testing.T) {
 	var listOut bytes.Buffer
 	listCmd := NewRootCommand(&listOut, &bytes.Buffer{})
 	listCmd.SetArgs([]string{storeFlag, storePath, listCommandName, "--absolute-time"})
-	if err := listCmd.Execute(); err != nil {
-		t.Fatalf("list command failed: %v", err)
+	if executeErr := listCmd.Execute(); executeErr != nil {
+		t.Fatalf("list command failed: %v", executeErr)
 	}
 
 	output := listOut.String()
@@ -829,6 +1002,7 @@ func TestListSortUpdatedDesc(t *testing.T) {
 	storePath := filepath.Join(t.TempDir(), "state.json")
 	store := registry.NewFileStore(storePath)
 	ctx := context.Background()
+	store.SetNowForTest(func() time.Time { return time.Date(2026, 6, 17, 10, 0, 0, 0, time.UTC) })
 	oldSession, err := store.Report(ctx, registry.Report{
 		Harness:    registry.HarnessCodex,
 		State:      registry.StateIdle,
@@ -838,6 +1012,7 @@ func TestListSortUpdatedDesc(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reporting old session: %v", err)
 	}
+	store.SetNowForTest(func() time.Time { return time.Date(2026, 6, 17, 11, 0, 0, 0, time.UTC) })
 	newSession, err := store.Report(ctx, registry.Report{
 		Harness:    registry.HarnessCodex,
 		State:      registry.StateRunning,
@@ -864,6 +1039,51 @@ func TestListSortUpdatedDesc(t *testing.T) {
 	}
 	if newIndex > oldIndex {
 		t.Fatalf("expected newest session first, got %q", output)
+	}
+}
+
+func TestListDefaultsToUpdatedAscending(t *testing.T) {
+	t.Parallel()
+
+	storePath := filepath.Join(t.TempDir(), "state.json")
+	store := registry.NewFileStore(storePath)
+	ctx := context.Background()
+	store.SetNowForTest(func() time.Time { return time.Date(2026, 6, 17, 11, 0, 0, 0, time.UTC) })
+	newSession, err := store.Report(ctx, registry.Report{
+		Harness:    registry.HarnessCodex,
+		State:      registry.StateRunning,
+		SessionID:  "new",
+		ObservedAt: time.Date(2026, 6, 17, 11, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("reporting new session: %v", err)
+	}
+	store.SetNowForTest(func() time.Time { return time.Date(2026, 6, 17, 10, 0, 0, 0, time.UTC) })
+	oldSession, err := store.Report(ctx, registry.Report{
+		Harness:    registry.HarnessCodex,
+		State:      registry.StateIdle,
+		SessionID:  "old",
+		ObservedAt: time.Date(2026, 6, 17, 10, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("reporting old session: %v", err)
+	}
+
+	var listOut bytes.Buffer
+	listCmd := NewRootCommand(&listOut, &bytes.Buffer{})
+	listCmd.SetArgs([]string{storeFlag, storePath, listCommandName, "--absolute-time"})
+	if executeErr := listCmd.Execute(); executeErr != nil {
+		t.Fatalf("list command failed: %v", executeErr)
+	}
+
+	output := listOut.String()
+	oldIndex := strings.Index(output, oldSession.ID)
+	newIndex := strings.Index(output, newSession.ID)
+	if oldIndex < 0 || newIndex < 0 {
+		t.Fatalf("expected both sessions in output, got %q", output)
+	}
+	if oldIndex > newIndex {
+		t.Fatalf("expected newest session at the bottom by default, got %q", output)
 	}
 }
 

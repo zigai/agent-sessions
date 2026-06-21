@@ -786,7 +786,7 @@ func formatWatchPlainEvent(event watchEvent) string {
 		{key: "prev", value: string(event.PreviousState)},
 		{key: "event", value: event.Event},
 		{key: "prev_event", value: event.PreviousEvent},
-		{key: "cwd", value: event.CWD},
+		{key: "cwd", value: formatHumanPath(event.CWD)},
 		{key: "tmux", value: event.Tmux},
 	}
 	for _, field := range fields {
@@ -882,7 +882,7 @@ func formatWatchDetails(event watchEvent) string {
 		{key: "prev", value: string(event.PreviousState)},
 		{key: "event", value: event.Event},
 		{key: "prev_event", value: event.PreviousEvent},
-		{key: "cwd", value: event.CWD},
+		{key: "cwd", value: formatHumanPath(event.CWD)},
 		{key: "tmux", value: event.Tmux},
 	}
 	parts := make([]string, 0, len(fields))

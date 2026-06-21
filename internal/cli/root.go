@@ -61,8 +61,9 @@ const (
 )
 
 const (
-	listCommandName = "list"
-	listSortUpdated = "updated"
+	listCommandName            = "list"
+	listSortUpdated            = "updated"
+	defaultStaleOwnerlessAfter = 5 * time.Minute
 )
 
 const (
@@ -688,6 +689,7 @@ type listOptions struct {
 	state         string
 	tmuxSession   string
 	activeOnly    bool
+	liveOnly      bool
 	summary       bool
 	watch         bool
 	absoluteTime  bool
@@ -721,8 +723,9 @@ func (app *application) newListCommand() *cobra.Command {
 	cmd.Flags().StringVar(&options.harness, "harness", "", "filter by harness")
 	cmd.Flags().StringVar(&options.state, "state", "", "filter by state")
 	cmd.Flags().StringVar(&options.tmuxSession, "tmux-session", "", "filter by tmux session id or name")
-	cmd.Flags().StringVar(&options.sortBy, "sort", "", "sort by: tmux, updated, state-changed, created, ended, event-at, event, harness, state, cwd, id")
-	cmd.Flags().BoolVar(&options.activeOnly, "active", false, "only sessions in running or waiting states")
+	cmd.Flags().StringVar(&options.sortBy, "sort", "", "sort by: tmux, updated, state-changed, created, ended, event-at, event, harness, state, cwd, id (default: updated)")
+	cmd.Flags().BoolVar(&options.activeOnly, "active", false, "only busy sessions in running or waiting states")
+	cmd.Flags().BoolVar(&options.liveOnly, "live", false, "only sessions with a known owner that have not exited")
 	cmd.Flags().BoolVar(&options.summary, "summary", false, "summarize agent counts by tmux session")
 	cmd.Flags().BoolVar(&options.watch, "watch", false, "watch registry state changes")
 	cmd.Flags().BoolVar(&options.absoluteTime, "absolute-time", false, "show full RFC3339 timestamps in text output")
@@ -823,7 +826,7 @@ func (app *application) runListSessions(ctx context.Context, options listOptions
 			tmuxSessionLabel(session.Tmux),
 			tmuxWindowLabel(session.Tmux),
 			session.Tmux.PaneID,
-			session.CWD,
+			formatHumanPath(session.CWD),
 			formatUpdatedAt(session.UpdatedAt, now, options.absoluteTime),
 		)
 		if rowErr != nil {
@@ -936,11 +939,15 @@ func (app *application) newGetCommand() *cobra.Command {
 }
 
 type scanOptions struct {
-	state string
+	state               string
+	staleOwnerlessAfter time.Duration
 }
 
 func (app *application) newScanCommand() *cobra.Command {
-	options := scanOptions{state: string(registry.StateUnknown)}
+	options := scanOptions{
+		state:               string(registry.StateUnknown),
+		staleOwnerlessAfter: defaultStaleOwnerlessAfter,
+	}
 	cmd := &cobra.Command{
 		Use:   "scan",
 		Short: "Scan tmux panes for supported harness processes",
@@ -949,6 +956,7 @@ func (app *application) newScanCommand() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&options.state, "state", options.state, "state to use for newly observed panes")
+	cmd.Flags().DurationVar(&options.staleOwnerlessAfter, "stale-ownerless-after", options.staleOwnerlessAfter, "mark ownerless non-exited sessions as exited after this age; negative disables")
 
 	return cmd
 }
@@ -973,6 +981,12 @@ func (app *application) runScan(ctx context.Context, options scanOptions) error 
 	_, err = markMissingTmuxPaneSessionsExited(ctx, store, panes)
 	if err != nil {
 		return err
+	}
+	if options.staleOwnerlessAfter >= 0 {
+		_, err = markStaleOwnerlessSessionsExited(ctx, store, time.Now().UTC(), options.staleOwnerlessAfter)
+		if err != nil {
+			return err
+		}
 	}
 
 	sessions := make([]registry.Session, 0, len(panes))
@@ -1055,6 +1069,69 @@ func markMissingTmuxPaneSessionsExited(
 	return exited, nil
 }
 
+func markStaleOwnerlessSessionsExited(
+	ctx context.Context,
+	store registry.Store,
+	now time.Time,
+	staleAfter time.Duration,
+) ([]registry.Session, error) {
+	sessions, err := store.List(ctx, registry.Filter{})
+	if err != nil {
+		return nil, fmt.Errorf("listing sessions for ownerless reconciliation: %w", err)
+	}
+
+	exited := make([]registry.Session, 0)
+	for _, session := range sessions {
+		if session.State == registry.StateExited || registry.HasOwner(session) {
+			continue
+		}
+		if !ownerlessSessionIsStale(session, now, staleAfter) {
+			continue
+		}
+
+		updated, reportErr := store.Report(ctx, registry.Report{
+			Harness:       session.Harness,
+			State:         registry.StateExited,
+			SessionID:     session.SessionID,
+			SessionPath:   session.SessionPath,
+			ResumeCommand: session.ResumeCommand,
+			CWD:           session.CWD,
+			ProjectRoot:   session.ProjectRoot,
+			TTY:           session.TTY,
+			Source:        "registry-reconcile",
+			Confidence:    session.Confidence,
+			Event:         "ownerless-stale",
+			Attributes: map[string]string{
+				"agent_sessions_reconcile": "ownerless-stale",
+			},
+		})
+		if reportErr != nil {
+			return nil, fmt.Errorf("marking stale ownerless session exited: %w", reportErr)
+		}
+		exited = append(exited, updated)
+	}
+
+	return exited, nil
+}
+
+func ownerlessSessionIsStale(session registry.Session, now time.Time, staleAfter time.Duration) bool {
+	if staleAfter < 0 {
+		return false
+	}
+	reference := session.LastSeenAt
+	if reference.IsZero() {
+		reference = session.UpdatedAt
+	}
+	if reference.IsZero() {
+		reference = session.CreatedAt
+	}
+	if reference.IsZero() {
+		return false
+	}
+
+	return !reference.After(now) && now.Sub(reference) >= staleAfter
+}
+
 func liveTmuxPaneKeys(panes []tmuxctx.Pane) map[string]struct{} {
 	keys := make(map[string]struct{}, len(panes))
 	for _, pane := range panes {
@@ -1124,6 +1201,7 @@ func buildFilter(options listOptions) (registry.Filter, error) {
 	filter := registry.Filter{
 		TmuxSession: options.tmuxSession,
 		ActiveOnly:  options.activeOnly,
+		LiveOnly:    options.liveOnly,
 	}
 
 	if options.harness != "" {
@@ -1150,11 +1228,7 @@ func buildFilter(options listOptions) (registry.Filter, error) {
 func sortListSessions(sessions []registry.Session, options listOptions) error {
 	sortBy := strings.TrimSpace(options.sortBy)
 	if sortBy == "" {
-		if options.desc {
-			reverseSessions(sessions)
-		}
-
-		return nil
+		sortBy = listSortUpdated
 	}
 
 	less, err := listSortLess(sortBy)
@@ -1172,12 +1246,6 @@ func sortListSessions(sessions []registry.Session, options listOptions) error {
 	})
 
 	return nil
-}
-
-func reverseSessions(sessions []registry.Session) {
-	for left, right := 0, len(sessions)-1; left < right; left, right = left+1, right-1 {
-		sessions[left], sessions[right] = sessions[right], sessions[left]
-	}
 }
 
 type sessionCompareFunc func(registry.Session, registry.Session) int
@@ -1526,6 +1594,27 @@ func formatUpdatedAt(updatedAt time.Time, now time.Time, absolute bool) string {
 	}
 
 	return formatElapsed(elapsed)
+}
+
+func formatHumanPath(path string) string {
+	if path == "" {
+		return ""
+	}
+
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return path
+	}
+
+	relative, err := filepath.Rel(home, path)
+	if err != nil || filepath.IsAbs(relative) || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return path
+	}
+	if relative == "." {
+		return "~"
+	}
+
+	return filepath.Join("~", relative)
 }
 
 func formatElapsed(elapsed time.Duration) string {
