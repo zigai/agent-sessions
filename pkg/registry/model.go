@@ -121,6 +121,7 @@ type Filter struct {
 	State       State
 	TmuxSession string
 	ActiveOnly  bool
+	LiveOnly    bool
 }
 
 type Summary struct {
@@ -186,6 +187,14 @@ func NormalizeState(value string) (State, error) {
 
 func IsActive(state State) bool {
 	return state == StateRunning || state == StateWaiting
+}
+
+func HasOwner(session Session) bool {
+	return session.Tmux.PaneID != "" || session.PID > 0
+}
+
+func IsLive(session Session) bool {
+	return session.State != StateExited && HasOwner(session)
 }
 
 func sessionIDForReport(report Report) string {
@@ -381,26 +390,44 @@ func mergeAttributes(existing map[string]string, incoming map[string]string) map
 func filterSessions(sessions []Session, filter Filter) []Session {
 	filtered := make([]Session, 0, len(sessions))
 	for _, session := range sessions {
-		if filter.Harness != "" && session.Harness != filter.Harness {
-			continue
+		if sessionMatchesFilter(session, filter) {
+			filtered = append(filtered, session)
 		}
-		if filter.State != "" && session.State != filter.State {
-			continue
-		}
-		if filter.ActiveOnly && !IsActive(session.State) {
-			continue
-		}
-		if filter.TmuxSession != "" &&
-			session.Tmux.SessionName != filter.TmuxSession &&
-			session.Tmux.SessionID != filter.TmuxSession {
-			continue
-		}
-		filtered = append(filtered, session)
 	}
 
 	sortSessions(filtered)
 
 	return filtered
+}
+
+func sessionMatchesFilter(session Session, filter Filter) bool {
+	return matchesHarnessFilter(session, filter) &&
+		matchesStateFilter(session, filter) &&
+		matchesActiveFilter(session, filter) &&
+		matchesLiveFilter(session, filter) &&
+		matchesTmuxSessionFilter(session, filter)
+}
+
+func matchesHarnessFilter(session Session, filter Filter) bool {
+	return filter.Harness == "" || session.Harness == filter.Harness
+}
+
+func matchesStateFilter(session Session, filter Filter) bool {
+	return filter.State == "" || session.State == filter.State
+}
+
+func matchesActiveFilter(session Session, filter Filter) bool {
+	return !filter.ActiveOnly || IsActive(session.State)
+}
+
+func matchesLiveFilter(session Session, filter Filter) bool {
+	return !filter.LiveOnly || IsLive(session)
+}
+
+func matchesTmuxSessionFilter(session Session, filter Filter) bool {
+	return filter.TmuxSession == "" ||
+		session.Tmux.SessionName == filter.TmuxSession ||
+		session.Tmux.SessionID == filter.TmuxSession
 }
 
 func sortSessions(sessions []Session) {

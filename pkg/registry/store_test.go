@@ -25,6 +25,103 @@ func TestFileStoreReportAndList(t *testing.T) {
 	assertStoreGCKeepsOldLiveSession(t, store, session.ID, now)
 }
 
+func TestFileStoreListLiveOnlyExcludesExited(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	now := time.Date(2026, 6, 17, 10, 0, 0, 0, time.UTC)
+	store := NewFileStore(filepath.Join(t.TempDir(), "state.json"))
+	store.SetNowForTest(func() time.Time { return now })
+	for _, report := range []Report{
+		liveOnlyTestReport(HarnessCodex, StateIdle, "idle", liveOnlyTestTmux("%1")),
+		liveOnlyTestReport(HarnessPi, StateRunning, "running", liveOnlyTestTmux("%2")),
+		liveOnlyTestReport(HarnessGrok, StateWaiting, "waiting", liveOnlyTestTmux("%3")),
+		liveOnlyTestReport(HarnessOpenCode, StateUnknown, "unknown", liveOnlyTestTmux("%4")),
+		liveOnlyTestReport(HarnessAgy, StateExited, "exited", liveOnlyTestTmux("%5")),
+		liveOnlyTestReport(HarnessKimiCode, StateIdle, "ownerless-idle", emptyLiveOnlyTestTmux()),
+	} {
+		if _, err := store.Report(ctx, report); err != nil {
+			t.Fatalf("Report(%s) returned error: %v", report.State, err)
+		}
+	}
+
+	sessions, err := store.List(ctx, Filter{
+		Harness:     "",
+		State:       "",
+		TmuxSession: "",
+		ActiveOnly:  false,
+		LiveOnly:    true,
+	})
+	if err != nil {
+		t.Fatalf("List returned error: %v", err)
+	}
+	states := make([]State, 0, len(sessions))
+	for _, session := range sessions {
+		states = append(states, session.State)
+		if session.State == StateExited {
+			t.Fatalf("expected live filter to exclude exited session: %#v", session)
+		}
+		if !HasOwner(session) {
+			t.Fatalf("expected live filter to exclude ownerless session: %#v", session)
+		}
+	}
+	for _, want := range []State{StateIdle, StateRunning, StateWaiting, StateUnknown} {
+		if !slices.Contains(states, want) {
+			t.Fatalf("expected live filter to include %s; got states %#v", want, states)
+		}
+	}
+}
+
+func liveOnlyTestReport(harness Harness, state State, sessionID string, tmux TmuxContext) Report {
+	return Report{
+		Harness:          harness,
+		State:            state,
+		SessionID:        sessionID,
+		SessionPath:      "",
+		ResumeCommand:    nil,
+		CWD:              "",
+		ProjectRoot:      "",
+		PID:              0,
+		ProcessStartTime: "",
+		PPID:             0,
+		TTY:              "",
+		Tmux:             tmux,
+		Source:           "",
+		Confidence:       "",
+		Event:            "",
+		Attributes:       nil,
+		RawPayload:       nil,
+		ObservedAt:       time.Time{},
+	}
+}
+
+func liveOnlyTestTmux(pane string) TmuxContext {
+	ctx := emptyLiveOnlyTestTmux()
+	ctx.Inside = true
+	ctx.SessionName = "work"
+	ctx.PaneID = pane
+
+	return ctx
+}
+
+func emptyLiveOnlyTestTmux() TmuxContext {
+	return TmuxContext{
+		Inside:          false,
+		ServerSocket:    "",
+		SessionID:       "",
+		SessionName:     "",
+		WindowID:        "",
+		WindowIndex:     "",
+		WindowName:      "",
+		PaneID:          "",
+		PaneIndex:       "",
+		PaneCurrentPath: "",
+		PanePID:         0,
+		PaneTTY:         "",
+		ClientTTY:       "",
+	}
+}
+
 func reportRunningCodexSession(t *testing.T, store *FileStore, ctx context.Context, now time.Time) Session {
 	t.Helper()
 
@@ -147,6 +244,7 @@ func assertStoreListAndSummary(t *testing.T, store *FileStore, ctx context.Conte
 		State:       "",
 		TmuxSession: "",
 		ActiveOnly:  true,
+		LiveOnly:    false,
 	})
 	if err != nil {
 		t.Fatalf("List returned error: %v", err)
@@ -160,6 +258,7 @@ func assertStoreListAndSummary(t *testing.T, store *FileStore, ctx context.Conte
 		State:       "",
 		TmuxSession: "",
 		ActiveOnly:  false,
+		LiveOnly:    false,
 	})
 	if err != nil {
 		t.Fatalf("SummaryByTmuxSession returned error: %v", err)
@@ -339,6 +438,7 @@ func TestFileStoreResetClearsSessions(t *testing.T) {
 		State:       "",
 		TmuxSession: "",
 		ActiveOnly:  false,
+		LiveOnly:    false,
 	})
 	if err != nil {
 		t.Fatalf("List after reset returned error: %v", err)
@@ -530,6 +630,7 @@ func TestReportIdentityIgnoresTmuxWindowName(t *testing.T) {
 		State:       "",
 		TmuxSession: "",
 		ActiveOnly:  false,
+		LiveOnly:    false,
 	})
 	if err != nil {
 		t.Fatalf("List returned error: %v", err)
@@ -844,6 +945,7 @@ func assertSeshPaneSummary(t *testing.T, store *FileStore, ctx context.Context) 
 		State:       "",
 		TmuxSession: "sesh",
 		ActiveOnly:  false,
+		LiveOnly:    false,
 	})
 	requireNoStoreError(t, err, "SummaryByTmuxSession returned error")
 	if len(summaries) != 1 {
@@ -919,6 +1021,7 @@ func filterByHarness(harness Harness) Filter {
 		State:       "",
 		TmuxSession: "",
 		ActiveOnly:  false,
+		LiveOnly:    false,
 	}
 }
 
@@ -991,6 +1094,7 @@ func TestSummaryTreatsOlderSamePaneOccupantAsExited(t *testing.T) {
 		State:       "",
 		TmuxSession: "sesh",
 		ActiveOnly:  false,
+		LiveOnly:    false,
 	})
 	if err != nil {
 		t.Fatalf("SummaryByTmuxSession returned error: %v", err)
@@ -1027,6 +1131,7 @@ func TestSummaryKeepsSeparatePaneOccupantsOpen(t *testing.T) {
 		State:       "",
 		TmuxSession: "sesh",
 		ActiveOnly:  false,
+		LiveOnly:    false,
 	})
 	if err != nil {
 		t.Fatalf("SummaryByTmuxSession returned error: %v", err)
@@ -1062,6 +1167,7 @@ func TestSummarySeparatesReusedTmuxSessionIDWithDifferentNames(t *testing.T) {
 		State:       "",
 		TmuxSession: "",
 		ActiveOnly:  false,
+		LiveOnly:    false,
 	})
 	if err != nil {
 		t.Fatalf("SummaryByTmuxSession returned error: %v", err)
@@ -1097,6 +1203,7 @@ func TestSummaryWithOptionsKeepsOldLiveSessionsOpen(t *testing.T) {
 			State:       "",
 			TmuxSession: "",
 			ActiveOnly:  false,
+			LiveOnly:    false,
 		},
 	})
 	if err != nil {

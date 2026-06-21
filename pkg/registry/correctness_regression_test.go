@@ -230,5 +230,6 @@ func reviewFilter() Filter {
 		State:       "",
 		TmuxSession: "",
 		ActiveOnly:  false,
+		LiveOnly:    false,
 	}
 }
