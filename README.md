@@ -76,6 +76,19 @@ agent-sessions list --watch
 agent-sessions list --watch --summary
 ```
 
+Plain `agent-sessions list` is sorted by updated time ascending, so the most
+recently updated sessions appear at the bottom. Use `--sort tmux` for tmux
+layout order or `--desc` to reverse the selected order. Human-readable text
+output shortens paths under your home directory from `/home/name/...` or
+`/Users/name/...` to `~/...`; JSON output keeps absolute paths.
+Use `agent-sessions list --live` to hide exited and ownerless sessions while
+keeping idle, running, waiting, and unknown sessions that still have a known
+tmux pane or process owner. `--active` is narrower: it only shows busy sessions
+in `running` or `waiting` states.
+`agent-sessions scan` also reconciles stale ownerless non-exited records after
+five minutes by marking them `exited`; pass `--stale-ownerless-after <duration>`
+to tune that age or a negative duration to disable the ownerless check.
+
 Management commands:
 
 ```sh
