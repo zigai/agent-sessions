@@ -69,6 +69,7 @@ type tsReplayCase struct {
 	wantExited bool
 }
 
+//nolint:exhaustruct,maintidx // Artifact replay tables intentionally omit zero-value expectations for readability.
 func TestArtifactReplayJSONCommandHooks(t *testing.T) {
 	env := newReplayEnv(t)
 
@@ -322,7 +323,7 @@ func TestArtifactReplayJSONCommandHooks(t *testing.T) {
 			for _, event := range test.selfRefresh {
 				selfRefreshCommand := requireCommandContaining(t, commands[event], " install-hooks ")
 				got := runReplayCommand(t, env, selfRefreshCommand, "{}")
-				requireReplayOutput(t, got, "", "")
+				requireReplayOutput(t, got, "")
 				requireNoReplaySessions(t, env.storePath, test.harness)
 			}
 
@@ -333,7 +334,7 @@ func TestArtifactReplayJSONCommandHooks(t *testing.T) {
 				}
 				command := requireCommandContaining(t, eventCommands, " report ")
 				got := runReplayCommand(t, env, command, replay.payload)
-				requireReplayOutput(t, got, "", "")
+				requireReplayOutput(t, got, "")
 				session := requireReplaySession(t, env.storePath, test.harness)
 				requireReplaySessionFields(t, session, replay)
 			}
@@ -415,7 +416,7 @@ func TestArtifactReplayCursorHooks(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.event, func(t *testing.T) {
 			got := runReplayCommand(t, env, commands[test.event], test.payload)
-			requireReplayOutput(t, got, test.wantOutput, "")
+			requireReplayOutput(t, got, test.wantOutput)
 
 			session := requireReplaySession(t, env.storePath, registry.HarnessCursor)
 			if session.SessionID != "cursor-replay" {
@@ -440,11 +441,12 @@ func TestArtifactReplayCursorHooks(t *testing.T) {
 	t.Run("invalid payload still returns protocol response without report", func(t *testing.T) {
 		resetReplayStore(t, env)
 		got := runReplayCommand(t, env, commands["beforeSubmitPrompt"], `{"session_id":"cursor-replay","hook_event_name":"beforeSubmitPrompt"}`)
-		requireReplayOutput(t, got, "{\"continue\":true}\n", "")
+		requireReplayOutput(t, got, "{\"continue\":true}\n")
 		requireNoReplaySessions(t, env.storePath, registry.HarnessCursor)
 	})
 }
 
+//nolint:exhaustruct // Kimi replay cases intentionally omit zero-value expectations.
 func TestArtifactReplayKimiManagedTextHooks(t *testing.T) {
 	env := newReplayEnv(t)
 	kimiHome := filepath.Join(env.home, ".kimi-code")
@@ -464,8 +466,8 @@ func TestArtifactReplayKimiManagedTextHooks(t *testing.T) {
 	commands := readKimiManagedTextCommands(t, result.Path)
 
 	selfRefreshCommand := requireCommandContaining(t, commands[hookEventSessionStart], " install-hooks ")
-	got := runReplayCommand(t, env, selfRefreshCommand, "{}")
-	requireReplayOutput(t, got, "", "")
+	selfRefreshGot := runReplayCommand(t, env, selfRefreshCommand, "{}")
+	requireReplayOutput(t, selfRefreshGot, "")
 	requireNoReplaySessions(t, env.storePath, registry.HarnessKimiCode)
 
 	tests := []jsonReplayCase{
@@ -592,14 +594,15 @@ func TestArtifactReplayKimiManagedTextHooks(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.event, func(t *testing.T) {
 			command := requireCommandContaining(t, commands[test.event], " report ")
-			got := runReplayCommand(t, env, command, test.payload)
-			requireReplayOutput(t, got, "", "")
+			replayGot := runReplayCommand(t, env, command, test.payload)
+			requireReplayOutput(t, replayGot, "")
 			session := requireReplaySession(t, env.storePath, registry.HarnessKimiCode)
 			requireReplaySessionFields(t, session, test)
 		})
 	}
 }
 
+//nolint:gocognit // Agy replay test intentionally covers all plugin hook state transitions in one flow.
 func TestArtifactReplayAgyPluginHooks(t *testing.T) {
 	env := newReplayEnv(t)
 	t.Setenv("AGY_CONFIG_HOME", filepath.Join(env.home, ".gemini", "config"))
@@ -718,6 +721,7 @@ func TestArtifactReplayAgyPluginHooks(t *testing.T) {
 	})
 }
 
+//nolint:exhaustruct,maintidx // TypeScript plugin replay tables intentionally omit zero-value expectations for readability.
 func TestArtifactReplayTypeScriptPluginsWithBun(t *testing.T) {
 	bun, err := exec.LookPath("bun")
 	if err != nil {
@@ -1176,8 +1180,12 @@ func installReplayHarness(t *testing.T, harness registry.Harness, env replayEnv)
 	t.Helper()
 
 	result, err := Run(Options{
-		Harness: harness,
-		Binary:  env.binary,
+		Harness:      harness,
+		Binary:       env.binary,
+		TargetBinary: "",
+		DryRun:       false,
+		Force:        false,
+		UseShim:      false,
 	})
 	if err != nil {
 		t.Fatalf("installing %s replay hooks: %v", harness, err)
@@ -1233,11 +1241,11 @@ func replayEnvVars(env replayEnv) []string {
 	return values
 }
 
-func requireReplayOutput(t *testing.T, got replayResult, stdout string, stderr string) {
+func requireReplayOutput(t *testing.T, got replayResult, stdout string) {
 	t.Helper()
 
-	if got.stdout != stdout || got.stderr != stderr {
-		t.Fatalf("expected stdout=%q stderr=%q, got stdout=%q stderr=%q", stdout, stderr, got.stdout, got.stderr)
+	if got.stdout != stdout || got.stderr != "" {
+		t.Fatalf("expected stdout=%q stderr=%q, got stdout=%q stderr=%q", stdout, "", got.stdout, got.stderr)
 	}
 }
 
@@ -1270,9 +1278,7 @@ func jsonValuesEqual(left any, right any) bool {
 func requireReplaySession(t *testing.T, storePath string, harness registry.Harness) registry.Session {
 	t.Helper()
 
-	sessions, err := registry.NewFileStore(storePath).List(context.Background(), registry.Filter{
-		Harness: harness,
-	})
+	sessions, err := registry.NewFileStore(storePath).List(context.Background(), replayHarnessFilter(harness))
 	if err != nil {
 		t.Fatalf("listing replay sessions: %v", err)
 	}
@@ -1296,9 +1302,7 @@ func waitForReplaySession(
 	var sessions []registry.Session
 	var err error
 	for time.Now().Before(deadline) {
-		sessions, err = registry.NewFileStore(storePath).List(context.Background(), registry.Filter{
-			Harness: harness,
-		})
+		sessions, err = registry.NewFileStore(storePath).List(context.Background(), replayHarnessFilter(harness))
 		if err == nil && len(sessions) == 1 && sessions[0].State == state && sessions[0].LastEvent == event {
 			return sessions[0]
 		}
@@ -1309,15 +1313,13 @@ func waitForReplaySession(
 	}
 	t.Fatalf("timed out waiting for %s state=%s event=%s, got %#v", harness, state, event, sessions)
 
-	return registry.Session{}
+	panic("unreachable")
 }
 
 func requireNoReplaySessions(t *testing.T, storePath string, harness registry.Harness) {
 	t.Helper()
 
-	sessions, err := registry.NewFileStore(storePath).List(context.Background(), registry.Filter{
-		Harness: harness,
-	})
+	sessions, err := registry.NewFileStore(storePath).List(context.Background(), replayHarnessFilter(harness))
 	if err != nil {
 		t.Fatalf("listing replay sessions: %v", err)
 	}
@@ -1326,9 +1328,27 @@ func requireNoReplaySessions(t *testing.T, storePath string, harness registry.Ha
 	}
 }
 
+func replayHarnessFilter(harness registry.Harness) registry.Filter {
+	return registry.Filter{
+		Harness:     harness,
+		State:       "",
+		TmuxSession: "",
+		ActiveOnly:  false,
+		LiveOnly:    false,
+	}
+}
+
 func requireReplaySessionFields(t *testing.T, session registry.Session, want jsonReplayCase) {
 	t.Helper()
+	requireJSONReplayIdentity(t, session, want)
+	requireJSONReplayLifecycle(t, session, want)
+	requireJSONReplayRawPayload(t, session, want.wantRaw)
+	requireReplayAttributes(t, session, want.wantAttrs)
+	requireReplayTimestamps(t, session)
+}
 
+func requireJSONReplayIdentity(t *testing.T, session registry.Session, want jsonReplayCase) {
+	t.Helper()
 	if session.SessionID != want.wantID {
 		t.Fatalf("expected session id %q, got %q", want.wantID, session.SessionID)
 	}
@@ -1341,19 +1361,33 @@ func requireReplaySessionFields(t *testing.T, session registry.Session, want jso
 	if session.ProjectRoot != want.wantRoot {
 		t.Fatalf("expected project root %q, got %q", want.wantRoot, session.ProjectRoot)
 	}
+}
+
+func requireJSONReplayLifecycle(t *testing.T, session registry.Session, want jsonReplayCase) {
+	t.Helper()
+
 	if session.State != want.wantState || session.LastEvent != want.wantEvent {
 		t.Fatalf("expected state=%s event=%s, got state=%s event=%s", want.wantState, want.wantEvent, session.State, session.LastEvent)
 	}
 	if want.wantExited && session.EndedAt.IsZero() {
 		t.Fatal("expected exited session to have ended timestamp")
 	}
-	if want.wantRaw && len(session.RawPayload) == 0 {
+}
+
+func requireJSONReplayRawPayload(t *testing.T, session registry.Session, wantRaw bool) {
+	t.Helper()
+
+	if wantRaw && len(session.RawPayload) == 0 {
 		t.Fatal("expected raw payload to be stored")
 	}
-	if !want.wantRaw && len(session.RawPayload) != 0 {
+	if !wantRaw && len(session.RawPayload) != 0 {
 		t.Fatalf("expected raw payload to be empty, got %s", session.RawPayload)
 	}
-	requireReplayAttributes(t, session, want.wantAttrs)
+}
+
+func requireReplayTimestamps(t *testing.T, session registry.Session) {
+	t.Helper()
+
 	if session.LastEventAt.IsZero() || session.StateChangedAt.IsZero() {
 		t.Fatalf("expected event and state timestamps, got event_at=%s state_changed_at=%s", session.LastEventAt, session.StateChangedAt)
 	}
@@ -1406,34 +1440,61 @@ func readJSONCommandHooks(t *testing.T, path string) map[string][]string {
 	hooks := requireTestHooks(t, config)
 	commands := make(map[string][]string, len(hooks))
 	for event, value := range hooks {
-		groups, ok := value.([]any)
-		if !ok {
-			t.Fatalf("expected hook groups for %s, got %#v", event, value)
-		}
-		for _, groupValue := range groups {
-			group, ok := groupValue.(map[string]any)
-			if !ok {
-				t.Fatalf("expected hook group object for %s, got %#v", event, groupValue)
-			}
-			hookValues, ok := group["hooks"].([]any)
-			if !ok {
-				t.Fatalf("expected nested hooks for %s, got %#v", event, group)
-			}
-			for _, hookValue := range hookValues {
-				hook, ok := hookValue.(map[string]any)
-				if !ok {
-					t.Fatalf("expected command hook object for %s, got %#v", event, hookValue)
-				}
-				command, ok := hook["command"].(string)
-				if !ok || strings.TrimSpace(command) == "" {
-					t.Fatalf("expected command for %s, got %#v", event, hook)
-				}
-				commands[event] = append(commands[event], command)
-			}
-		}
+		commands[event] = append(commands[event], jsonCommandsFromHookGroups(t, event, value)...)
 	}
 
 	return commands
+}
+
+func jsonCommandsFromHookGroups(t *testing.T, event string, value any) []string {
+	t.Helper()
+
+	groups, groupsOK := value.([]any)
+	if !groupsOK {
+		t.Fatalf("expected hook groups for %s, got %#v", event, value)
+	}
+
+	commands := make([]string, 0, len(groups))
+	for _, groupValue := range groups {
+		commands = append(commands, jsonCommandsFromHookGroup(t, event, groupValue)...)
+	}
+
+	return commands
+}
+
+func jsonCommandsFromHookGroup(t *testing.T, event string, value any) []string {
+	t.Helper()
+
+	group, groupOK := value.(map[string]any)
+	if !groupOK {
+		t.Fatalf("expected hook group object for %s, got %#v", event, value)
+	}
+	hookValues, hooksOK := group["hooks"].([]any)
+	if !hooksOK {
+		t.Fatalf("expected nested hooks for %s, got %#v", event, group)
+	}
+
+	commands := make([]string, 0, len(hookValues))
+	for _, hookValue := range hookValues {
+		commands = append(commands, jsonCommandFromHookValue(t, event, hookValue))
+	}
+
+	return commands
+}
+
+func jsonCommandFromHookValue(t *testing.T, event string, value any) string {
+	t.Helper()
+
+	hook, hookOK := value.(map[string]any)
+	if !hookOK {
+		t.Fatalf("expected command hook object for %s, got %#v", event, value)
+	}
+	command, commandOK := hook["command"].(string)
+	if !commandOK || strings.TrimSpace(command) == "" {
+		t.Fatalf("expected command for %s, got %#v", event, hook)
+	}
+
+	return command
 }
 
 func readCursorCommandHooks(t *testing.T, path string) map[string]string {
@@ -1467,7 +1528,7 @@ func readKimiManagedTextCommands(t *testing.T, path string) map[string][]string 
 	text := string(readTestFile(t, path, "reading Kimi replay hooks"))
 	commands := make(map[string][]string)
 	currentEvent := ""
-	for _, line := range strings.Split(text, "\n") {
+	for line := range strings.SplitSeq(text, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "[[hooks]]" {
 			currentEvent = ""
@@ -1507,15 +1568,15 @@ func readAgyPluginCommands(t *testing.T, dir string) map[string]string {
 	t.Helper()
 
 	config := decodeTestJSONObject(t, readTestFile(t, filepath.Join(dir, "hooks.json"), "reading Agy replay hooks"), "Agy replay hooks")
-	namespace, ok := config[agyPluginName].(map[string]any)
-	if !ok {
+	namespace, namespaceOK := config[agyPluginName].(map[string]any)
+	if !namespaceOK {
 		t.Fatalf("expected Agy namespace %q, got %#v", agyPluginName, config)
 	}
 
 	commands := make(map[string]string, len(namespace))
 	for event, value := range namespace {
-		items, ok := value.([]any)
-		if !ok || len(items) != 1 {
+		items, itemsOK := value.([]any)
+		if !itemsOK || len(items) != 1 {
 			t.Fatalf("expected one Agy hook item for %s, got %#v", event, value)
 		}
 		commands[event] = agyCommandFromHookValue(t, event, items[0])
@@ -1527,23 +1588,23 @@ func readAgyPluginCommands(t *testing.T, dir string) map[string]string {
 func agyCommandFromHookValue(t *testing.T, event string, value any) string {
 	t.Helper()
 
-	item, ok := value.(map[string]any)
-	if !ok {
+	item, itemOK := value.(map[string]any)
+	if !itemOK {
 		t.Fatalf("expected Agy hook object for %s, got %#v", event, value)
 	}
-	if command, ok := item["command"].(string); ok {
+	if command, commandOK := item["command"].(string); commandOK {
 		return command
 	}
-	hookValues, ok := item["hooks"].([]any)
-	if !ok || len(hookValues) != 1 {
+	hookValues, hooksOK := item["hooks"].([]any)
+	if !hooksOK || len(hookValues) != 1 {
 		t.Fatalf("expected Agy nested hook for %s, got %#v", event, item)
 	}
-	hook, ok := hookValues[0].(map[string]any)
-	if !ok {
+	hook, hookOK := hookValues[0].(map[string]any)
+	if !hookOK {
 		t.Fatalf("expected Agy nested hook object for %s, got %#v", event, hookValues[0])
 	}
-	command, ok := hook["command"].(string)
-	if !ok || strings.TrimSpace(command) == "" {
+	command, commandOK := hook["command"].(string)
+	if !commandOK || strings.TrimSpace(command) == "" {
 		t.Fatalf("expected Agy command for %s, got %#v", event, hook)
 	}
 
@@ -1670,7 +1731,19 @@ func runBunReplayScript(t *testing.T, bun string, env replayEnv, script string) 
 }
 
 func fileImportSpecifier(path string) string {
-	return (&url.URL{Scheme: "file", Path: path}).String()
+	return (&url.URL{
+		Scheme:      "file",
+		Opaque:      "",
+		User:        nil,
+		Host:        "",
+		Path:        path,
+		RawPath:     "",
+		OmitHost:    false,
+		ForceQuery:  false,
+		RawQuery:    "",
+		Fragment:    "",
+		RawFragment: "",
+	}).String()
 }
 
 func requireCommands(t *testing.T, commands map[string]string, events []string) {
