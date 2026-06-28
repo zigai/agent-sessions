@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 
 	"github.com/zigai/agent-sessions/pkg/registry"
 )
@@ -108,15 +107,7 @@ func writeInstallFile(path string, data []byte, changed bool, dryRun bool, creat
 		return nil
 	}
 
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return fmt.Errorf("%s: %w", createDirError, err)
-	}
-
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		return fmt.Errorf("%s: %w", writeError, err)
-	}
-
-	return nil
+	return writeFileAtomic(path, data, createDirError, writeError)
 }
 
 func readJSONObject(path string) (map[string]any, error) {
