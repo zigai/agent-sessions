@@ -34,30 +34,25 @@ type Pane struct {
 	CurrentCommand string
 }
 
+type Env struct {
+	TMUX     string
+	TMUXPane string
+}
+
 func Current(ctx context.Context) (registry.TmuxContext, error) {
-	if os.Getenv("TMUX") == "" && os.Getenv("TMUX_PANE") == "" {
+	return CurrentWithEnv(ctx, Env{TMUX: os.Getenv("TMUX"), TMUXPane: os.Getenv("TMUX_PANE")})
+}
+
+func CurrentWithEnv(ctx context.Context, env Env) (registry.TmuxContext, error) {
+	if env.TMUX == "" && env.TMUXPane == "" {
 		return registry.TmuxContext{}, ErrNoTmuxContext
 	}
 
 	format := currentFormat()
-	output, err := runTmux(ctx, currentDisplayMessageArgs(format, os.Getenv("TMUX_PANE"))...)
+	output, err := runTmuxWithEnv(ctx, env, currentDisplayMessageArgs(format, env.TMUXPane)...)
 	if err != nil {
-		if paneID := os.Getenv("TMUX_PANE"); paneID != "" {
-			return registry.TmuxContext{
-				Inside:          true,
-				ServerSocket:    tmuxServerSocketFromEnv(),
-				SessionID:       "",
-				SessionName:     "",
-				WindowID:        "",
-				WindowIndex:     "",
-				WindowName:      "",
-				PaneID:          paneID,
-				PaneIndex:       "",
-				PaneCurrentPath: "",
-				PanePID:         0,
-				PaneTTY:         "",
-				ClientTTY:       "",
-			}, nil
+		if paneID := env.TMUXPane; paneID != "" {
+			return ContextFromEnv(env), nil
 		}
 
 		return registry.TmuxContext{}, err
@@ -67,9 +62,33 @@ func Current(ctx context.Context) (registry.TmuxContext, error) {
 	if err != nil {
 		return registry.TmuxContext{}, err
 	}
-	current.ServerSocket = tmuxServerSocketFromEnv()
+	current.ServerSocket = tmuxServerSocket(env.TMUX)
 
 	return current, nil
+}
+
+func ContextFromEnv(env Env) registry.TmuxContext {
+	if env.TMUX == "" && env.TMUXPane == "" {
+		var tmux registry.TmuxContext
+
+		return tmux
+	}
+
+	return registry.TmuxContext{
+		Inside:          true,
+		ServerSocket:    tmuxServerSocket(env.TMUX),
+		SessionID:       "",
+		SessionName:     "",
+		WindowID:        "",
+		WindowIndex:     "",
+		WindowName:      "",
+		PaneID:          env.TMUXPane,
+		PaneIndex:       "",
+		PaneCurrentPath: "",
+		PanePID:         0,
+		PaneTTY:         "",
+		ClientTTY:       "",
+	}
 }
 
 func currentDisplayMessageArgs(format string, paneID string) []string {
@@ -250,7 +269,11 @@ func tmuxFormat(fields []string) string {
 }
 
 func tmuxServerSocketFromEnv() string {
-	tmuxEnv := strings.TrimSpace(os.Getenv("TMUX"))
+	return tmuxServerSocket(os.Getenv("TMUX"))
+}
+
+func tmuxServerSocket(tmuxEnv string) string {
+	tmuxEnv = strings.TrimSpace(tmuxEnv)
 	if tmuxEnv == "" {
 		return ""
 	}
@@ -408,10 +431,34 @@ func parsePositiveInt(value string) int {
 }
 
 func runTmux(ctx context.Context, args ...string) (string, error) {
-	output, err := exec.CommandContext(ctx, "tmux", args...).Output()
+	return runTmuxWithEnv(ctx, Env{TMUX: os.Getenv("TMUX"), TMUXPane: os.Getenv("TMUX_PANE")}, args...)
+}
+
+func runTmuxWithEnv(ctx context.Context, env Env, args ...string) (string, error) {
+	cmd := exec.CommandContext(ctx, "tmux", args...)
+	cmd.Env = tmuxCommandEnv(env)
+	output, err := cmd.Output()
 	if err != nil {
 		return "", fmt.Errorf("running tmux %s: %w", strings.Join(args, " "), err)
 	}
 
 	return string(output), nil
+}
+
+func tmuxCommandEnv(env Env) []string {
+	const tmuxEnvOverrideCount = 2
+
+	values := make([]string, 0, len(os.Environ())+tmuxEnvOverrideCount)
+	for _, value := range os.Environ() {
+		if strings.HasPrefix(value, "TMUX=") || strings.HasPrefix(value, "TMUX_PANE=") {
+			continue
+		}
+		values = append(values, value)
+	}
+	values = append(values, "TMUX="+env.TMUX)
+	if env.TMUXPane != "" {
+		values = append(values, "TMUX_PANE="+env.TMUXPane)
+	}
+
+	return values
 }

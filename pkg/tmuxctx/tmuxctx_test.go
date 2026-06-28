@@ -5,6 +5,38 @@ import (
 	"testing"
 )
 
+func TestContextFromEnvBuildsMinimalContext(t *testing.T) {
+	t.Parallel()
+
+	ctx := ContextFromEnv(Env{TMUX: "/tmp/tmux-1000/default,123,0", TMUXPane: "%4"})
+	if !ctx.Inside || ctx.ServerSocket != "/tmp/tmux-1000/default" || ctx.PaneID != "%4" {
+		t.Fatalf("unexpected minimal tmux context: %#v", ctx)
+	}
+}
+
+func TestTmuxCommandEnvOverridesProcessTmuxEnv(t *testing.T) {
+	t.Setenv("TMUX", "old")
+	t.Setenv("TMUX_PANE", "%old")
+
+	values := tmuxCommandEnv(Env{TMUX: "new", TMUXPane: "%new"})
+	var tmuxValues []string
+	var paneValues []string
+	for _, value := range values {
+		if strings.HasPrefix(value, "TMUX=") {
+			tmuxValues = append(tmuxValues, value)
+		}
+		if strings.HasPrefix(value, "TMUX_PANE=") {
+			paneValues = append(paneValues, value)
+		}
+	}
+	if len(tmuxValues) != 1 || tmuxValues[0] != "TMUX=new" {
+		t.Fatalf("expected one replacement TMUX value, got %#v", tmuxValues)
+	}
+	if len(paneValues) != 1 || paneValues[0] != "TMUX_PANE=%new" {
+		t.Fatalf("expected one replacement TMUX_PANE value, got %#v", paneValues)
+	}
+}
+
 func TestParseCurrent(t *testing.T) {
 	t.Parallel()
 
