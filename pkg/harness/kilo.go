@@ -30,27 +30,19 @@ type kiloHarness struct {
 
 func kiloAdapter() Adapter {
 	return kiloHarness{
-		baseAdapter: newBaseAdapter(Definition{
-			ID:           registry.HarnessKilo,
-			Aliases:      []string{"kilocode", "kilo-code", "kilo_code"},
-			ProcessNames: []string{kiloCommand, "kilocode", "kilo-code", "kilo_code"},
-			Env: EnvKeys{
-				SessionID:   []string{"KILO_SESSION_ID", "KILOCODE_SESSION_ID"},
-				SessionPath: []string{"KILO_SESSION_PATH", "KILOCODE_SESSION_PATH"},
-				ProjectRoot: []string{"KILO_PROJECT_ROOT", "KILOCODE_PROJECT_ROOT"},
-				PID:         []string{"KILO_PID", "KILOCODE_PID"},
-				Event:       []string{"KILO_EVENT", "KILOCODE_EVENT"},
-			},
+		baseAdapter: newMetadataAdapter(registry.HarnessKilo, EnvKeys{
+			SessionID:   []string{"KILO_SESSION_ID", "KILOCODE_SESSION_ID"},
+			SessionPath: []string{"KILO_SESSION_PATH", "KILOCODE_SESSION_PATH"},
+			ProjectRoot: []string{"KILO_PROJECT_ROOT", "KILOCODE_PROJECT_ROOT"},
+			PID:         []string{"KILO_PID", "KILOCODE_PID"},
+			Event:       []string{"KILO_EVENT", "KILOCODE_EVENT"},
 		}),
 	}
 }
 
 func (kiloHarness) InstallPlan(binary string) InstallPlan {
 	return InstallPlan{
-		JSONCommandHooks: nil,
-		CursorJSONHooks:  nil,
-		ManagedTextBlock: nil,
-		RenderedFile: &RenderedFileInstallPlan{
+		Actions: []InstallAction{RenderedFileAction{Plan: RenderedFileInstallPlan{
 			Path:        filepath.Join(kiloConfigDir(), "plugin", kiloPluginName),
 			Label:       "kilo plugin",
 			ConfigLabel: "kilo plugin",
@@ -62,9 +54,7 @@ func (kiloHarness) InstallPlan(binary string) InstallPlan {
 				kiloIntegrationSource,
 			),
 			JSONContent: nil,
-		},
-		PluginDirectory: nil,
-		Shim:            nil,
+		}}},
 	}
 }
 

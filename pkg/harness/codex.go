@@ -20,24 +20,19 @@ type codexHarness struct {
 
 func codexAdapter() Adapter {
 	return codexHarness{
-		baseAdapter: newBaseAdapter(Definition{
-			ID:           registry.HarnessCodex,
-			Aliases:      nil,
-			ProcessNames: []string{codexCommand},
-			Env: EnvKeys{
-				SessionID:   []string{"CODEX_SESSION_ID"},
-				SessionPath: []string{"CODEX_SESSION_PATH"},
-				ProjectRoot: nil,
-				PID:         []string{"CODEX_PID"},
-				Event:       nil,
-			},
+		baseAdapter: newMetadataAdapter(registry.HarnessCodex, EnvKeys{
+			SessionID:   []string{"CODEX_SESSION_ID"},
+			SessionPath: []string{"CODEX_SESSION_PATH"},
+			ProjectRoot: nil,
+			PID:         []string{"CODEX_PID"},
+			Event:       nil,
 		}),
 	}
 }
 
 func (codexHarness) InstallPlan(binary string) InstallPlan {
 	return InstallPlan{
-		JSONCommandHooks: &JSONCommandHookInstallPlan{
+		Actions: []InstallAction{JSONCommandHooksAction{Plan: JSONCommandHookInstallPlan{
 			Path:          filepath.Join(codexHome(), "hooks.json"),
 			Source:        codexIntegrationSource,
 			Label:         "codex hooks",
@@ -89,12 +84,7 @@ func (codexHarness) InstallPlan(binary string) InstallPlan {
 					),
 				},
 			},
-		},
-		CursorJSONHooks:  nil,
-		ManagedTextBlock: nil,
-		RenderedFile:     nil,
-		PluginDirectory:  nil,
-		Shim:             nil,
+		}}},
 	}
 }
 

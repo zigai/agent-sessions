@@ -27,26 +27,61 @@ func installHarnessAdapter(options Options) (Result, error) {
 
 	definition := adapter.Definition()
 	plan := installer.InstallPlan(options.Binary)
-	if options.UseShim && plan.Shim != nil {
+	if options.UseShim && installPlanHasShim(plan) {
 		return installShim(options, definition.ID)
 	}
-	if plan.JSONCommandHooks != nil {
-		return installJSONCommandHooks(options, definition.ID, *plan.JSONCommandHooks)
-	}
-	if plan.CursorJSONHooks != nil {
-		return installCursorJSONHooks(options, definition.ID, *plan.CursorJSONHooks)
-	}
-	if plan.ManagedTextBlock != nil {
-		return installManagedTextBlock(options, definition.ID, *plan.ManagedTextBlock)
-	}
-	if plan.RenderedFile != nil {
-		return installRenderedPlan(options, definition.ID, *plan.RenderedFile)
-	}
-	if plan.PluginDirectory != nil {
-		return installPluginDirectory(options, definition.ID, *plan.PluginDirectory)
+
+	for _, action := range plan.Actions {
+		result, handled, err := installPlanAction(options, definition.ID, action)
+		if handled {
+			return result, err
+		}
 	}
 
 	return Result{}, fmt.Errorf("%w: %q", errUnsupportedHarness, options.Harness)
+}
+
+func installPlanHasShim(plan harnesspkg.InstallPlan) bool {
+	for _, action := range plan.Actions {
+		if _, ok := action.(harnesspkg.ShimAction); ok {
+			return true
+		}
+	}
+
+	return false
+}
+
+func installPlanAction(options Options, harness registry.Harness, action harnesspkg.InstallAction) (Result, bool, error) {
+	switch typed := action.(type) {
+	case harnesspkg.JSONCommandHooksAction:
+		result, err := installJSONCommandHooks(options, harness, typed.Plan)
+
+		return result, true, err
+	case harnesspkg.CursorJSONHooksAction:
+		result, err := installCursorJSONHooks(options, harness, typed.Plan)
+
+		return result, true, err
+	case harnesspkg.ManagedTextBlockAction:
+		result, err := installManagedTextBlock(options, harness, typed.Plan)
+
+		return result, true, err
+	case harnesspkg.RenderedFileAction:
+		result, err := installRenderedPlan(options, harness, typed.Plan)
+
+		return result, true, err
+	case harnesspkg.PluginDirectoryAction:
+		result, err := installPluginDirectory(options, harness, typed.Plan)
+
+		return result, true, err
+	case harnesspkg.ShimAction:
+		var result Result
+
+		return result, false, nil
+	default:
+		var result Result
+
+		return result, false, nil
+	}
 }
 
 func installJSONCommandHooks(
@@ -361,12 +396,13 @@ func installPluginDirectory(
 	if err != nil {
 		return Result{}, err
 	}
+	plugin := newPluginDirectoryInstall(plan, files)
 
-	if guardErr := ensurePluginDirectoryManaged(plan.Dir, plan.MarkerFile, options.Force); guardErr != nil {
+	if guardErr := plugin.ensureManaged(options.Force); guardErr != nil {
 		return Result{}, guardErr
 	}
 
-	changed, err := pluginDirectoryNeedsUpdate(plan.Dir, files)
+	pluginChanged, err := plugin.needsUpdate()
 	if err != nil {
 		return Result{}, err
 	}
@@ -375,18 +411,12 @@ func installPluginDirectory(
 	if err != nil {
 		return Result{}, err
 	}
-	if manifestChanged {
-		changed = true
-	}
+	changed := pluginChanged || manifestChanged
 
 	if changed && !options.DryRun {
-		if writeErr := writePluginFiles(plan.Dir, files); writeErr != nil {
+		writeErr := writePluginDirectoryChanges(plugin, plan.ImportManifest, manifest, pluginChanged, manifestChanged)
+		if writeErr != nil {
 			return Result{}, writeErr
-		}
-		if plan.ImportManifest != nil && manifestChanged {
-			if writeErr := writeImportManifest(plan.ImportManifest.Path, manifest); writeErr != nil {
-				return Result{}, writeErr
-			}
 		}
 	}
 
@@ -394,12 +424,53 @@ func installPluginDirectory(
 
 	return Result{
 		Harness: string(harness),
-		Path:    plan.Dir,
+		Path:    plugin.dir,
 		Changed: changed,
 		Message: installMessage(label, changed, options.DryRun),
-		Snippet: pluginSnippet(files, plan.SnippetOrder),
+		Snippet: plugin.snippet(),
 		Error:   "",
 	}, nil
+}
+
+func writePluginDirectoryChanges(
+	plugin pluginDirectoryInstall,
+	importPlan *harnesspkg.ImportManifestInstallPlan,
+	manifest importManifest,
+	pluginChanged bool,
+	manifestChanged bool,
+) error {
+	var rollback func() error
+	var commit func() error
+	if pluginChanged {
+		var installErr error
+		rollback, commit, installErr = plugin.installStaged()
+		if installErr != nil {
+			return installErr
+		}
+	}
+
+	if importPlan != nil && manifestChanged {
+		if writeErr := writeImportManifest(importPlan.Path, manifest); writeErr != nil {
+			return rollbackPluginDirectory(rollback, writeErr)
+		}
+	}
+
+	if commit == nil {
+		return nil
+	}
+
+	return commit()
+}
+
+func rollbackPluginDirectory(rollback func() error, cause error) error {
+	if rollback == nil {
+		return cause
+	}
+	if rollbackErr := rollback(); rollbackErr != nil {
+		return errors.Join(cause, fmt.Errorf("rolling back plugin directory: %w", rollbackErr))
+	}
+
+	return cause
 }
 
 func plannedImportManifest(
@@ -413,109 +484,6 @@ func plannedImportManifest(
 	}
 
 	return importManifestWithPlan(*plan, now)
-}
-
-func renderPluginFiles(specs []harnesspkg.PluginFileInstallSpec) (map[string]string, error) {
-	files := make(map[string]string, len(specs))
-	for _, spec := range specs {
-		content, err := renderInstallContent(spec.Content, spec.JSONContent)
-		if err != nil {
-			return nil, fmt.Errorf("encoding plugin file %s: %w", spec.Name, err)
-		}
-		files[spec.Name] = content
-	}
-
-	return files, nil
-}
-
-func ensurePluginDirectoryManaged(dir string, markerFile string, force bool) error {
-	managed, err := pluginDirectoryManaged(dir, markerFile)
-	if err != nil {
-		return err
-	}
-	if !managed && !force {
-		return fmt.Errorf("%w: %s; pass --force to replace it", errForeignFile, dir)
-	}
-
-	return nil
-}
-
-func pluginDirectoryManaged(dir string, markerFile string) (bool, error) {
-	info, err := os.Stat(dir)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return true, nil
-		}
-
-		return false, fmt.Errorf("checking plugin directory: %w", err)
-	}
-	if !info.IsDir() {
-		return false, nil
-	}
-	if markerFile == "" {
-		return false, nil
-	}
-
-	marker, err := os.ReadFile(filepath.Join(dir, markerFile))
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return false, nil
-		}
-
-		return false, fmt.Errorf("reading plugin marker: %w", err)
-	}
-
-	return strings.Contains(string(marker), managedMarker), nil
-}
-
-func pluginDirectoryNeedsUpdate(dir string, files map[string]string) (bool, error) {
-	for name, content := range files {
-		path := filepath.Join(dir, name)
-		current, err := os.ReadFile(path)
-		if err != nil {
-			if errors.Is(err, os.ErrNotExist) {
-				return true, nil
-			}
-
-			return false, fmt.Errorf("reading plugin file %s: %w", path, err)
-		}
-		if string(current) != content {
-			return true, nil
-		}
-	}
-
-	return false, nil
-}
-
-func writePluginFiles(dir string, files map[string]string) error {
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return fmt.Errorf("creating plugin directory: %w", err)
-	}
-
-	for name, content := range files {
-		path := filepath.Join(dir, name)
-		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
-			return fmt.Errorf("writing plugin file %s: %w", path, err)
-		}
-	}
-
-	return nil
-}
-
-func pluginSnippet(files map[string]string, order []string) string {
-	if len(order) == 0 {
-		order = make([]string, 0, len(files))
-		for name := range files {
-			order = append(order, name)
-		}
-	}
-
-	parts := make([]string, 0, len(order))
-	for _, name := range order {
-		parts = append(parts, "== "+name+" ==\n"+files[name])
-	}
-
-	return strings.Join(parts, "\n")
 }
 
 type importManifest struct {
@@ -624,13 +592,60 @@ func writeImportManifest(path string, manifest importManifest) error {
 	}
 	data = append(data, '\n')
 
-	mkdirErr := os.MkdirAll(filepath.Dir(path), 0o700)
-	if mkdirErr != nil {
-		return fmt.Errorf("creating config directory: %w", mkdirErr)
+	return writeFileAtomic(path, data, "creating config directory", "writing import manifest")
+}
+
+func writeFileAtomic(path string, data []byte, createDirError string, writeError string) error {
+	dir := filepath.Dir(path)
+	if mkdirErr := os.MkdirAll(dir, 0o700); mkdirErr != nil {
+		return fmt.Errorf("%s: %w", createDirError, mkdirErr)
 	}
-	writeErr := os.WriteFile(path, data, 0o600)
-	if writeErr != nil {
-		return fmt.Errorf("writing import manifest: %w", writeErr)
+
+	temp, createErr := os.CreateTemp(dir, filepath.Base(path)+".tmp-*")
+	if createErr != nil {
+		return fmt.Errorf("creating temp file for %s: %w", path, createErr)
+	}
+	tempPath := temp.Name()
+	keep := false
+	defer func() {
+		if keep {
+			return
+		}
+		_ = temp.Close()
+		_ = os.Remove(tempPath)
+	}()
+
+	if chmodErr := temp.Chmod(0o600); chmodErr != nil {
+		return fmt.Errorf("setting temp file permissions: %w", chmodErr)
+	}
+	if _, writeTempErr := temp.Write(data); writeTempErr != nil {
+		return fmt.Errorf("%s: %w", writeError, writeTempErr)
+	}
+	if syncErr := temp.Sync(); syncErr != nil {
+		return fmt.Errorf("syncing temp file: %w", syncErr)
+	}
+	if closeErr := temp.Close(); closeErr != nil {
+		return fmt.Errorf("closing temp file: %w", closeErr)
+	}
+	if renameErr := os.Rename(tempPath, path); renameErr != nil {
+		return fmt.Errorf("%s: %w", writeError, renameErr)
+	}
+	keep = true
+
+	return syncDir(dir)
+}
+
+func syncDir(dir string) error {
+	handle, openErr := os.Open(dir)
+	if openErr != nil {
+		return fmt.Errorf("opening directory: %w", openErr)
+	}
+	defer func() {
+		_ = handle.Close()
+	}()
+
+	if syncErr := handle.Sync(); syncErr != nil {
+		return fmt.Errorf("syncing directory: %w", syncErr)
 	}
 
 	return nil

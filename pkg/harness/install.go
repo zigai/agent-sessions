@@ -15,13 +15,46 @@ const (
 )
 
 type InstallPlan struct {
-	JSONCommandHooks *JSONCommandHookInstallPlan
-	CursorJSONHooks  *CursorJSONHookInstallPlan
-	ManagedTextBlock *ManagedTextBlockInstallPlan
-	RenderedFile     *RenderedFileInstallPlan
-	PluginDirectory  *PluginDirectoryInstallPlan
-	Shim             *ShimInstallPlan
+	Actions []InstallAction
 }
+
+type InstallAction interface {
+	installAction()
+}
+
+type JSONCommandHooksAction struct {
+	Plan JSONCommandHookInstallPlan
+}
+
+func (JSONCommandHooksAction) installAction() {}
+
+type CursorJSONHooksAction struct {
+	Plan CursorJSONHookInstallPlan
+}
+
+func (CursorJSONHooksAction) installAction() {}
+
+type ManagedTextBlockAction struct {
+	Plan ManagedTextBlockInstallPlan
+}
+
+func (ManagedTextBlockAction) installAction() {}
+
+type RenderedFileAction struct {
+	Plan RenderedFileInstallPlan
+}
+
+func (RenderedFileAction) installAction() {}
+
+type PluginDirectoryAction struct {
+	Plan PluginDirectoryInstallPlan
+}
+
+func (PluginDirectoryAction) installAction() {}
+
+type ShimAction struct{}
+
+func (ShimAction) installAction() {}
 
 type JSONCommandHookInstallPlan struct {
 	Path          string
@@ -90,20 +123,8 @@ type ImportManifestInstallPlan struct {
 	Components []string
 }
 
-type ShimInstallPlan struct{}
-
 func ReportHookCommand(binary string, harness registry.Harness, state registry.State, event string, source string) string {
-	return strings.Join([]string{
-		ShellQuote(binary),
-		"report",
-		"--harness", ShellQuote(string(harness)),
-		"--state", ShellQuote(string(state)),
-		"--event", ShellQuote(event),
-		"--source", ShellQuote(source),
-		"--attribute", ShellQuote("agent_sessions_integration=" + source),
-		"--raw-stdin",
-		"--quiet",
-	}, " ")
+	return reportHookCommand(binary, harness, state, event, source, "--raw-stdin")
 }
 
 func RawStdinDefaultsReportHookCommand(
@@ -113,6 +134,17 @@ func RawStdinDefaultsReportHookCommand(
 	event string,
 	source string,
 ) string {
+	return reportHookCommand(binary, harness, state, event, source, "--raw-stdin-defaults-only")
+}
+
+func reportHookCommand(
+	binary string,
+	harness registry.Harness,
+	state registry.State,
+	event string,
+	source string,
+	stdinFlag string,
+) string {
 	return strings.Join([]string{
 		ShellQuote(binary),
 		"report",
@@ -121,7 +153,7 @@ func RawStdinDefaultsReportHookCommand(
 		"--event", ShellQuote(event),
 		"--source", ShellQuote(source),
 		"--attribute", ShellQuote("agent_sessions_integration=" + source),
-		"--raw-stdin-defaults-only",
+		stdinFlag,
 		"--quiet",
 	}, " ")
 }

@@ -12,20 +12,22 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/zigai/agent-sessions/pkg/harnessmeta"
 )
 
 type Harness string
 
 const (
-	HarnessClaude   Harness = "claude"
-	HarnessCodex    Harness = "codex"
-	HarnessCursor   Harness = "cursor"
-	HarnessKimiCode Harness = "kimi-code"
-	HarnessGrok     Harness = "grok"
-	HarnessPi       Harness = "pi"
-	HarnessOpenCode Harness = "opencode"
-	HarnessAgy      Harness = "agy"
-	HarnessKilo     Harness = "kilo"
+	HarnessClaude   Harness = harnessmeta.IDClaude
+	HarnessCodex    Harness = harnessmeta.IDCodex
+	HarnessCursor   Harness = harnessmeta.IDCursor
+	HarnessKimiCode Harness = harnessmeta.IDKimiCode
+	HarnessGrok     Harness = harnessmeta.IDGrok
+	HarnessPi       Harness = harnessmeta.IDPi
+	HarnessOpenCode Harness = harnessmeta.IDOpenCode
+	HarnessAgy      Harness = harnessmeta.IDAgy
+	HarnessKilo     Harness = harnessmeta.IDKilo
 )
 
 var (
@@ -142,28 +144,11 @@ type SummaryOptions struct {
 }
 
 func NormalizeHarness(value string) (Harness, error) {
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "claude", "claude-code", "claude_code":
-		return HarnessClaude, nil
-	case string(HarnessCodex):
-		return HarnessCodex, nil
-	case string(HarnessCursor), "cursor-agent", "cursor_agent", "cursor-cli", "cursor_cli":
-		return HarnessCursor, nil
-	case string(HarnessKimiCode), "kimi", "kimi_code", "kimicode":
-		return HarnessKimiCode, nil
-	case string(HarnessGrok), "grok-build", "grok_build":
-		return HarnessGrok, nil
-	case string(HarnessPi):
-		return HarnessPi, nil
-	case "opencode", "open-code", "open_code":
-		return HarnessOpenCode, nil
-	case "agy", "antigravity", "antigravity-cli", "antigravity_cli", "google-antigravity", "google_antigravity":
-		return HarnessAgy, nil
-	case "kilo", "kilocode", "kilo-code", "kilo_code":
-		return HarnessKilo, nil
-	default:
-		return "", fmt.Errorf("%w: %q", ErrUnknownHarness, value)
+	if id, ok := harnessmeta.Normalize(value); ok {
+		return Harness(id), nil
 	}
+
+	return "", fmt.Errorf("%w: %q", ErrUnknownHarness, value)
 }
 
 func NormalizeState(value string) (State, error) {

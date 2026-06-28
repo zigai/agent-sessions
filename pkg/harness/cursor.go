@@ -21,27 +21,19 @@ type cursorHarness struct {
 
 func cursorAdapter() Adapter {
 	return cursorHarness{
-		baseAdapter: newBaseAdapter(Definition{
-			ID:      registry.HarnessCursor,
-			Aliases: []string{"cursor-agent", "cursor_agent", "cursor-cli", "cursor_cli"},
-			ProcessNames: []string{
-				cursorCommand,
-			},
-			Env: EnvKeys{
-				SessionID:   nil,
-				SessionPath: []string{"CURSOR_TRANSCRIPT_PATH"},
-				ProjectRoot: []string{"CURSOR_PROJECT_DIR", "CLAUDE_PROJECT_DIR"},
-				PID:         nil,
-				Event:       nil,
-			},
+		baseAdapter: newMetadataAdapter(registry.HarnessCursor, EnvKeys{
+			SessionID:   nil,
+			SessionPath: []string{"CURSOR_TRANSCRIPT_PATH"},
+			ProjectRoot: []string{"CURSOR_PROJECT_DIR", "CLAUDE_PROJECT_DIR"},
+			PID:         nil,
+			Event:       nil,
 		}),
 	}
 }
 
 func (cursorHarness) InstallPlan(binary string) InstallPlan {
 	return InstallPlan{
-		JSONCommandHooks: nil,
-		CursorJSONHooks: &CursorJSONHookInstallPlan{
+		Actions: []InstallAction{CursorJSONHooksAction{Plan: CursorJSONHookInstallPlan{
 			Path:        filepath.Join(cursorHome(), "hooks.json"),
 			Source:      cursorIntegrationSource,
 			Label:       "cursor hooks",
@@ -72,11 +64,7 @@ func (cursorHarness) InstallPlan(binary string) InstallPlan {
 					Command: cursorHookCommand(binary, registry.StateExited, "sessionEnd", "{}"),
 				},
 			},
-		},
-		ManagedTextBlock: nil,
-		RenderedFile:     nil,
-		PluginDirectory:  nil,
-		Shim:             nil,
+		}}},
 	}
 }
 

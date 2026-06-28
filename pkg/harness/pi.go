@@ -26,27 +26,19 @@ type piHarness struct {
 
 func piAdapter() Adapter {
 	return piHarness{
-		baseAdapter: newBaseAdapter(Definition{
-			ID:           registry.HarnessPi,
-			Aliases:      nil,
-			ProcessNames: []string{"pi"},
-			Env: EnvKeys{
-				SessionID:   []string{"PI_SESSION_ID"},
-				SessionPath: []string{"PI_SESSION_PATH"},
-				ProjectRoot: nil,
-				PID:         []string{"PI_PID"},
-				Event:       nil,
-			},
+		baseAdapter: newMetadataAdapter(registry.HarnessPi, EnvKeys{
+			SessionID:   []string{"PI_SESSION_ID"},
+			SessionPath: []string{"PI_SESSION_PATH"},
+			ProjectRoot: nil,
+			PID:         []string{"PI_PID"},
+			Event:       nil,
 		}),
 	}
 }
 
 func (piHarness) InstallPlan(binary string) InstallPlan {
 	return InstallPlan{
-		JSONCommandHooks: nil,
-		CursorJSONHooks:  nil,
-		ManagedTextBlock: nil,
-		RenderedFile: &RenderedFileInstallPlan{
+		Actions: []InstallAction{RenderedFileAction{Plan: RenderedFileInstallPlan{
 			Path:        filepath.Join(piAgentDir(), "extensions", piExtensionName),
 			Label:       "pi extension",
 			ConfigLabel: "pi extension",
@@ -58,9 +50,7 @@ func (piHarness) InstallPlan(binary string) InstallPlan {
 				piIntegrationSourceID,
 			),
 			JSONContent: nil,
-		},
-		PluginDirectory: nil,
-		Shim:            nil,
+		}}},
 	}
 }
 

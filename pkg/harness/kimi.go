@@ -30,30 +30,20 @@ type kimiCodeHarness struct {
 
 func kimiCodeAdapter() Adapter {
 	return kimiCodeHarness{
-		baseAdapter: newBaseAdapter(Definition{
-			ID:           registry.HarnessKimiCode,
-			Aliases:      []string{"kimi", "kimi_code", "kimicode"},
-			ProcessNames: []string{kimiCommand},
-			Env:          emptyEnvKeys(),
-		}),
+		baseAdapter: newMetadataAdapter(registry.HarnessKimiCode, emptyEnvKeys()),
 	}
 }
 
 func (kimiCodeHarness) InstallPlan(binary string) InstallPlan {
 	return InstallPlan{
-		JSONCommandHooks: nil,
-		CursorJSONHooks:  nil,
-		ManagedTextBlock: &ManagedTextBlockInstallPlan{
+		Actions: []InstallAction{ManagedTextBlockAction{Plan: ManagedTextBlockInstallPlan{
 			Path:        filepath.Join(kimiCodeHome(), "config.toml"),
 			Label:       "kimi-code hooks",
 			ConfigLabel: "kimi-code config",
 			StartMarker: kimiCodeManagedIntegrationStart,
 			EndMarker:   kimiCodeManagedIntegrationEnd,
 			Block:       kimiCodeHookBlock(binary),
-		},
-		RenderedFile:    nil,
-		PluginDirectory: nil,
-		Shim:            nil,
+		}}},
 	}
 }
 

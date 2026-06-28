@@ -26,41 +26,34 @@ type openCodeHarness struct {
 
 func openCodeAdapter() Adapter {
 	return openCodeHarness{
-		baseAdapter: newBaseAdapter(Definition{
-			ID:           registry.HarnessOpenCode,
-			Aliases:      []string{"open-code", "open_code"},
-			ProcessNames: []string{"opencode"},
-			Env: EnvKeys{
-				SessionID:   []string{"OPENCODE_SESSION_ID"},
-				SessionPath: []string{"OPENCODE_SESSION_PATH"},
-				ProjectRoot: nil,
-				PID:         []string{"OPENCODE_PID"},
-				Event:       nil,
-			},
+		baseAdapter: newMetadataAdapter(registry.HarnessOpenCode, EnvKeys{
+			SessionID:   []string{"OPENCODE_SESSION_ID"},
+			SessionPath: []string{"OPENCODE_SESSION_PATH"},
+			ProjectRoot: nil,
+			PID:         []string{"OPENCODE_PID"},
+			Event:       nil,
 		}),
 	}
 }
 
 func (openCodeHarness) InstallPlan(binary string) InstallPlan {
 	return InstallPlan{
-		JSONCommandHooks: nil,
-		CursorJSONHooks:  nil,
-		ManagedTextBlock: nil,
-		RenderedFile: &RenderedFileInstallPlan{
-			Path:        filepath.Join(openCodeConfigDir(), "plugins", openCodePluginName),
-			Label:       "opencode plugin",
-			ConfigLabel: "opencode plugin",
-			Content: renderScriptTemplate(
-				openCodePluginTemplate,
-				openCodeIntegrationID,
-				openCodeIntegrationVersion,
-				binary,
-				openCodeIntegrationSource,
-			),
-			JSONContent: nil,
+		Actions: []InstallAction{
+			RenderedFileAction{Plan: RenderedFileInstallPlan{
+				Path:        filepath.Join(openCodeConfigDir(), "plugins", openCodePluginName),
+				Label:       "opencode plugin",
+				ConfigLabel: "opencode plugin",
+				Content: renderScriptTemplate(
+					openCodePluginTemplate,
+					openCodeIntegrationID,
+					openCodeIntegrationVersion,
+					binary,
+					openCodeIntegrationSource,
+				),
+				JSONContent: nil,
+			}},
+			ShimAction{},
 		},
-		PluginDirectory: nil,
-		Shim:            &ShimInstallPlan{},
 	}
 }
 

@@ -32,23 +32,12 @@ type agyHarness struct {
 
 func agyAdapter() Adapter {
 	return agyHarness{
-		baseAdapter: newBaseAdapter(Definition{
-			ID: registry.HarnessAgy,
-			Aliases: []string{
-				"antigravity",
-				"antigravity-cli",
-				"antigravity_cli",
-				"google-antigravity",
-				"google_antigravity",
-			},
-			ProcessNames: []string{agyCommand},
-			Env: EnvKeys{
-				SessionID:   nil,
-				SessionPath: nil,
-				ProjectRoot: nil,
-				PID:         nil,
-				Event:       nil,
-			},
+		baseAdapter: newMetadataAdapter(registry.HarnessAgy, EnvKeys{
+			SessionID:   nil,
+			SessionPath: nil,
+			ProjectRoot: nil,
+			PID:         nil,
+			Event:       nil,
 		}),
 	}
 }
@@ -57,11 +46,7 @@ func (agyHarness) InstallPlan(binary string) InstallPlan {
 	configDir := agyConfigDir()
 
 	return InstallPlan{
-		JSONCommandHooks: nil,
-		CursorJSONHooks:  nil,
-		ManagedTextBlock: nil,
-		RenderedFile:     nil,
-		PluginDirectory: &PluginDirectoryInstallPlan{
+		Actions: []InstallAction{PluginDirectoryAction{Plan: PluginDirectoryInstallPlan{
 			Dir:   filepath.Join(configDir, "plugins", agyPluginName),
 			Label: "agy plugin",
 			Files: []PluginFileInstallSpec{
@@ -89,8 +74,7 @@ func (agyHarness) InstallPlan(binary string) InstallPlan {
 				Source:     agyImportSource,
 				Components: []string{agyImportComponent},
 			},
-		},
-		Shim: nil,
+		}}},
 	}
 }
 
@@ -342,21 +326,6 @@ func agyToolName(payload map[string]any) string {
 
 func agyArgsIndicateHeadless(args []string) bool {
 	return argsContainHeadlessPromptFlag(args, "--print", "--prompt")
-}
-
-func argsContainHeadlessPromptFlag(args []string, longFlags ...string) bool {
-	for _, arg := range args {
-		if arg == "-p" || strings.HasPrefix(arg, "-p") && arg != "-p" {
-			return true
-		}
-		for _, flag := range longFlags {
-			if arg == flag || strings.HasPrefix(arg, flag+"=") {
-				return true
-			}
-		}
-	}
-
-	return false
 }
 
 func nestedString(payload map[string]any, path ...string) string {

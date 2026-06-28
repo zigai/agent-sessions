@@ -14,6 +14,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	harnesspkg "github.com/zigai/agent-sessions/pkg/harness"
 	"github.com/zigai/agent-sessions/pkg/registry"
 	"github.com/zigai/agent-sessions/pkg/tmuxctx"
 )
@@ -24,8 +25,6 @@ var (
 )
 
 const stopTargetMaxAge = 30 * time.Minute
-
-const agyCommandName = "agy"
 
 type manageResetResult struct {
 	registry.ResetResult
@@ -368,28 +367,7 @@ func harnessCommandMatches(harness registry.Harness, command string) bool {
 }
 
 func harnessCommandNames(harness registry.Harness) []string {
-	switch harness {
-	case registry.HarnessClaude:
-		return []string{"claude", "claude-code"}
-	case registry.HarnessCodex:
-		return []string{"codex"}
-	case registry.HarnessCursor:
-		return []string{"cursor", "cursor-agent", "cursor-cli"}
-	case registry.HarnessKimiCode:
-		return []string{"kimi", "kimi-code", "kimi_code", "kimicode"}
-	case registry.HarnessGrok:
-		return []string{"grok", "grok-build"}
-	case registry.HarnessPi:
-		return []string{"pi"}
-	case registry.HarnessOpenCode:
-		return []string{"opencode", "open-code"}
-	case registry.HarnessAgy:
-		return []string{agyCommandName, "antigravity", "antigravity-cli"}
-	case registry.HarnessKilo:
-		return []string{"kilo", "kilo-code", "kilocode"}
-	default:
-		return nil
-	}
+	return harnesspkg.ProcessNames(harness)
 }
 
 func processCommandName(pid int) (string, error) {

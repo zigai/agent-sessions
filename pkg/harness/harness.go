@@ -3,9 +3,8 @@ package harness
 import (
 	"encoding/json"
 	"fmt"
-	"path/filepath"
-	"strings"
 
+	"github.com/zigai/agent-sessions/pkg/harnessmeta"
 	"github.com/zigai/agent-sessions/pkg/registry"
 )
 
@@ -72,6 +71,20 @@ func newBaseAdapter(definition Definition) baseAdapter {
 	return baseAdapter{definition: cloneDefinition(definition)}
 }
 
+func newMetadataAdapter(id registry.Harness, env EnvKeys) baseAdapter {
+	metadata, ok := harnessmeta.ByID(string(id))
+	if !ok {
+		panic("missing harness metadata for " + string(id))
+	}
+
+	return newBaseAdapter(Definition{
+		ID:           id,
+		Aliases:      metadata.Aliases,
+		ProcessNames: metadata.ProcessNames,
+		Env:          env,
+	})
+}
+
 func All() []Adapter {
 	return append([]Adapter(nil), adapters...)
 }
@@ -87,17 +100,8 @@ func Find(harness registry.Harness) (Adapter, bool) {
 }
 
 func Normalize(value string) (registry.Harness, error) {
-	normalized := normalizeToken(value)
-	for _, adapter := range adapters {
-		definition := adapter.Definition()
-		if normalized == normalizeToken(string(definition.ID)) {
-			return definition.ID, nil
-		}
-		for _, alias := range definition.Aliases {
-			if normalized == normalizeToken(alias) {
-				return definition.ID, nil
-			}
-		}
+	if id, ok := harnessmeta.Normalize(value); ok {
+		return registry.Harness(id), nil
 	}
 
 	return "", fmt.Errorf("%w: %q", registry.ErrUnknownHarness, value)
@@ -122,17 +126,16 @@ func EnvNames(field EnvField) []string {
 }
 
 func FromCommand(command string) (registry.Harness, bool) {
-	normalized := normalizeToken(filepath.Base(command))
-	for _, adapter := range adapters {
-		definition := adapter.Definition()
-		for _, processName := range definition.ProcessNames {
-			if normalized == normalizeToken(processName) {
-				return definition.ID, true
-			}
-		}
+	if id, ok := harnessmeta.FromCommand(command); ok {
+		return registry.Harness(id), true
 	}
 
 	return "", false
+}
+
+// ProcessNames returns executable names that identify a harness process.
+func ProcessNames(harness registry.Harness) []string {
+	return harnessmeta.ProcessNames(string(harness))
 }
 
 func DefaultsFromPayload(harness registry.Harness, rawPayload json.RawMessage) PayloadDefaults {
@@ -288,8 +291,4 @@ func appendUnique(values []string, next ...string) []string {
 	}
 
 	return values
-}
-
-func normalizeToken(value string) string {
-	return strings.ToLower(strings.TrimSpace(value))
 }

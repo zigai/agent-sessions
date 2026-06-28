@@ -20,24 +20,19 @@ type claudeHarness struct {
 
 func claudeAdapter() Adapter {
 	return claudeHarness{
-		baseAdapter: newBaseAdapter(Definition{
-			ID:           registry.HarnessClaude,
-			Aliases:      []string{"claude-code", "claude_code"},
-			ProcessNames: []string{claudeCommand},
-			Env: EnvKeys{
-				SessionID:   []string{"CLAUDE_SESSION_ID"},
-				SessionPath: []string{"CLAUDE_SESSION_PATH"},
-				ProjectRoot: nil,
-				PID:         []string{"CLAUDE_PID"},
-				Event:       nil,
-			},
+		baseAdapter: newMetadataAdapter(registry.HarnessClaude, EnvKeys{
+			SessionID:   []string{"CLAUDE_SESSION_ID"},
+			SessionPath: []string{"CLAUDE_SESSION_PATH"},
+			ProjectRoot: nil,
+			PID:         []string{"CLAUDE_PID"},
+			Event:       nil,
 		}),
 	}
 }
 
 func (claudeHarness) InstallPlan(binary string) InstallPlan {
 	return InstallPlan{
-		JSONCommandHooks: &JSONCommandHookInstallPlan{
+		Actions: []InstallAction{JSONCommandHooksAction{Plan: JSONCommandHookInstallPlan{
 			Path:          filepath.Join(claudeConfigDir(), "settings.json"),
 			Source:        claudeIntegrationSource,
 			Label:         "claude hooks",
@@ -100,12 +95,7 @@ func (claudeHarness) InstallPlan(binary string) InstallPlan {
 					),
 				},
 			},
-		},
-		CursorJSONHooks:  nil,
-		ManagedTextBlock: nil,
-		RenderedFile:     nil,
-		PluginDirectory:  nil,
-		Shim:             nil,
+		}}},
 	}
 }
 

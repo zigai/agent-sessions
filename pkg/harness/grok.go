@@ -20,35 +20,25 @@ type grokHarness struct {
 
 func grokAdapter() Adapter {
 	return grokHarness{
-		baseAdapter: newBaseAdapter(Definition{
-			ID:           registry.HarnessGrok,
-			Aliases:      []string{"grok-build", "grok_build"},
-			ProcessNames: []string{"grok", "grok-build"},
-			Env: EnvKeys{
-				SessionID:   []string{"GROK_SESSION_ID"},
-				SessionPath: nil,
-				ProjectRoot: []string{"GROK_WORKSPACE_ROOT"},
-				PID:         nil,
-				Event:       []string{"GROK_HOOK_EVENT"},
-			},
+		baseAdapter: newMetadataAdapter(registry.HarnessGrok, EnvKeys{
+			SessionID:   []string{"GROK_SESSION_ID"},
+			SessionPath: nil,
+			ProjectRoot: []string{"GROK_WORKSPACE_ROOT"},
+			PID:         nil,
+			Event:       []string{"GROK_HOOK_EVENT"},
 		}),
 	}
 }
 
 func (grokHarness) InstallPlan(binary string) InstallPlan {
 	return InstallPlan{
-		JSONCommandHooks: nil,
-		CursorJSONHooks:  nil,
-		ManagedTextBlock: nil,
-		RenderedFile: &RenderedFileInstallPlan{
+		Actions: []InstallAction{RenderedFileAction{Plan: RenderedFileInstallPlan{
 			Path:        filepath.Join(grokHome(), "hooks", grokHookFileName),
 			Label:       "grok hooks",
 			ConfigLabel: "grok hooks",
 			Content:     "",
 			JSONContent: grokHookConfig(binary),
-		},
-		PluginDirectory: nil,
-		Shim:            nil,
+		}}},
 	}
 }
 
