@@ -89,12 +89,14 @@ func TestQueuedObservedAtPreventsOlderRetryFromOverwritingNewerState(t *testing.
 func TestQueuedReportFallsBackToMinimalTmuxContext(t *testing.T) {
 	t.Parallel()
 
-	storePath := filepath.Join(t.TempDir(), "state.json")
+	root := t.TempDir()
+	storePath := filepath.Join(root, "state.json")
+	socket := filepath.Join(root, "missing-tmux")
 	app := &application{}
 	queue := reportqueue.New(storePath)
 	envelope := queuedTestEnvelope(storePath, "tmux", registry.StateRunning, time.Date(2026, 6, 27, 16, 30, 0, 0, time.UTC))
 	envelope.Runtime.Env = map[string]string{
-		"TMUX":      "/tmp/tmux-1000/default,123,0",
+		"TMUX":      socket + ",123,0",
 		"TMUX_PANE": "%9",
 	}
 	if err := app.processQueuedReport(context.Background(), queue, envelope); err != nil {
@@ -105,8 +107,53 @@ func TestQueuedReportFallsBackToMinimalTmuxContext(t *testing.T) {
 	if len(sessions) != 1 {
 		t.Fatalf("expected one session, got %#v", sessions)
 	}
-	if !sessions[0].Tmux.Inside || sessions[0].Tmux.PaneID != "%9" || sessions[0].Tmux.ServerSocket != "/tmp/tmux-1000/default" {
+	if !sessions[0].Tmux.Inside || sessions[0].Tmux.PaneID != "%9" || sessions[0].Tmux.ServerSocket != socket {
 		t.Fatalf("expected minimal tmux context from env, got %#v", sessions[0].Tmux)
+	}
+}
+
+func TestQueuedReportUsesCachedTmuxWhenCollectionFallsBack(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	storePath := filepath.Join(root, "state.json")
+	socket := filepath.Join(root, "missing-tmux")
+	app := &application{}
+	queue := reportqueue.New(storePath)
+	now := time.Date(2026, 6, 27, 16, 30, 0, 0, time.UTC)
+	envelope := queuedTestEnvelope(storePath, "tmux-cached", registry.StateRunning, now)
+	envelope.Runtime.Env = map[string]string{
+		"TMUX":      socket + ",123,0",
+		"TMUX_PANE": "%9",
+	}
+	richTmux := registry.TmuxContext{
+		Inside:          true,
+		ServerSocket:    socket,
+		SessionID:       "$1",
+		SessionName:     "work",
+		WindowID:        "@2",
+		WindowIndex:     "0",
+		WindowName:      "editor",
+		PaneID:          "%9",
+		PaneIndex:       "1",
+		PaneCurrentPath: "/repo",
+		PanePID:         1234,
+		PaneTTY:         "/dev/ttys001",
+	}
+	if err := queue.StoreTmuxContext(context.Background(), richTmux, time.Now().UTC()); err != nil {
+		t.Fatalf("storing cached tmux context: %v", err)
+	}
+
+	if err := app.processQueuedReport(context.Background(), queue, envelope); err != nil {
+		t.Fatalf("processing queued report: %v", err)
+	}
+
+	sessions := listQueuedTestSessions(t, storePath)
+	if len(sessions) != 1 {
+		t.Fatalf("expected one session, got %#v", sessions)
+	}
+	if sessions[0].Tmux.SessionName != "work" || sessions[0].Tmux.WindowName != "editor" || sessions[0].Tmux.PaneCurrentPath != "/repo" {
+		t.Fatalf("expected cached tmux details, got %#v", sessions[0].Tmux)
 	}
 }
 

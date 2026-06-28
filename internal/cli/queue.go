@@ -199,12 +199,12 @@ func (app *application) queuedReportTmux(
 		TMUX:     envelope.Runtime.Env["TMUX"],
 		TMUXPane: envelope.Runtime.Env["TMUX_PANE"],
 	}
-	if collected, err := tmuxctx.CurrentWithEnv(ctx, env); err == nil {
+	minimal := tmuxctx.ContextFromEnv(env)
+	if collected, err := tmuxctx.CurrentWithEnv(ctx, env); err == nil && collected != minimal {
 		_ = queue.StoreTmuxContext(ctx, collected, time.Now().UTC())
 
 		return collected
 	}
-	minimal := tmuxctx.ContextFromEnv(env)
 	if cached, ok := queue.LookupTmuxContext(minimal, time.Now().UTC(), 0); ok {
 		return cached
 	}
