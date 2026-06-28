@@ -28,7 +28,10 @@ const (
 	testTmuxSessionName = "work"
 )
 
-var errTestInterruptFailed = errors.New("interrupt failed")
+var (
+	errTestInterruptFailed = errors.New("interrupt failed")
+	errTestReadFailed      = errors.New("read failed")
+)
 
 func TestRootCommandHasUse(t *testing.T) {
 	t.Parallel()
@@ -1399,6 +1402,46 @@ func TestHookUnsupportedHarnessReturnsError(t *testing.T) {
 	}
 }
 
+func TestManagedHookReturnsStdinReadError(t *testing.T) {
+	t.Parallel()
+
+	app := &application{stdout: &bytes.Buffer{}, stderr: &bytes.Buffer{}}
+	err := app.runManagedHook(
+		context.Background(),
+		failingReader{},
+		string(registry.HarnessAgy),
+		managedHookOptions{event: "PreInvocation"},
+	)
+	if !errors.Is(err, errTestReadFailed) {
+		t.Fatalf("expected read error, got %v", err)
+	}
+}
+
+func TestManagedHookWarnsWhenBestEffortReportFails(t *testing.T) {
+	t.Parallel()
+
+	var output bytes.Buffer
+	var stderr bytes.Buffer
+	cmd := NewRootCommand(&output, &stderr)
+	cmd.SetArgs([]string{
+		storeFlag, t.TempDir(),
+		hookCommandName, "agy",
+		"--event", "PreInvocation",
+	})
+	cmd.SetIn(strings.NewReader(`{"conversationId":"agy-session","workspacePaths":["/repo"]}`))
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("managed hook command failed: %v", err)
+	}
+
+	var response map[string]any
+	if err := json.Unmarshal(output.Bytes(), &response); err != nil {
+		t.Fatalf("managed hook response is not valid JSON: %v", err)
+	}
+	if !strings.Contains(stderr.String(), "warning: reporting managed hook session") {
+		t.Fatalf("expected best-effort report warning, got %q", stderr.String())
+	}
+}
+
 func TestAgyHookPreToolUsePermissionReportsWaiting(t *testing.T) {
 	t.Parallel()
 
@@ -1799,4 +1842,10 @@ func (s *fakeSessionStopSignaler) SendProcessInterrupt(pid int) error {
 	s.pids = append(s.pids, pid)
 
 	return s.pidErr
+}
+
+type failingReader struct{}
+
+func (failingReader) Read(_ []byte) (int, error) {
+	return 0, errTestReadFailed
 }

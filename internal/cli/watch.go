@@ -905,5 +905,7 @@ func (app *application) warnf(format string, args ...any) {
 	if app.stderr == nil {
 		return
 	}
-	_, _ = fmt.Fprintf(app.stderr, format, args...)
+	if _, err := fmt.Fprintf(app.stderr, format, args...); err != nil {
+		return
+	}
 }

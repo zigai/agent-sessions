@@ -82,7 +82,10 @@ func (app *application) runManagedHook(
 		return fmt.Errorf("normalizing hook harness: %w", err)
 	}
 
-	data, _ := io.ReadAll(stdin)
+	data, err := io.ReadAll(stdin)
+	if err != nil {
+		return fmt.Errorf("reading hook payload: %w", err)
+	}
 	rawPayload := rawPayloadFromHookBytes(data)
 	payload := hookPayloadObject(rawPayload)
 	parentArgs := parentProcessArgs(ctx)
@@ -93,8 +96,8 @@ func (app *application) runManagedHook(
 
 	if options.queue {
 		app.queueManagedHook(ctx, result, data, parentArgs)
-	} else {
-		reportManagedHook(ctx, app.registryStore(), result)
+	} else if err := reportManagedHook(ctx, app.registryStore(), result); err != nil {
+		app.warnf("warning: %v\n", err)
 	}
 
 	return app.writeJSON(result.Response)
@@ -142,7 +145,10 @@ func (app *application) queueManagedHook(
 		CachedTmux: cachedTmux,
 	}, reportqueue.EnqueueOptions{Now: func() time.Time { return now }})
 	if err != nil {
-		reportManagedHook(ctx, app.registryStore(), result)
+		app.warnf("warning: queueing managed hook report failed: %v\n", err)
+		if err := reportManagedHook(ctx, app.registryStore(), result); err != nil {
+			app.warnf("warning: %v\n", err)
+		}
 
 		return
 	}
@@ -153,16 +159,20 @@ func reportManagedHook(
 	ctx context.Context,
 	store registry.Store,
 	result harnesspkg.HookResult,
-) {
+) error {
 	if !result.ReportOK {
-		return
+		return nil
 	}
 
 	report := result.Report
 	if collected, err := tmuxctx.Current(ctx); err == nil {
 		report.Tmux = collected
 	}
-	_, _ = store.Report(ctx, report)
+	if _, err := store.Report(ctx, report); err != nil {
+		return fmt.Errorf("reporting managed hook session: %w", err)
+	}
+
+	return nil
 }
 
 func rawPayloadFromHookBytes(data []byte) json.RawMessage {
