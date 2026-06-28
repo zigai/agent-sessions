@@ -139,9 +139,7 @@ linters:
       enable-all: true
       disable:
         - fieldalignment
-      settings:
-        shadow:
-          strict: true
+        - shadow
     mnd:
       ignored-numbers:
         - "0o600"
