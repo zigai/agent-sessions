@@ -119,7 +119,19 @@ func TestInstallClaudeWritesHooks(t *testing.T) {
 	if err := json.Unmarshal(data, &config); err != nil {
 		t.Fatalf("installed hooks are not valid JSON: %v", err)
 	}
+	requireClaudeHookEvents(t, config)
 
+	requireTextContains(t, string(data), []string{
+		"--raw-stdin",
+		"--queue",
+		"--quiet",
+		"agent_sessions_integration=claude-hook",
+		managedMarker,
+	})
+}
+
+func requireClaudeHookEvents(t *testing.T, config map[string]any) {
+	t.Helper()
 	hooks, hooksOK := config["hooks"].(map[string]any)
 	if !hooksOK {
 		t.Fatal("expected hooks object")
@@ -129,16 +141,14 @@ func TestInstallClaudeWritesHooks(t *testing.T) {
 			t.Fatalf("expected %s hook", event)
 		}
 	}
+}
 
-	text := string(data)
-	if !strings.Contains(text, "--raw-stdin") || !strings.Contains(text, "--quiet") {
-		t.Fatalf("expected stdin-aware quiet claude hook: %s", text)
-	}
-	if !strings.Contains(text, "agent_sessions_integration=claude-hook") {
-		t.Fatalf("expected managed claude hook marker: %s", text)
-	}
-	if !strings.Contains(text, managedMarker) {
-		t.Fatalf("expected managed marker in claude hooks: %s", text)
+func requireTextContains(t *testing.T, text string, required []string) {
+	t.Helper()
+	for _, item := range required {
+		if !strings.Contains(text, item) {
+			t.Fatalf("expected installed hook to contain %q: %s", item, text)
+		}
 	}
 }
 

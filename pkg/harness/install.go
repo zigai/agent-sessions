@@ -153,6 +153,7 @@ func reportHookCommand(
 		"--event", ShellQuote(event),
 		"--source", ShellQuote(source),
 		"--attribute", ShellQuote("agent_sessions_integration=" + source),
+		"--queue",
 		stdinFlag,
 		"--quiet",
 	}, " ")
