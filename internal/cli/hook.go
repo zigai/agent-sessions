@@ -15,10 +15,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
+	"github.com/zigai/agent-sessions/internal/reportqueue"
 	harnesspkg "github.com/zigai/agent-sessions/pkg/harness"
 	"github.com/zigai/agent-sessions/pkg/registry"
 	"github.com/zigai/agent-sessions/pkg/tmuxctx"
@@ -28,6 +31,7 @@ var errUnsupportedManagedHook = errors.New("harness does not support managed hoo
 
 type managedHookOptions struct {
 	event string
+	queue bool
 }
 
 func (app *application) newHookCommand() *cobra.Command {
@@ -42,6 +46,8 @@ func (app *application) newHookCommand() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&options.event, "event", "", "native hook event name")
+	cmd.Flags().BoolVar(&options.queue, "queue", false, "durably queue the report side effect")
+	_ = cmd.Flags().MarkHidden("queue")
 
 	return cmd
 }
@@ -59,6 +65,8 @@ func (app *application) newAgyHookCommand() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&options.event, "event", "", "Antigravity hook event name")
+	cmd.Flags().BoolVar(&options.queue, "queue", false, "durably queue the report side effect")
+	_ = cmd.Flags().MarkHidden("queue")
 
 	return cmd
 }
@@ -77,14 +85,68 @@ func (app *application) runManagedHook(
 	data, _ := io.ReadAll(stdin)
 	rawPayload := rawPayloadFromHookBytes(data)
 	payload := hookPayloadObject(rawPayload)
-	result, ok := harnesspkg.HandleHook(harness, options.event, rawPayload, payload, parentProcessArgs(ctx))
+	parentArgs := parentProcessArgs(ctx)
+	result, ok := harnesspkg.HandleHook(harness, options.event, rawPayload, payload, parentArgs)
 	if !ok {
 		return fmt.Errorf("%w: %s", errUnsupportedManagedHook, harness)
 	}
 
-	reportManagedHook(ctx, app.registryStore(), result)
+	if options.queue {
+		app.queueManagedHook(ctx, result, data, parentArgs)
+	} else {
+		reportManagedHook(ctx, app.registryStore(), result)
+	}
 
 	return app.writeJSON(result.Response)
+}
+
+func (app *application) queueManagedHook(
+	ctx context.Context,
+	result harnesspkg.HookResult,
+	stdin []byte,
+	parentArgs []string,
+) {
+	if !result.ReportOK {
+		return
+	}
+	now := time.Now().UTC()
+	report := result.Report
+	if report.ObservedAt.IsZero() {
+		report.ObservedAt = now
+	}
+	storePath := app.store().Path()
+	queue := reportqueue.New(storePath)
+	tmuxEnv := tmuxctx.Env{TMUX: os.Getenv("TMUX"), TMUXPane: os.Getenv("TMUX_PANE")}
+	minimalTmux := tmuxctx.ContextFromEnv(tmuxEnv)
+	cachedTmux := minimalTmux
+	if cached, ok := queue.LookupTmuxContext(minimalTmux, now, 0); ok {
+		cachedTmux = cached
+	}
+	_, err := queue.Enqueue(ctx, reportqueue.Envelope{
+		Version:       reportqueue.EnvelopeVersion,
+		CreatedAt:     now,
+		StorePath:     storePath,
+		Kind:          reportqueue.KindReport,
+		Report:        reportqueue.ReportFromRegistry(report),
+		RawPayloadSet: len(report.RawPayload) > 0,
+		Stdin:         []byte(strings.TrimSpace(string(stdin))),
+		Runtime: reportqueue.RuntimeContext{
+			CWD:        defaultCWD(),
+			ParentArgs: parentArgs,
+			Env: map[string]string{
+				"TMUX":      tmuxEnv.TMUX,
+				"TMUX_PANE": tmuxEnv.TMUXPane,
+				"PWD":       os.Getenv("PWD"),
+			},
+		},
+		CachedTmux: cachedTmux,
+	}, reportqueue.EnqueueOptions{Now: func() time.Time { return now }})
+	if err != nil {
+		reportManagedHook(ctx, app.registryStore(), result)
+
+		return
+	}
+	app.kickQueueDrainer(ctx, storePath)
 }
 
 func reportManagedHook(

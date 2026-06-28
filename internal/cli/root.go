@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -18,6 +19,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/zigai/agent-sessions/internal/reportqueue"
 	harnesspkg "github.com/zigai/agent-sessions/pkg/harness"
 	"github.com/zigai/agent-sessions/pkg/registry"
 	"github.com/zigai/agent-sessions/pkg/tmuxctx"
@@ -116,12 +118,15 @@ func NewRootCommand(stdout io.Writer, stderr io.Writer) *cobra.Command {
 		app.newInstallHooksCommand(),
 		app.newHookCommand(),
 		app.newAgyHookCommand(),
+		app.newDrainQueueCommand(),
+		app.newQueueStatusCommand(),
 	)
 
 	return root
 }
 
 func Execute() {
+	kickQueueDrainerForArgs(os.Args[1:])
 	if handled, err := tryExecuteFastPath(context.Background(), os.Args[1:], os.Stdin, os.Stdout, os.Stderr); handled {
 		if err != nil {
 			_, _ = fmt.Fprintln(os.Stderr, err)
@@ -208,8 +213,22 @@ type reportOptions struct {
 	rawStdin        bool
 	rawDefaultsOnly bool
 	noTmux          bool
+	queue           bool
 	quiet           bool
 	resumeCommand   []string
+}
+
+type preparedReport struct {
+	harness registry.Harness
+	report  registry.Report
+	stdin   []byte
+	ignored bool
+}
+
+type reportRuntimeContext struct {
+	tmux              registry.TmuxContext
+	parentArgs        []string
+	defaultObservedAt time.Time
 }
 
 func (app *application) newReportCommand() *cobra.Command {
@@ -257,6 +276,8 @@ func (app *application) newReportCommand() *cobra.Command {
 	cmd.Flags().BoolVar(&options.rawStdin, "raw-stdin", false, "store stdin as raw hook payload")
 	cmd.Flags().BoolVar(&options.rawDefaultsOnly, "raw-stdin-defaults-only", false, "read stdin for harness defaults without storing raw hook payload")
 	cmd.Flags().BoolVar(&options.noTmux, "no-tmux", false, "do not auto-collect current tmux pane context")
+	cmd.Flags().BoolVar(&options.queue, "queue", false, "durably queue the report for asynchronous registry update")
+	_ = cmd.Flags().MarkHidden("queue")
 	cmd.Flags().BoolVar(&options.quiet, "quiet", false, "suppress normal report output")
 
 	return cmd
@@ -370,38 +391,64 @@ func classifyReportArg(arg string) reportArgClassification {
 }
 
 func (app *application) runReport(ctx context.Context, stdin io.Reader, options reportOptions) error {
+	if options.queue {
+		return app.runQueuedReport(ctx, stdin, options)
+	}
+
+	prepared, err := app.prepareReport(stdin, options, reportRuntimeContext{
+		tmux:       reportTmuxContext(ctx, options.noTmux),
+		parentArgs: parentProcessArgs(ctx),
+	})
+	if err != nil {
+		return err
+	}
+	if prepared.ignored {
+		return app.writeIgnoredReport(prepared.harness, options.quiet)
+	}
+
+	session, err := app.registryStore().Report(ctx, prepared.report)
+	if err != nil {
+		return fmt.Errorf("reporting session: %w", err)
+	}
+
+	return app.writeReportResult(session, options.quiet)
+}
+
+func (app *application) prepareReport(
+	stdin io.Reader,
+	options reportOptions,
+	runtime reportRuntimeContext,
+) (preparedReport, error) {
 	harness, state, err := normalizeReportHarnessAndState(options)
 	if err != nil {
-		return err
+		return preparedReport{}, err
 	}
 
-	tmux := reportTmuxContext(ctx, options.noTmux)
 	attributes, err := parseAttributes(options.attributes)
 	if err != nil {
-		return err
+		return preparedReport{}, err
 	}
 
-	rawPayload, defaultsPayload, err := readStdinPayload(stdin, options.rawStdin, options.rawDefaultsOnly)
+	rawPayload, defaultsPayload, stdinData, err := readStdinPayloadData(stdin, options.rawStdin, options.rawDefaultsOnly)
 	if err != nil {
-		return err
+		return preparedReport{}, err
 	}
 	if !harnesspkg.PayloadCompatibleWithHarness(harness, defaultsPayload) {
-		if options.quiet {
-			return nil
-		}
-
-		return app.writef("ignored %s report: hook payload does not match harness\n", harness)
+		return preparedReport{harness: harness, stdin: stdinData, ignored: true}, nil
 	}
 	applyPayloadDefaults(&options, attributes, harnesspkg.DefaultsFromPayload(harness, defaultsPayload))
 	applyReportRuntimeDefaults(&options)
 	if err := requireReportIdentity(state, options); err != nil {
-		return missingReportIdentityError(harness)
+		return preparedReport{}, missingReportIdentityError(harness)
 	}
 	observedAt, err := parseObservedAt(options.observedAt)
 	if err != nil {
-		return err
+		return preparedReport{}, err
 	}
-	state = harnesspkg.AdjustRuntimeState(harness, state, options.event, attributes, parentProcessArgs(ctx))
+	if observedAt.IsZero() && !runtime.defaultObservedAt.IsZero() {
+		observedAt = runtime.defaultObservedAt.UTC()
+	}
+	state = harnesspkg.AdjustRuntimeState(harness, state, options.event, attributes, runtime.parentArgs)
 
 	source := options.source
 	if source == "" {
@@ -424,7 +471,7 @@ func (app *application) runReport(ctx context.Context, stdin io.Reader, options 
 		PID:           options.pid,
 		PPID:          options.ppid,
 		TTY:           options.tty,
-		Tmux:          tmux,
+		Tmux:          runtime.tmux,
 		Source:        source,
 		Confidence:    confidence,
 		Event:         options.event,
@@ -433,12 +480,79 @@ func (app *application) runReport(ctx context.Context, stdin io.Reader, options 
 		ObservedAt:    observedAt,
 	})
 
-	session, err := app.registryStore().Report(ctx, report)
+	return preparedReport{harness: harness, report: report, stdin: stdinData}, nil
+}
+
+func (app *application) runQueuedReport(ctx context.Context, stdin io.Reader, options reportOptions) error {
+	now := time.Now().UTC()
+	parentArgs := parentProcessArgs(ctx)
+	prepared, err := app.prepareReport(stdin, options, reportRuntimeContext{
+		parentArgs:        parentArgs,
+		defaultObservedAt: now,
+	})
 	if err != nil {
-		return fmt.Errorf("reporting session: %w", err)
+		return err
+	}
+	if prepared.ignored {
+		return app.writeIgnoredReport(prepared.harness, options.quiet)
 	}
 
-	return app.writeReportResult(session, options.quiet)
+	storePath := app.store().Path()
+	queue := reportqueue.New(storePath)
+	tmuxEnv := tmuxctx.Env{TMUX: os.Getenv("TMUX"), TMUXPane: os.Getenv("TMUX_PANE")}
+	minimalTmux := tmuxctx.ContextFromEnv(tmuxEnv)
+	cachedTmux := minimalTmux
+	if cached, ok := queue.LookupTmuxContext(minimalTmux, now, 0); ok {
+		cachedTmux = cached
+	}
+	result, err := queue.Enqueue(ctx, reportqueue.Envelope{
+		Version:       reportqueue.EnvelopeVersion,
+		CreatedAt:     now,
+		StorePath:     storePath,
+		Kind:          reportqueue.KindReport,
+		Report:        reportqueue.ReportFromRegistry(prepared.report),
+		RawPayloadSet: len(prepared.report.RawPayload) > 0,
+		NoTmux:        options.noTmux,
+		Stdin:         prepared.stdin,
+		Runtime: reportqueue.RuntimeContext{
+			CWD:        defaultCWD(),
+			ParentArgs: parentArgs,
+			Env: map[string]string{
+				"TMUX":      tmuxEnv.TMUX,
+				"TMUX_PANE": tmuxEnv.TMUXPane,
+				"PWD":       os.Getenv("PWD"),
+			},
+		},
+		CachedTmux: cachedTmux,
+	}, reportqueue.EnqueueOptions{Now: func() time.Time { return now }})
+	if err != nil {
+		fallback := options
+		fallback.queue = false
+
+		return app.runReport(ctx, bytes.NewReader(prepared.stdin), fallback)
+	}
+	app.kickQueueDrainer(ctx, storePath)
+
+	return app.writeQueueResult(result, options.quiet)
+}
+
+func (app *application) writeIgnoredReport(harness registry.Harness, quiet bool) error {
+	if quiet {
+		return nil
+	}
+
+	return app.writef("ignored %s report: hook payload does not match harness\n", harness)
+}
+
+func (app *application) writeQueueResult(result reportqueue.EnqueueResult, quiet bool) error {
+	if app.outputJSON {
+		return app.writeJSON(result)
+	}
+	if quiet {
+		return nil
+	}
+
+	return app.writef("queued\t%s\n", result.ID)
 }
 
 func (app *application) writeReportResult(session registry.Session, quiet bool) error {
@@ -863,6 +977,7 @@ func (app *application) runScan(ctx context.Context, options scanOptions) error 
 	if err != nil {
 		return fmt.Errorf("listing tmux panes: %w", err)
 	}
+	cacheScannedTmuxPanes(ctx, reportqueue.New(app.store().Path()), panes)
 
 	store := app.registryStore()
 	_, err = markMissingTmuxPaneSessionsExited(ctx, store, panes)
@@ -906,6 +1021,13 @@ func (app *application) runScan(ctx context.Context, options scanOptions) error 
 	}
 
 	return app.writef("reported %d session(s)\n", len(sessions))
+}
+
+func cacheScannedTmuxPanes(ctx context.Context, queue reportqueue.Queue, panes []tmuxctx.Pane) {
+	now := time.Now().UTC()
+	for _, pane := range panes {
+		_ = queue.StoreTmuxContext(ctx, pane.Tmux, now)
+	}
 }
 
 func markMissingTmuxPaneSessionsExited(
@@ -1355,18 +1477,22 @@ func parseAttributes(values []string) (map[string]string, error) {
 	return attributes, nil
 }
 
-func readStdinPayload(stdin io.Reader, storeRaw bool, defaultsOnly bool) (json.RawMessage, json.RawMessage, error) {
+func readStdinPayloadData(
+	stdin io.Reader,
+	storeRaw bool,
+	defaultsOnly bool,
+) (json.RawMessage, json.RawMessage, []byte, error) {
 	if !storeRaw && !defaultsOnly {
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 
 	data, err := io.ReadAll(stdin)
 	if err != nil {
-		return nil, nil, fmt.Errorf("reading stdin payload: %w", err)
+		return nil, nil, nil, fmt.Errorf("reading stdin payload: %w", err)
 	}
 	data = []byte(strings.TrimSpace(string(data)))
 	if len(data) == 0 {
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 
 	var payload json.RawMessage
@@ -1375,16 +1501,16 @@ func readStdinPayload(stdin io.Reader, storeRaw bool, defaultsOnly bool) (json.R
 	} else {
 		wrapped, err := json.Marshal(string(data))
 		if err != nil {
-			return nil, nil, fmt.Errorf("encoding stdin payload: %w", err)
+			return nil, nil, data, fmt.Errorf("encoding stdin payload: %w", err)
 		}
 		payload = json.RawMessage(wrapped)
 	}
 
 	if storeRaw {
-		return payload, payload, nil
+		return payload, payload, data, nil
 	}
 
-	return nil, payload, nil
+	return nil, payload, data, nil
 }
 
 func applyPayloadDefaults(

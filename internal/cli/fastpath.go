@@ -37,8 +37,11 @@ type (
 )
 
 const (
-	agyHookCommandName = "agy-hook"
-	fastPathEventFlag  = "--event"
+	agyHookCommandName  = "agy-hook"
+	fastPathEventFlag   = "--event"
+	fastPathHarnessFlag = "--harness"
+	fastPathQueueFlag   = "--queue"
+	fastPathStateFlag   = "--state"
 )
 
 var (
@@ -48,10 +51,10 @@ var (
 )
 
 var fastReportStringFlags = map[string]fastReportStringSetter{
-	"--harness": func(state *fastReportParseState, value string) {
+	fastPathHarnessFlag: func(state *fastReportParseState, value string) {
 		state.options.harness = value
 	},
-	"--state": func(state *fastReportParseState, value string) {
+	fastPathStateFlag: func(state *fastReportParseState, value string) {
 		state.options.state = value
 	},
 	"--session-id": func(state *fastReportParseState, value string) {
@@ -112,6 +115,9 @@ var fastReportBoolFlags = map[string]fastReportBoolSetter{
 	},
 	"--no-tmux": func(state *fastReportParseState) {
 		state.options.noTmux = true
+	},
+	fastPathQueueFlag: func(state *fastReportParseState) {
+		state.options.queue = true
 	},
 	"--quiet": func(state *fastReportParseState) {
 		state.options.quiet = true
@@ -413,6 +419,14 @@ func fastManagedHookPositionalHarness(command string, harnessName string, arg st
 
 func applyFastManagedHookFlag(args []string, index int, options *managedHookOptions) (int, bool, error) {
 	flag := newFastPathFlag(args[index])
+	if flag.name == fastPathQueueFlag {
+		if flag.hasInlineValue {
+			return index, false, nil
+		}
+		options.queue = true
+
+		return index, true, nil
+	}
 	if flag.name != fastPathEventFlag {
 		return index, false, nil
 	}
