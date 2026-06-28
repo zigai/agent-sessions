@@ -11,6 +11,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/zigai/agent-sessions/internal/processinfo"
 )
 
 const (
@@ -75,7 +77,7 @@ func (s *FileStore) Report(ctx context.Context, report Report) (Session, error) 
 		return Session{}, fmt.Errorf("checking context: %w", err)
 	}
 
-	report = enrichReportProcessIdentity(report)
+	report = enrichReportProcessIdentity(ctx, report)
 	receivedAt := s.now().UTC()
 	observedAt, observedAtReliable := observedAtOrReceivedAt(report.ObservedAt, receivedAt)
 	var saved Session
@@ -824,34 +826,14 @@ func tmuxPaneReconcileKey(tmux TmuxContext) string {
 	return strings.Join(tmuxPaneIdentityParts(tmux), "\x00")
 }
 
-func enrichReportProcessIdentity(report Report) Report {
+func enrichReportProcessIdentity(ctx context.Context, report Report) Report {
 	if report.PID <= 0 || report.ProcessStartTime != "" {
 		return report
 	}
 
-	report.ProcessStartTime = processStartTimeForPID(report.PID)
+	report.ProcessStartTime = processinfo.StartIdentity(ctx, report.PID)
 
 	return report
-}
-
-func processStartTimeForPID(pid int) string {
-	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
-	if err != nil {
-		return ""
-	}
-
-	stat := string(data)
-	closeParen := strings.LastIndexByte(stat, ')')
-	if closeParen < 0 || closeParen+2 >= len(stat) {
-		return ""
-	}
-	fields := strings.Fields(stat[closeParen+2:])
-	const startTimeFieldIndexAfterComm = 19
-	if len(fields) <= startTimeFieldIndexAfterComm {
-		return ""
-	}
-
-	return fields[startTimeFieldIndexAfterComm]
 }
 
 func summaryKeyForSession(session Session) string {

@@ -14,6 +14,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/zigai/agent-sessions/internal/processinfo"
 	harnesspkg "github.com/zigai/agent-sessions/pkg/harness"
 	"github.com/zigai/agent-sessions/pkg/registry"
 	"github.com/zigai/agent-sessions/pkg/tmuxctx"
@@ -63,7 +64,7 @@ func (defaultSessionStopSignaler) ValidateStopTarget(
 	case "tmux-interrupt":
 		return validateTmuxStopTarget(ctx, session)
 	case "pid-interrupt":
-		return validateProcessStopTarget(session)
+		return validateProcessStopTarget(ctx, session)
 	default:
 		return stopTargetValidation{}, fmt.Errorf("%w: %q", errUnknownStopMethod, target.Method)
 	}
@@ -302,12 +303,12 @@ func validateTmuxStopTarget(ctx context.Context, session registry.Session) (stop
 	return stopTargetValidation{OK: false, Reason: "tmux pane no longer exists"}, nil
 }
 
-func validateProcessStopTarget(session registry.Session) (stopTargetValidation, error) {
+func validateProcessStopTarget(ctx context.Context, session registry.Session) (stopTargetValidation, error) {
 	if session.ProcessStartTime == "" {
 		return stopTargetValidation{OK: false, Reason: "missing process start identity"}, nil
 	}
 
-	currentStartTime := processStartTimeForPID(session.PID)
+	currentStartTime := processinfo.StartIdentity(ctx, session.PID)
 	if currentStartTime == "" {
 		return stopTargetValidation{OK: false, Reason: "process no longer exists"}, nil
 	}
@@ -315,9 +316,9 @@ func validateProcessStopTarget(session registry.Session) (stopTargetValidation, 
 		return stopTargetValidation{OK: false, Reason: "process identity changed"}, nil
 	}
 
-	command, err := processCommandName(session.PID)
+	command, err := processinfo.CommandName(ctx, session.PID)
 	if err != nil {
-		return stopTargetValidation{}, err
+		return stopTargetValidation{}, fmt.Errorf("reading process command: %w", err)
 	}
 	if !harnessCommandMatches(session.Harness, command) {
 		return stopTargetValidation{OK: false, Reason: "process command changed"}, nil
@@ -365,39 +366,6 @@ func harnessCommandMatches(harness registry.Harness, command string) bool {
 
 func harnessCommandNames(harness registry.Harness) []string {
 	return harnesspkg.ProcessNames(harness)
-}
-
-func processCommandName(pid int) (string, error) {
-	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/comm", pid))
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return "", nil
-		}
-
-		return "", fmt.Errorf("reading process command: %w", err)
-	}
-
-	return strings.TrimSpace(string(data)), nil
-}
-
-func processStartTimeForPID(pid int) string {
-	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
-	if err != nil {
-		return ""
-	}
-
-	stat := string(data)
-	closeParen := strings.LastIndexByte(stat, ')')
-	if closeParen < 0 || closeParen+2 >= len(stat) {
-		return ""
-	}
-	fields := strings.Fields(stat[closeParen+2:])
-	const startTimeFieldIndexAfterComm = 19
-	if len(fields) <= startTimeFieldIndexAfterComm {
-		return ""
-	}
-
-	return fields[startTimeFieldIndexAfterComm]
 }
 
 func (app *application) writeManageStopAllResult(result manageStopAllResult) error {
