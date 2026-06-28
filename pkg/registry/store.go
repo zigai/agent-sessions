@@ -87,11 +87,8 @@ func (s *FileStore) Report(ctx context.Context, report Report) (Session, error) 
 			return ErrReportIdentityRequired
 		}
 
-		saved = mergeReportSession(snap, report, observedAt, receivedAt, observedAtReliable)
-		snap.Sessions[saved.ID] = saved
-		reconciledAt := reconcilePaneOccupants(snap.Sessions, saved.ID, report, observedAt)
-		saved = snap.Sessions[saved.ID]
-		snap.UpdatedAt = maxTime(snap.UpdatedAt, saved.UpdatedAt, reconciledAt, receivedAt)
+		mutation := newReportMutation(snap, report, observedAt, receivedAt, observedAtReliable)
+		saved = mutation.apply()
 
 		return nil
 	})
@@ -102,38 +99,67 @@ func (s *FileStore) Report(ctx context.Context, report Report) (Session, error) 
 	return saved, nil
 }
 
-func mergeReportSession(
+type reportMutation struct {
+	snap               *snapshot
+	report             Report
+	observedAt         time.Time
+	receivedAt         time.Time
+	observedAtReliable bool
+}
+
+func newReportMutation(
 	snap *snapshot,
 	report Report,
 	observedAt time.Time,
 	receivedAt time.Time,
 	observedAtReliable bool,
-) Session {
-	reportID := sessionIDForReport(report)
-	matchingIDs := matchingSessionIDs(snap.Sessions, report, reportID)
-	canonicalID := canonicalIDForReportMerge(snap.Sessions, matchingIDs, report, reportID)
-	base := mergedExistingSessions(snap.Sessions, matchingIDs, canonicalID)
-	saved := mergeReport(base, report, observedAt, receivedAt, observedAtReliable)
+) reportMutation {
+	return reportMutation{
+		snap:               snap,
+		report:             report,
+		observedAt:         observedAt,
+		receivedAt:         receivedAt,
+		observedAtReliable: observedAtReliable,
+	}
+}
+
+func (mutation *reportMutation) apply() Session {
+	saved := mutation.mergeSession()
+	mutation.snap.Sessions[saved.ID] = saved
+	reconciledAt := mutation.reconcilePaneOccupants(saved.ID)
+	saved = mutation.snap.Sessions[saved.ID]
+	mutation.snap.UpdatedAt = maxTime(mutation.snap.UpdatedAt, saved.UpdatedAt, reconciledAt, mutation.receivedAt)
+
+	return saved
+}
+
+func (mutation *reportMutation) mergeSession() Session {
+	reportID := sessionIDForReport(mutation.report)
+	matchingIDs := mutation.matchingSessionIDs(reportID)
+	canonicalID := mutation.canonicalIDForMerge(matchingIDs, reportID)
+	base := mergedExistingSessions(mutation.snap.Sessions, matchingIDs, canonicalID)
+	saved := mergeReport(
+		base,
+		mutation.report,
+		mutation.observedAt,
+		mutation.receivedAt,
+		mutation.observedAtReliable,
+	)
 
 	for _, id := range matchingIDs {
-		delete(snap.Sessions, id)
+		delete(mutation.snap.Sessions, id)
 	}
 
 	return saved
 }
 
-func canonicalIDForReportMerge(
-	sessions map[string]Session,
-	matchingIDs []string,
-	report Report,
-	reportID string,
-) string {
-	if reportHasStrongIdentity(report) {
+func (mutation *reportMutation) canonicalIDForMerge(matchingIDs []string, reportID string) string {
+	if reportHasStrongIdentity(mutation.report) {
 		return reportID
 	}
 
 	for _, id := range matchingIDs {
-		if sessionHasStrongIdentity(sessions[id]) {
+		if sessionHasStrongIdentity(mutation.snap.Sessions[id]) {
 			return id
 		}
 	}
@@ -148,27 +174,22 @@ func canonicalIDForReportMerge(
 // harness occupant. A later live report in the same pane means older live
 // records in that pane are stale even if their harness did not emit an exit
 // event.
-func reconcilePaneOccupants(
-	sessions map[string]Session,
-	currentID string,
-	report Report,
-	observedAt time.Time,
-) time.Time {
-	if !reportOccupiesTmuxPane(report) {
+func (mutation *reportMutation) reconcilePaneOccupants(currentID string) time.Time {
+	if !mutation.reportOccupiesTmuxPane() {
 		return time.Time{}
 	}
 
-	winnerID, winnerTime := currentPaneOccupant(sessions, currentID, report.Tmux)
+	winnerID, winnerTime := mutation.currentPaneOccupant(currentID)
 	if winnerID == "" {
 		return time.Time{}
 	}
 	if winnerTime.IsZero() {
-		winnerTime = observedAt
+		winnerTime = mutation.observedAt
 	}
 
 	var latest time.Time
-	for id, session := range sessions {
-		if id == winnerID || session.State == StateExited || !sameTmuxPane(session.Tmux, report.Tmux) {
+	for id, session := range mutation.snap.Sessions {
+		if id == winnerID || session.State == StateExited || !sameTmuxPane(session.Tmux, mutation.report.Tmux) {
 			continue
 		}
 
@@ -177,22 +198,22 @@ func reconcilePaneOccupants(
 		session.EndedAt = winnerTime
 		session.UpdatedAt = maxTime(session.UpdatedAt, winnerTime)
 		session.LastSeenAt = maxTime(session.LastSeenAt, winnerTime)
-		sessions[id] = session
+		mutation.snap.Sessions[id] = session
 		latest = maxTime(latest, session.UpdatedAt)
 	}
 
 	return latest
 }
 
-func reportOccupiesTmuxPane(report Report) bool {
-	return report.State != "" && report.State != StateExited && report.Tmux.PaneID != ""
+func (mutation *reportMutation) reportOccupiesTmuxPane() bool {
+	return mutation.report.State != "" && mutation.report.State != StateExited && mutation.report.Tmux.PaneID != ""
 }
 
-func currentPaneOccupant(sessions map[string]Session, currentID string, tmux TmuxContext) (string, time.Time) {
+func (mutation *reportMutation) currentPaneOccupant(currentID string) (string, time.Time) {
 	var winnerID string
 	var winnerTime time.Time
-	for id, session := range sessions {
-		if session.State == StateExited || !sameTmuxPane(session.Tmux, tmux) {
+	for id, session := range mutation.snap.Sessions {
+		if session.State == StateExited || !sameTmuxPane(session.Tmux, mutation.report.Tmux) {
 			continue
 		}
 
@@ -244,25 +265,25 @@ func paneOccupantObservedAt(session Session) time.Time {
 	return observedAt
 }
 
-func matchingSessionIDs(sessions map[string]Session, report Report, canonicalID string) []string {
+func (mutation *reportMutation) matchingSessionIDs(canonicalID string) []string {
 	matchingIDs := make([]string, 0, 1)
-	for id, session := range sessions {
-		if id == canonicalID || sessionMatchesReportIdentity(session, report) {
+	for id, session := range mutation.snap.Sessions {
+		if id == canonicalID || mutation.sessionMatchesReportIdentity(session) {
 			matchingIDs = append(matchingIDs, id)
 		}
 	}
 	sort.Strings(matchingIDs)
-	if !reportHasStrongIdentity(report) && len(matchingIDs) > 1 {
-		return []string{bestWeakIdentityMatch(sessions, matchingIDs)}
+	if !reportHasStrongIdentity(mutation.report) && len(matchingIDs) > 1 {
+		return []string{mutation.bestWeakIdentityMatch(matchingIDs)}
 	}
 
 	return matchingIDs
 }
 
-func bestWeakIdentityMatch(sessions map[string]Session, ids []string) string {
+func (mutation *reportMutation) bestWeakIdentityMatch(ids []string) string {
 	winnerID := ids[0]
 	for _, id := range ids[1:] {
-		if weakIdentityMatchWins(sessions[id], sessions[winnerID]) {
+		if weakIdentityMatchWins(mutation.snap.Sessions[id], mutation.snap.Sessions[winnerID]) {
 			winnerID = id
 		}
 	}
@@ -284,43 +305,41 @@ func weakIdentityMatchWins(candidate Session, winner Session) bool {
 	return candidate.ID > winner.ID
 }
 
-func sessionMatchesReportIdentity(session Session, report Report) bool {
-	if session.Harness != report.Harness || strongIdentityConflicts(session, report) {
+func (mutation *reportMutation) sessionMatchesReportIdentity(session Session) bool {
+	if session.Harness != mutation.report.Harness || mutation.strongIdentityConflicts(session) {
 		return false
 	}
-	if reportMatchesStrongSessionIdentity(session, report) {
+	if mutation.reportMatchesStrongSessionIdentity(session) {
 		return true
 	}
-	if bothHaveStrongIdentity(session, report) {
+	if reportHasStrongIdentity(mutation.report) && sessionHasStrongIdentity(session) {
 		return false
 	}
-	if sameTmuxPane(session.Tmux, report.Tmux) {
+	if sameTmuxPane(session.Tmux, mutation.report.Tmux) {
 		return true
 	}
-	if report.PID > 0 && session.PID == report.PID {
+	if mutation.report.PID > 0 && session.PID == mutation.report.PID {
 		return true
 	}
 
 	return false
 }
 
-func reportMatchesStrongSessionIdentity(session Session, report Report) bool {
-	if report.SessionID != "" && session.SessionID == report.SessionID {
+func (mutation *reportMutation) reportMatchesStrongSessionIdentity(session Session) bool {
+	if mutation.report.SessionID != "" && session.SessionID == mutation.report.SessionID {
 		return true
 	}
 
-	return report.SessionPath != "" && session.SessionPath != "" && sameSessionPath(session.SessionPath, report.SessionPath)
+	return mutation.report.SessionPath != "" && session.SessionPath != "" &&
+		sameSessionPath(session.SessionPath, mutation.report.SessionPath)
 }
 
-func bothHaveStrongIdentity(session Session, report Report) bool {
-	return reportHasStrongIdentity(report) && sessionHasStrongIdentity(session)
-}
-
-func strongIdentityConflicts(session Session, report Report) bool {
-	if report.SessionID != "" && session.SessionID != "" && session.SessionID != report.SessionID {
+func (mutation *reportMutation) strongIdentityConflicts(session Session) bool {
+	if mutation.report.SessionID != "" && session.SessionID != "" && session.SessionID != mutation.report.SessionID {
 		return true
 	}
-	if report.SessionPath != "" && session.SessionPath != "" && !sameSessionPath(session.SessionPath, report.SessionPath) {
+	if mutation.report.SessionPath != "" && session.SessionPath != "" &&
+		!sameSessionPath(session.SessionPath, mutation.report.SessionPath) {
 		return true
 	}
 
