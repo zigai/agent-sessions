@@ -3,6 +3,7 @@
 package registry
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"syscall"
@@ -18,7 +19,13 @@ func openStoreLock(path string) (*storeLock, error) {
 		return nil, fmt.Errorf("opening store lock: %w", err)
 	}
 	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX); err != nil {
-		_ = file.Close()
+		if closeErr := file.Close(); closeErr != nil {
+			return nil, errors.Join(
+				fmt.Errorf("locking store: %w", err),
+				fmt.Errorf("closing store lock: %w", closeErr),
+			)
+		}
+
 		return nil, fmt.Errorf("locking store: %w", err)
 	}
 

@@ -84,9 +84,13 @@ func (q Queue) Drain(ctx context.Context, options DrainOptions) (DrainResult, er
 
 		return newDrainResult(), err
 	}
-	defer func() { _ = lock.Close() }()
 
-	return q.drainLocked(ctx, config)
+	result, drainErr := q.drainLocked(ctx, config)
+	if closeErr := lock.Close(); closeErr != nil {
+		return result, errors.Join(drainErr, closeErr)
+	}
+
+	return result, drainErr
 }
 
 func newDrainConfig(options DrainOptions) (drainConfig, error) {

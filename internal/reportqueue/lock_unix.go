@@ -21,9 +21,19 @@ func tryOpenQueueLock(path string) (*queueLock, error) {
 		return nil, fmt.Errorf("opening queue lock: %w", err)
 	}
 	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		_ = file.Close()
+		closeErr := file.Close()
 		if errors.Is(err, syscall.EWOULDBLOCK) || errors.Is(err, syscall.EAGAIN) {
+			if closeErr != nil {
+				return nil, fmt.Errorf("closing queue lock after failed lock: %w", closeErr)
+			}
+
 			return nil, ErrLocked
+		}
+		if closeErr != nil {
+			return nil, errors.Join(
+				fmt.Errorf("locking queue: %w", err),
+				fmt.Errorf("closing queue lock: %w", closeErr),
+			)
 		}
 
 		return nil, fmt.Errorf("locking queue: %w", err)

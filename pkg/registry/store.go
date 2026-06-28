@@ -659,19 +659,24 @@ func (s *FileStore) withSnapshot(mutator func(*snapshot) error) error {
 	if err != nil {
 		return err
 	}
-	defer func() {
-		_ = lock.Close()
-	}()
 
 	snap, err := s.load()
 	if err != nil {
-		return err
+		return closeStoreLock(lock, err)
 	}
 	if err := mutator(&snap); err != nil {
-		return err
+		return closeStoreLock(lock, err)
 	}
 
-	return writeSnapshotAtomic(s.path, snap)
+	return closeStoreLock(lock, writeSnapshotAtomic(s.path, snap))
+}
+
+func closeStoreLock(lock *storeLock, err error) error {
+	if closeErr := lock.Close(); closeErr != nil {
+		return errors.Join(err, closeErr)
+	}
+
+	return err
 }
 
 func (s *FileStore) load() (snapshot, error) {
