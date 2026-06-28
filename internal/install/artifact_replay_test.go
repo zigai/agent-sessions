@@ -335,7 +335,7 @@ func TestArtifactReplayJSONCommandHooks(t *testing.T) {
 				command := requireCommandContaining(t, eventCommands, " report ")
 				got := runReplayCommand(t, env, command, replay.payload)
 				requireReplayOutput(t, got, "")
-				session := requireReplaySession(t, env.storePath, test.harness)
+				session := waitForReplaySession(t, env.storePath, test.harness, replay.wantState, replay.wantEvent)
 				requireReplaySessionFields(t, session, replay)
 			}
 		})
@@ -418,7 +418,7 @@ func TestArtifactReplayCursorHooks(t *testing.T) {
 			got := runReplayCommand(t, env, commands[test.event], test.payload)
 			requireReplayOutput(t, got, test.wantOutput)
 
-			session := requireReplaySession(t, env.storePath, registry.HarnessCursor)
+			session := waitForReplaySession(t, env.storePath, registry.HarnessCursor, test.wantState, test.wantEvent)
 			if session.SessionID != "cursor-replay" {
 				t.Fatalf("expected cursor session id, got %q", session.SessionID)
 			}
@@ -596,7 +596,7 @@ func TestArtifactReplayKimiManagedTextHooks(t *testing.T) {
 			command := requireCommandContaining(t, commands[test.event], " report ")
 			replayGot := runReplayCommand(t, env, command, test.payload)
 			requireReplayOutput(t, replayGot, "")
-			session := requireReplaySession(t, env.storePath, registry.HarnessKimiCode)
+			session := waitForReplaySession(t, env.storePath, registry.HarnessKimiCode, test.wantState, test.wantEvent)
 			requireReplaySessionFields(t, session, test)
 		})
 	}
@@ -684,7 +684,7 @@ func TestArtifactReplayAgyPluginHooks(t *testing.T) {
 		t.Run(test.event, func(t *testing.T) {
 			got := runReplayCommand(t, env, commands[test.event], test.payload)
 			requireReplayJSONOutput(t, got, test.wantOutput)
-			session := requireReplaySession(t, env.storePath, registry.HarnessAgy)
+			session := waitForReplaySession(t, env.storePath, registry.HarnessAgy, test.wantState, test.wantEvent)
 			if session.SessionID != "agy-replay" {
 				t.Fatalf("expected agy session id, got %q", session.SessionID)
 			}
@@ -707,7 +707,7 @@ func TestArtifactReplayAgyPluginHooks(t *testing.T) {
 	t.Run("empty post tool use preserves idle stop", func(t *testing.T) {
 		got := runReplayCommand(t, env, commands["PostToolUse"], `{"conversationId":"agy-replay","transcriptPath":"/repo/.gemini/antigravity/transcript.jsonl","workspacePaths":["/repo"],"toolCall":null}`)
 		requireReplayJSONOutput(t, got, `{}`)
-		session := requireReplaySession(t, env.storePath, registry.HarnessAgy)
+		session := waitForReplaySession(t, env.storePath, registry.HarnessAgy, registry.StateIdle, hookEventStop)
 		if session.State != registry.StateIdle || session.LastEvent != hookEventStop {
 			t.Fatalf("expected empty PostToolUse not to overwrite idle Stop, got state=%s event=%s", session.State, session.LastEvent)
 		}
@@ -1273,20 +1273,6 @@ func jsonValuesEqual(left any, right any) bool {
 	leftData, leftErr := json.Marshal(left)
 	rightData, rightErr := json.Marshal(right)
 	return leftErr == nil && rightErr == nil && bytes.Equal(leftData, rightData)
-}
-
-func requireReplaySession(t *testing.T, storePath string, harness registry.Harness) registry.Session {
-	t.Helper()
-
-	sessions, err := registry.NewFileStore(storePath).List(context.Background(), replayHarnessFilter(harness))
-	if err != nil {
-		t.Fatalf("listing replay sessions: %v", err)
-	}
-	if len(sessions) != 1 {
-		t.Fatalf("expected one %s replay session, got %#v", harness, sessions)
-	}
-
-	return sessions[0]
 }
 
 func waitForReplaySession(

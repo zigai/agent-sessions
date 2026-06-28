@@ -56,7 +56,7 @@ func TestHeadlessTerminalIdleReportsExited(t *testing.T) {
 			event:           "Stop",
 			attributes:      map[string]string{"codex_hook_event": "Stop"},
 			parentArgs:      []string{string(registry.HarnessCodex), "exec", "hello"},
-			attributePrefix: headlessAttributePrefix(registry.HarnessCodex),
+			attributePrefix: strings.ReplaceAll(string(registry.HarnessCodex), "-", "_"),
 		},
 		{
 			name:            "grok single stop",
@@ -64,7 +64,7 @@ func TestHeadlessTerminalIdleReportsExited(t *testing.T) {
 			event:           "Stop",
 			attributes:      map[string]string{"grok_hook_event": "stop"},
 			parentArgs:      []string{string(registry.HarnessGrok), "-p", "hello"},
-			attributePrefix: headlessAttributePrefix(registry.HarnessGrok),
+			attributePrefix: strings.ReplaceAll(string(registry.HarnessGrok), "-", "_"),
 		},
 		{
 			name:            "opencode run idle",
@@ -72,7 +72,7 @@ func TestHeadlessTerminalIdleReportsExited(t *testing.T) {
 			event:           "session.updated",
 			attributes:      map[string]string{"opencode_event": "session.updated"},
 			parentArgs:      []string{string(registry.HarnessOpenCode), "run", "hello"},
-			attributePrefix: headlessAttributePrefix(registry.HarnessOpenCode),
+			attributePrefix: strings.ReplaceAll(string(registry.HarnessOpenCode), "-", "_"),
 		},
 		{
 			name:            "kilo run idle",
@@ -80,7 +80,7 @@ func TestHeadlessTerminalIdleReportsExited(t *testing.T) {
 			event:           "session.idle",
 			attributes:      map[string]string{"kilo_event": "session.idle"},
 			parentArgs:      []string{string(registry.HarnessKilo), "run", "hello"},
-			attributePrefix: headlessAttributePrefix(registry.HarnessKilo),
+			attributePrefix: strings.ReplaceAll(string(registry.HarnessKilo), "-", "_"),
 		},
 		{
 			name:            "kimi print stop",
@@ -88,14 +88,14 @@ func TestHeadlessTerminalIdleReportsExited(t *testing.T) {
 			event:           "Stop",
 			attributes:      map[string]string{"kimi_code_hook_event": "Stop"},
 			parentArgs:      []string{"kimi", "--print", "hello"},
-			attributePrefix: headlessAttributePrefix(registry.HarnessKimiCode),
+			attributePrefix: strings.ReplaceAll(string(registry.HarnessKimiCode), "-", "_"),
 		},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			state := adjustReportStateForRuntime(
+			state := harnesspkg.AdjustRuntimeState(
 				test.harness,
 				registry.StateIdle,
 				test.event,
@@ -103,7 +103,7 @@ func TestHeadlessTerminalIdleReportsExited(t *testing.T) {
 				test.parentArgs,
 			)
 			if state != registry.StateExited {
-				t.Fatalf("adjustReportStateForRuntime() = %q, want exited", state)
+				t.Fatalf("AdjustRuntimeState() = %q, want exited", state)
 			}
 			if test.attributes[test.attributePrefix+"_headless"] != "true" ||
 				test.attributes[test.attributePrefix+"_stop_state_override"] != "headless-parent" {
@@ -149,7 +149,7 @@ func TestInteractiveTerminalIdleStaysIdle(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			state := adjustReportStateForRuntime(
+			state := harnesspkg.AdjustRuntimeState(
 				test.harness,
 				registry.StateIdle,
 				test.event,
@@ -157,7 +157,7 @@ func TestInteractiveTerminalIdleStaysIdle(t *testing.T) {
 				test.parentArgs,
 			)
 			if state != registry.StateIdle {
-				t.Fatalf("adjustReportStateForRuntime() = %q, want idle", state)
+				t.Fatalf("AdjustRuntimeState() = %q, want idle", state)
 			}
 		})
 	}
@@ -215,8 +215,8 @@ func TestHeadlessArgsForHarness(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			if got := headlessArgsForHarness(test.harness, test.args); got != test.want {
-				t.Fatalf("headlessArgsForHarness(%q, %#v) = %v, want %v", test.harness, test.args, got, test.want)
+			if got := harnesspkg.HeadlessArgsForHarness(test.harness, test.args); got != test.want {
+				t.Fatalf("HeadlessArgsForHarness(%q, %#v) = %v, want %v", test.harness, test.args, got, test.want)
 			}
 		})
 	}

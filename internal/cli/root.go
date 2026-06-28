@@ -10,7 +10,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -40,9 +39,8 @@ var (
 )
 
 const (
-	tabPadding                    = 2
-	maxReportArgs                 = 2
-	minimumProcessArgsWithCommand = 2
+	tabPadding    = 2
+	maxReportArgs = 2
 )
 
 const (
@@ -62,6 +60,7 @@ const (
 
 const (
 	listCommandName            = "list"
+	reportCommandName          = "report"
 	listSortUpdated            = "updated"
 	defaultStaleOwnerlessAfter = 5 * time.Minute
 )
@@ -123,6 +122,15 @@ func NewRootCommand(stdout io.Writer, stderr io.Writer) *cobra.Command {
 }
 
 func Execute() {
+	if handled, err := tryExecuteFastPath(context.Background(), os.Args[1:], os.Stdin, os.Stdout, os.Stderr); handled {
+		if err != nil {
+			_, _ = fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+
+		return
+	}
+
 	cmd := NewRootCommand(os.Stdout, os.Stderr)
 	if err := cmd.Execute(); err != nil {
 		os.Exit(1)
@@ -205,28 +213,10 @@ type reportOptions struct {
 }
 
 func (app *application) newReportCommand() *cobra.Command {
-	options := reportOptions{
-		harness:     firstEnv("AGENT_SESSIONS_HARNESS", "AGENT_HARNESS"),
-		state:       firstEnv("AGENT_SESSIONS_STATE", "AGENT_STATE"),
-		sessionID:   firstEnv(harnesspkg.EnvNames(harnesspkg.EnvSessionID)...),
-		sessionPath: firstEnv(harnesspkg.EnvNames(harnesspkg.EnvSessionPath)...),
-		cwd:         defaultCWD(),
-		cwdAuto:     true,
-		projectRoot: firstEnv(harnesspkg.EnvNames(harnesspkg.EnvProjectRoot)...),
-		pid:         firstEnvInt(harnesspkg.EnvNames(harnesspkg.EnvPID)...),
-		ppid:        firstEnvInt("AGENT_SESSIONS_PPID", "AGENT_PPID"),
-		tty:         firstEnv("AGENT_SESSIONS_TTY", "TTY"),
-		source:      firstEnv("AGENT_SESSIONS_SOURCE"),
-		confidence:  firstEnv("AGENT_SESSIONS_CONFIDENCE"),
-		event:       firstEnv(harnesspkg.EnvNames(harnesspkg.EnvEvent)...),
-	}
-	if options.projectRoot == "" {
-		options.projectRoot = findProjectRoot(options.cwd)
-		options.projectRootAuto = true
-	}
+	options := defaultReportOptionsFromEnv()
 
 	cmd := &cobra.Command{
-		Use:          "report [harness] [state]",
+		Use:          reportCommandName + " [harness] [state]",
 		Short:        "Upsert a session report from a harness hook or wrapper",
 		SilenceUsage: true,
 		Example: strings.Join([]string{
@@ -270,6 +260,26 @@ func (app *application) newReportCommand() *cobra.Command {
 	cmd.Flags().BoolVar(&options.quiet, "quiet", false, "suppress normal report output")
 
 	return cmd
+}
+
+func defaultReportOptionsFromEnv() reportOptions {
+	options := reportOptions{
+		harness:     firstEnv("AGENT_SESSIONS_HARNESS", "AGENT_HARNESS"),
+		state:       firstEnv("AGENT_SESSIONS_STATE", "AGENT_STATE"),
+		sessionID:   firstEnv(harnesspkg.EnvNames(harnesspkg.EnvSessionID)...),
+		sessionPath: firstEnv(harnesspkg.EnvNames(harnesspkg.EnvSessionPath)...),
+		cwdAuto:     true,
+		projectRoot: firstEnv(harnesspkg.EnvNames(harnesspkg.EnvProjectRoot)...),
+		pid:         firstEnvInt(harnesspkg.EnvNames(harnesspkg.EnvPID)...),
+		ppid:        firstEnvInt("AGENT_SESSIONS_PPID", "AGENT_PPID"),
+		tty:         firstEnv("AGENT_SESSIONS_TTY", "TTY"),
+		source:      firstEnv("AGENT_SESSIONS_SOURCE"),
+		confidence:  firstEnv("AGENT_SESSIONS_CONFIDENCE"),
+		event:       firstEnv(harnesspkg.EnvNames(harnesspkg.EnvEvent)...),
+	}
+	options.projectRootAuto = options.projectRoot == ""
+
+	return options
 }
 
 func applyReportArgs(args []string, options *reportOptions) error {
@@ -383,6 +393,7 @@ func (app *application) runReport(ctx context.Context, stdin io.Reader, options 
 		return app.writef("ignored %s report: hook payload does not match harness\n", harness)
 	}
 	applyPayloadDefaults(&options, attributes, harnesspkg.DefaultsFromPayload(harness, defaultsPayload))
+	applyReportRuntimeDefaults(&options)
 	if identityErr := requireReportIdentity(state, options); identityErr != nil {
 		return missingReportIdentityError(harness)
 	}
@@ -390,7 +401,7 @@ func (app *application) runReport(ctx context.Context, stdin io.Reader, options 
 	if err != nil {
 		return err
 	}
-	state = adjustReportStateForRuntime(harness, state, options.event, attributes, parentProcessArgs(ctx))
+	state = harnesspkg.AdjustRuntimeState(harness, state, options.event, attributes, parentProcessArgs(ctx))
 
 	source := options.source
 	if source == "" {
@@ -453,123 +464,6 @@ func parseObservedAt(value string) (time.Time, error) {
 	}
 
 	return observedAt, nil
-}
-
-func adjustReportStateForRuntime(
-	harness registry.Harness,
-	state registry.State,
-	event string,
-	attributes map[string]string,
-	parentArgs []string,
-) registry.State {
-	if state != registry.StateIdle || !headlessArgsForHarness(harness, parentArgs) {
-		return state
-	}
-	if !isHeadlessTerminalIdleEvent(harness, event, attributes) {
-		return state
-	}
-
-	prefix := headlessAttributePrefix(harness)
-	attributes[prefix+"_headless"] = "true"
-	attributes[prefix+"_stop_state_override"] = "headless-parent"
-
-	return registry.StateExited
-}
-
-func headlessArgsForHarness(harness registry.Harness, args []string) bool {
-	switch harness {
-	case registry.HarnessCodex:
-		return argsContainCommand(args, "exec", "e", "review")
-	case registry.HarnessGrok:
-		return argsContainHeadlessPromptFlag(args, "--single", "--prompt-json", "--prompt-file")
-	case registry.HarnessOpenCode, registry.HarnessKilo:
-		return argsContainCommand(args, "run") && !argsContainFlag(args, "-i", "--interactive")
-	case registry.HarnessKimiCode:
-		return argsContainHeadlessPromptFlag(args, "--print")
-	case registry.HarnessClaude, registry.HarnessCursor, registry.HarnessPi, registry.HarnessAgy:
-		return false
-	default:
-		return false
-	}
-}
-
-func isHeadlessTerminalIdleEvent(harness registry.Harness, event string, attributes map[string]string) bool {
-	switch harness {
-	case registry.HarnessCodex:
-		return eventOrAttributeMatches(event, attributes, "codex_hook_event", "Stop")
-	case registry.HarnessGrok:
-		return eventOrAttributeMatches(event, attributes, "grok_hook_event", "Stop")
-	case registry.HarnessOpenCode:
-		return eventOrAttributeMatches(event, attributes, "opencode_event", "session.idle", "session.updated", "session.status", "session.error")
-	case registry.HarnessKilo:
-		return eventOrAttributeMatches(event, attributes, "kilo_event", "session.idle", "session.updated", "session.status", "session.error")
-	case registry.HarnessKimiCode:
-		return eventOrAttributeMatches(event, attributes, "kimi_code_hook_event", "Stop", "StopFailure", "Interrupt")
-	case registry.HarnessClaude, registry.HarnessCursor, registry.HarnessPi, registry.HarnessAgy:
-		return false
-	default:
-		return false
-	}
-}
-
-func eventOrAttributeMatches(event string, attributes map[string]string, attributeKey string, values ...string) bool {
-	for _, value := range values {
-		if strings.EqualFold(strings.TrimSpace(event), value) {
-			return true
-		}
-		if strings.EqualFold(strings.TrimSpace(attributes[attributeKey]), value) {
-			return true
-		}
-	}
-
-	return false
-}
-
-func argsContainHeadlessPromptFlag(args []string, longFlags ...string) bool {
-	for _, arg := range args {
-		if arg == "-p" || strings.HasPrefix(arg, "-p") && arg != "-p" {
-			return true
-		}
-		for _, flag := range longFlags {
-			if arg == flag || strings.HasPrefix(arg, flag+"=") {
-				return true
-			}
-		}
-	}
-
-	return false
-}
-
-func argsContainCommand(args []string, commands ...string) bool {
-	if len(args) < minimumProcessArgsWithCommand {
-		return false
-	}
-	for _, arg := range args[1:] {
-		if strings.HasPrefix(arg, "-") {
-			continue
-		}
-		if slices.Contains(commands, arg) {
-			return true
-		}
-	}
-
-	return false
-}
-
-func argsContainFlag(args []string, flags ...string) bool {
-	for _, arg := range args {
-		for _, flag := range flags {
-			if arg == flag || strings.HasPrefix(arg, flag+"=") {
-				return true
-			}
-		}
-	}
-
-	return false
-}
-
-func headlessAttributePrefix(harness registry.Harness) string {
-	return strings.ReplaceAll(string(harness), "-", "_")
 }
 
 func parentProcessArgs(ctx context.Context) []string {
@@ -1508,9 +1402,18 @@ func applyPayloadDefaults(
 	applyStringDefault(&options.sessionID, defaults.SessionID)
 	applyStringDefault(&options.sessionPath, defaults.SessionPath)
 	applyStringDefault(&options.event, defaults.Event)
-	applyCWDDefault(options, defaults.CWD)
 	applyProjectRootDefault(options, defaults.ProjectRoot)
+	applyCWDDefault(options, defaults.CWD)
 	maps.Copy(attributes, defaults.Attributes)
+}
+
+func applyReportRuntimeDefaults(options *reportOptions) {
+	if options.cwd == "" && options.cwdAuto {
+		options.cwd = defaultCWD()
+	}
+	if options.projectRoot == "" && options.projectRootAuto {
+		options.projectRoot = findProjectRoot(options.cwd)
+	}
 }
 
 func applyStringDefault(target *string, value string) {
@@ -1527,7 +1430,7 @@ func applyCWDDefault(options *reportOptions, cwd string) {
 	}
 
 	options.cwd = cwd
-	if options.projectRoot != "" && !options.projectRootAuto {
+	if options.projectRoot != "" {
 		return
 	}
 
