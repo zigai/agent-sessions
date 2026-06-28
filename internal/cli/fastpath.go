@@ -306,9 +306,9 @@ func fastPathFlagIntValue(args []string, index int, flag fastPathFlag) (int, int
 	if err != nil {
 		return 0, index, err
 	}
-	parsed, parseErr := strconv.Atoi(value)
-	if parseErr != nil {
-		return 0, index, fmt.Errorf("parsing %s: %w", flag.name, parseErr)
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		return 0, index, fmt.Errorf("parsing %s: %w", flag.name, err)
 	}
 
 	return parsed, nextIndex, nil

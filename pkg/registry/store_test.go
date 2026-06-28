@@ -339,8 +339,8 @@ func TestFileStoreGCDeletesOldExitedSessions(t *testing.T) {
 	if result.Deleted != 1 || result.Remaining != 0 {
 		t.Fatalf("expected exited session to be deleted, got %#v", result)
 	}
-	if _, getErr := store.Get(ctx, exited.ID); !errors.Is(getErr, ErrSessionNotFound) {
-		t.Fatalf("expected deleted session to be missing, got %v", getErr)
+	if _, err := store.Get(ctx, exited.ID); !errors.Is(err, ErrSessionNotFound) {
+		t.Fatalf("expected deleted session to be missing, got %v", err)
 	}
 }
 
@@ -405,11 +405,11 @@ func TestFileStoreGCZeroDeletesExitedSessionsImmediately(t *testing.T) {
 	if result.Deleted != 1 || result.Remaining != 1 {
 		t.Fatalf("expected immediate exited cleanup, got %#v", result)
 	}
-	if _, getErr := store.Get(ctx, exited.ID); !errors.Is(getErr, ErrSessionNotFound) {
-		t.Fatalf("expected exited session to be missing, got %v", getErr)
+	if _, err := store.Get(ctx, exited.ID); !errors.Is(err, ErrSessionNotFound) {
+		t.Fatalf("expected exited session to be missing, got %v", err)
 	}
-	if _, getErr := store.Get(ctx, running.ID); getErr != nil {
-		t.Fatalf("expected running session to remain, got %v", getErr)
+	if _, err := store.Get(ctx, running.ID); err != nil {
+		t.Fatalf("expected running session to remain, got %v", err)
 	}
 }
 
@@ -446,8 +446,8 @@ func TestFileStoreResetClearsSessions(t *testing.T) {
 	if len(sessions) != 0 {
 		t.Fatalf("expected reset store to be empty, got %#v", sessions)
 	}
-	if _, getErr := store.Get(ctx, session.ID); !errors.Is(getErr, ErrSessionNotFound) {
-		t.Fatalf("expected reset session to be missing, got %v", getErr)
+	if _, err := store.Get(ctx, session.ID); !errors.Is(err, ErrSessionNotFound) {
+		t.Fatalf("expected reset session to be missing, got %v", err)
 	}
 
 	data, err := os.ReadFile(storePath)
@@ -455,8 +455,8 @@ func TestFileStoreResetClearsSessions(t *testing.T) {
 		t.Fatalf("reading reset store: %v", err)
 	}
 	var snap snapshot
-	if unmarshalErr := json.Unmarshal(data, &snap); unmarshalErr != nil {
-		t.Fatalf("reset store is not valid JSON: %v", unmarshalErr)
+	if err := json.Unmarshal(data, &snap); err != nil {
+		t.Fatalf("reset store is not valid JSON: %v", err)
 	}
 	if snap.Version != storeVersion || !snap.UpdatedAt.Equal(resetAt) || len(snap.Sessions) != 0 {
 		t.Fatalf("unexpected reset snapshot: %#v", snap)

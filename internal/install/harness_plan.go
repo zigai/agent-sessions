@@ -272,15 +272,15 @@ func installManagedTextBlock(
 	label := installLabel(plan.Label, harness, "hooks")
 	configLabel := installLabel(plan.ConfigLabel, harness, "config")
 
-	if writeErr := writeInstallFile(
+	if err := writeInstallFile(
 		plan.Path,
 		[]byte(next),
 		changed,
 		options.DryRun,
 		"creating "+configLabel+" directory",
 		"writing "+label,
-	); writeErr != nil {
-		return Result{}, writeErr
+	); err != nil {
+		return Result{}, err
 	}
 
 	return Result{
@@ -398,8 +398,8 @@ func installPluginDirectory(
 	}
 	plugin := newPluginDirectoryInstall(plan, files)
 
-	if guardErr := plugin.ensureManaged(options.Force); guardErr != nil {
-		return Result{}, guardErr
+	if err := plugin.ensureManaged(options.Force); err != nil {
+		return Result{}, err
 	}
 
 	pluginChanged, err := plugin.needsUpdate()
@@ -414,9 +414,9 @@ func installPluginDirectory(
 	changed := pluginChanged || manifestChanged
 
 	if changed && !options.DryRun {
-		writeErr := writePluginDirectoryChanges(plugin, plan.ImportManifest, manifest, pluginChanged, manifestChanged)
-		if writeErr != nil {
-			return Result{}, writeErr
+		err := writePluginDirectoryChanges(plugin, plan.ImportManifest, manifest, pluginChanged, manifestChanged)
+		if err != nil {
+			return Result{}, err
 		}
 	}
 
@@ -442,16 +442,16 @@ func writePluginDirectoryChanges(
 	var rollback func() error
 	var commit func() error
 	if pluginChanged {
-		var installErr error
-		rollback, commit, installErr = plugin.installStaged()
-		if installErr != nil {
-			return installErr
+		var err error
+		rollback, commit, err = plugin.installStaged()
+		if err != nil {
+			return err
 		}
 	}
 
 	if importPlan != nil && manifestChanged {
-		if writeErr := writeImportManifest(importPlan.Path, manifest); writeErr != nil {
-			return rollbackPluginDirectory(rollback, writeErr)
+		if err := writeImportManifest(importPlan.Path, manifest); err != nil {
+			return rollbackPluginDirectory(rollback, err)
 		}
 	}
 
@@ -466,8 +466,8 @@ func rollbackPluginDirectory(rollback func() error, cause error) error {
 	if rollback == nil {
 		return cause
 	}
-	if rollbackErr := rollback(); rollbackErr != nil {
-		return errors.Join(cause, fmt.Errorf("rolling back plugin directory: %w", rollbackErr))
+	if err := rollback(); err != nil {
+		return errors.Join(cause, fmt.Errorf("rolling back plugin directory: %w", err))
 	}
 
 	return cause
@@ -521,8 +521,8 @@ func readImportManifest(path string) (importManifest, error) {
 	}
 
 	var manifest importManifest
-	if unmarshalErr := json.Unmarshal(data, &manifest); unmarshalErr != nil {
-		return importManifest{}, fmt.Errorf("parsing import manifest: %w", unmarshalErr)
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		return importManifest{}, fmt.Errorf("parsing import manifest: %w", err)
 	}
 
 	return manifest, nil
@@ -597,13 +597,13 @@ func writeImportManifest(path string, manifest importManifest) error {
 
 func writeFileAtomic(path string, data []byte, createDirError string, writeError string) error {
 	dir := filepath.Dir(path)
-	if mkdirErr := os.MkdirAll(dir, 0o700); mkdirErr != nil {
-		return fmt.Errorf("%s: %w", createDirError, mkdirErr)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("%s: %w", createDirError, err)
 	}
 
-	temp, createErr := os.CreateTemp(dir, filepath.Base(path)+".tmp-*")
-	if createErr != nil {
-		return fmt.Errorf("creating temp file for %s: %w", path, createErr)
+	temp, err := os.CreateTemp(dir, filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return fmt.Errorf("creating temp file for %s: %w", path, err)
 	}
 	tempPath := temp.Name()
 	keep := false
@@ -615,20 +615,20 @@ func writeFileAtomic(path string, data []byte, createDirError string, writeError
 		_ = os.Remove(tempPath)
 	}()
 
-	if chmodErr := temp.Chmod(0o600); chmodErr != nil {
-		return fmt.Errorf("setting temp file permissions: %w", chmodErr)
+	if err := temp.Chmod(0o600); err != nil {
+		return fmt.Errorf("setting temp file permissions: %w", err)
 	}
-	if _, writeTempErr := temp.Write(data); writeTempErr != nil {
-		return fmt.Errorf("%s: %w", writeError, writeTempErr)
+	if _, err := temp.Write(data); err != nil {
+		return fmt.Errorf("%s: %w", writeError, err)
 	}
-	if syncErr := temp.Sync(); syncErr != nil {
-		return fmt.Errorf("syncing temp file: %w", syncErr)
+	if err := temp.Sync(); err != nil {
+		return fmt.Errorf("syncing temp file: %w", err)
 	}
-	if closeErr := temp.Close(); closeErr != nil {
-		return fmt.Errorf("closing temp file: %w", closeErr)
+	if err := temp.Close(); err != nil {
+		return fmt.Errorf("closing temp file: %w", err)
 	}
-	if renameErr := os.Rename(tempPath, path); renameErr != nil {
-		return fmt.Errorf("%s: %w", writeError, renameErr)
+	if err := os.Rename(tempPath, path); err != nil {
+		return fmt.Errorf("%s: %w", writeError, err)
 	}
 	keep = true
 
@@ -636,16 +636,16 @@ func writeFileAtomic(path string, data []byte, createDirError string, writeError
 }
 
 func syncDir(dir string) error {
-	handle, openErr := os.Open(dir)
-	if openErr != nil {
-		return fmt.Errorf("opening directory: %w", openErr)
+	handle, err := os.Open(dir)
+	if err != nil {
+		return fmt.Errorf("opening directory: %w", err)
 	}
 	defer func() {
 		_ = handle.Close()
 	}()
 
-	if syncErr := handle.Sync(); syncErr != nil {
-		return fmt.Errorf("syncing directory: %w", syncErr)
+	if err := handle.Sync(); err != nil {
+		return fmt.Errorf("syncing directory: %w", err)
 	}
 
 	return nil

@@ -148,9 +148,9 @@ func (app *application) registryStore() registry.Store {
 func (app *application) writeJSON(value any) error {
 	encoder := json.NewEncoder(app.stdout)
 	encoder.SetIndent("", "  ")
-	encodeErr := encoder.Encode(value)
-	if encodeErr != nil {
-		return fmt.Errorf("writing JSON: %w", encodeErr)
+	err := encoder.Encode(value)
+	if err != nil {
+		return fmt.Errorf("writing JSON: %w", err)
 	}
 
 	return nil
@@ -394,7 +394,7 @@ func (app *application) runReport(ctx context.Context, stdin io.Reader, options 
 	}
 	applyPayloadDefaults(&options, attributes, harnesspkg.DefaultsFromPayload(harness, defaultsPayload))
 	applyReportRuntimeDefaults(&options)
-	if identityErr := requireReportIdentity(state, options); identityErr != nil {
+	if err := requireReportIdentity(state, options); err != nil {
 		return missingReportIdentityError(harness)
 	}
 	observedAt, err := parseObservedAt(options.observedAt)
@@ -694,9 +694,8 @@ func (app *application) runListSessions(ctx context.Context, options listOptions
 	if err != nil {
 		return fmt.Errorf("listing sessions: %w", err)
 	}
-	sortErr := sortListSessions(sessions, options)
-	if sortErr != nil {
-		return sortErr
+	if err := sortListSessions(sessions, options); err != nil {
+		return err
 	}
 
 	if app.outputJSON {
@@ -705,13 +704,12 @@ func (app *application) runListSessions(ctx context.Context, options listOptions
 
 	writer := tabwriter.NewWriter(app.stdout, 0, 0, tabPadding, ' ', 0)
 	now := time.Now().UTC()
-	_, headerErr := fmt.Fprintln(writer, "ID\tHARNESS\tSTATE\tTMUX\tWINDOW\tPANE\tCWD\tUPDATED")
-	if headerErr != nil {
-		return fmt.Errorf("writing output: %w", headerErr)
+	if _, err := fmt.Fprintln(writer, "ID\tHARNESS\tSTATE\tTMUX\tWINDOW\tPANE\tCWD\tUPDATED"); err != nil {
+		return fmt.Errorf("writing output: %w", err)
 	}
 
 	for _, session := range sessions {
-		_, rowErr := fmt.Fprintf(
+		if _, err := fmt.Fprintf(
 			writer,
 			"%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 			session.ID,
@@ -722,15 +720,13 @@ func (app *application) runListSessions(ctx context.Context, options listOptions
 			session.Tmux.PaneID,
 			formatHumanPath(session.CWD),
 			formatUpdatedAt(session.UpdatedAt, now, options.absoluteTime),
-		)
-		if rowErr != nil {
-			return fmt.Errorf("writing output: %w", rowErr)
+		); err != nil {
+			return fmt.Errorf("writing output: %w", err)
 		}
 	}
 
-	flushErr := writer.Flush()
-	if flushErr != nil {
-		return fmt.Errorf("flushing output: %w", flushErr)
+	if err := writer.Flush(); err != nil {
+		return fmt.Errorf("flushing output: %w", err)
 	}
 
 	return nil
@@ -758,14 +754,13 @@ func (app *application) runListSummary(ctx context.Context, options listOptions)
 
 func (app *application) writeSummaryTable(summaries []registry.Summary) error {
 	writer := tabwriter.NewWriter(app.stdout, 0, 0, tabPadding, ' ', 0)
-	_, headerErr := fmt.Fprintln(writer, "TMUX\tACTIVE/TOTAL\tRUNNING\tWAITING\tIDLE\tUNKNOWN\tEXITED")
-	if headerErr != nil {
-		return fmt.Errorf("writing output: %w", headerErr)
+	if _, err := fmt.Fprintln(writer, "TMUX\tACTIVE/TOTAL\tRUNNING\tWAITING\tIDLE\tUNKNOWN\tEXITED"); err != nil {
+		return fmt.Errorf("writing output: %w", err)
 	}
 
 	labels := summaryTableLabels(summaries)
 	for index, summary := range summaries {
-		_, rowErr := fmt.Fprintf(
+		if _, err := fmt.Fprintf(
 			writer,
 			"%s\t%d/%d\t%d\t%d\t%d\t%d\t%d\n",
 			labels[index],
@@ -776,15 +771,13 @@ func (app *application) writeSummaryTable(summaries []registry.Summary) error {
 			summary.Idle,
 			summary.Unknown,
 			summary.Exited,
-		)
-		if rowErr != nil {
-			return fmt.Errorf("writing output: %w", rowErr)
+		); err != nil {
+			return fmt.Errorf("writing output: %w", err)
 		}
 	}
 
-	flushErr := writer.Flush()
-	if flushErr != nil {
-		return fmt.Errorf("flushing output: %w", flushErr)
+	if err := writer.Flush(); err != nil {
+		return fmt.Errorf("flushing output: %w", err)
 	}
 
 	return nil
@@ -890,7 +883,7 @@ func (app *application) runScan(ctx context.Context, options scanOptions) error 
 			continue
 		}
 
-		session, reportErr := store.Report(ctx, registry.Report{
+		session, err := store.Report(ctx, registry.Report{
 			Harness:     harness,
 			State:       state,
 			CWD:         pane.Tmux.PaneCurrentPath,
@@ -902,8 +895,8 @@ func (app *application) runScan(ctx context.Context, options scanOptions) error 
 				"pane_current_command": pane.CurrentCommand,
 			},
 		})
-		if reportErr != nil {
-			return fmt.Errorf("reporting scanned pane: %w", reportErr)
+		if err != nil {
+			return fmt.Errorf("reporting scanned pane: %w", err)
 		}
 		sessions = append(sessions, session)
 	}
@@ -935,7 +928,7 @@ func markMissingTmuxPaneSessionsExited(
 			continue
 		}
 
-		updated, reportErr := store.Report(ctx, registry.Report{
+		updated, err := store.Report(ctx, registry.Report{
 			Harness:       session.Harness,
 			State:         registry.StateExited,
 			SessionID:     session.SessionID,
@@ -954,8 +947,8 @@ func markMissingTmuxPaneSessionsExited(
 				"agent_sessions_reconcile": "tmux-pane-missing",
 			},
 		})
-		if reportErr != nil {
-			return nil, fmt.Errorf("marking missing tmux pane session exited: %w", reportErr)
+		if err != nil {
+			return nil, fmt.Errorf("marking missing tmux pane session exited: %w", err)
 		}
 		exited = append(exited, updated)
 	}
@@ -983,7 +976,7 @@ func markStaleOwnerlessSessionsExited(
 			continue
 		}
 
-		updated, reportErr := store.Report(ctx, registry.Report{
+		updated, err := store.Report(ctx, registry.Report{
 			Harness:       session.Harness,
 			State:         registry.StateExited,
 			SessionID:     session.SessionID,
@@ -999,8 +992,8 @@ func markStaleOwnerlessSessionsExited(
 				"agent_sessions_reconcile": "ownerless-stale",
 			},
 		})
-		if reportErr != nil {
-			return nil, fmt.Errorf("marking stale ownerless session exited: %w", reportErr)
+		if err != nil {
+			return nil, fmt.Errorf("marking stale ownerless session exited: %w", err)
 		}
 		exited = append(exited, updated)
 	}
@@ -1380,9 +1373,9 @@ func readStdinPayload(stdin io.Reader, storeRaw bool, defaultsOnly bool) (json.R
 	if json.Valid(data) {
 		payload = json.RawMessage(data)
 	} else {
-		wrapped, marshalErr := json.Marshal(string(data))
-		if marshalErr != nil {
-			return nil, nil, fmt.Errorf("encoding stdin payload: %w", marshalErr)
+		wrapped, err := json.Marshal(string(data))
+		if err != nil {
+			return nil, nil, fmt.Errorf("encoding stdin payload: %w", err)
 		}
 		payload = json.RawMessage(wrapped)
 	}

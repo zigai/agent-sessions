@@ -665,9 +665,8 @@ func (s *FileStore) withSnapshot(mutator func(*snapshot) error) error {
 	if err != nil {
 		return err
 	}
-	mutateErr := mutator(&snap)
-	if mutateErr != nil {
-		return mutateErr
+	if err := mutator(&snap); err != nil {
+		return err
 	}
 
 	return writeSnapshotAtomic(s.path, snap)
@@ -684,9 +683,8 @@ func (s *FileStore) load() (snapshot, error) {
 	}
 
 	var snap snapshot
-	unmarshalErr := json.Unmarshal(data, &snap)
-	if unmarshalErr != nil {
-		return snapshot{}, fmt.Errorf("parsing store %s: %w", s.path, unmarshalErr)
+	if err := json.Unmarshal(data, &snap); err != nil {
+		return snapshot{}, fmt.Errorf("parsing store %s: %w", s.path, err)
 	}
 	if snap.Sessions == nil {
 		snap.Sessions = make(map[string]Session)
@@ -728,9 +726,8 @@ func writeSnapshotAtomic(path string, snap snapshot) error {
 	data = append(data, '\n')
 
 	dir := filepath.Dir(path)
-	mkdirErr := os.MkdirAll(dir, 0o700)
-	if mkdirErr != nil {
-		return fmt.Errorf("creating state directory: %w", mkdirErr)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("creating state directory: %w", err)
 	}
 
 	temp, err := os.CreateTemp(dir, filepath.Base(path)+".tmp-*")
@@ -747,25 +744,20 @@ func writeSnapshotAtomic(path string, snap snapshot) error {
 		_ = os.Remove(tempPath)
 	}()
 
-	chmodErr := temp.Chmod(0o600)
-	if chmodErr != nil {
-		return fmt.Errorf("setting temp store permissions: %w", chmodErr)
+	if err := temp.Chmod(0o600); err != nil {
+		return fmt.Errorf("setting temp store permissions: %w", err)
 	}
-	_, writeErr := temp.Write(data)
-	if writeErr != nil {
-		return fmt.Errorf("writing temp store: %w", writeErr)
+	if _, err := temp.Write(data); err != nil {
+		return fmt.Errorf("writing temp store: %w", err)
 	}
-	syncErr := temp.Sync()
-	if syncErr != nil {
-		return fmt.Errorf("syncing temp store: %w", syncErr)
+	if err := temp.Sync(); err != nil {
+		return fmt.Errorf("syncing temp store: %w", err)
 	}
-	closeErr := temp.Close()
-	if closeErr != nil {
-		return fmt.Errorf("closing temp store: %w", closeErr)
+	if err := temp.Close(); err != nil {
+		return fmt.Errorf("closing temp store: %w", err)
 	}
-	renameErr := os.Rename(tempPath, path)
-	if renameErr != nil {
-		return fmt.Errorf("renaming temp store: %w", renameErr)
+	if err := os.Rename(tempPath, path); err != nil {
+		return fmt.Errorf("renaming temp store: %w", err)
 	}
 	keep = true
 
@@ -908,9 +900,8 @@ func syncDir(dir string) error {
 		_ = handle.Close()
 	}()
 
-	syncErr := handle.Sync()
-	if syncErr != nil {
-		return fmt.Errorf("syncing state directory: %w", syncErr)
+	if err := handle.Sync(); err != nil {
+		return fmt.Errorf("syncing state directory: %w", err)
 	}
 
 	return nil

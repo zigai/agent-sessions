@@ -74,13 +74,13 @@ func (plugin pluginDirectoryInstall) ensureManaged(force bool) error {
 }
 
 func (plugin pluginDirectoryInstall) managed() (bool, error) {
-	info, statErr := os.Stat(plugin.dir)
-	if statErr != nil {
-		if errors.Is(statErr, os.ErrNotExist) {
+	info, err := os.Stat(plugin.dir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
 			return true, nil
 		}
 
-		return false, fmt.Errorf("checking plugin directory: %w", statErr)
+		return false, fmt.Errorf("checking plugin directory: %w", err)
 	}
 	if !info.IsDir() {
 		return false, nil
@@ -89,26 +89,26 @@ func (plugin pluginDirectoryInstall) managed() (bool, error) {
 		return false, nil
 	}
 
-	marker, readErr := os.ReadFile(filepath.Join(plugin.dir, plugin.markerFile))
-	if readErr != nil {
-		if errors.Is(readErr, os.ErrNotExist) {
+	marker, err := os.ReadFile(filepath.Join(plugin.dir, plugin.markerFile))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
 			return false, nil
 		}
 
-		return false, fmt.Errorf("reading plugin marker: %w", readErr)
+		return false, fmt.Errorf("reading plugin marker: %w", err)
 	}
 
 	return strings.Contains(string(marker), managedMarker), nil
 }
 
 func (plugin pluginDirectoryInstall) needsUpdate() (bool, error) {
-	info, statErr := os.Stat(plugin.dir)
-	if statErr != nil {
-		if errors.Is(statErr, os.ErrNotExist) {
+	info, err := os.Stat(plugin.dir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
 			return true, nil
 		}
 
-		return false, fmt.Errorf("checking plugin directory %s: %w", plugin.dir, statErr)
+		return false, fmt.Errorf("checking plugin directory %s: %w", plugin.dir, err)
 	}
 	if !info.IsDir() {
 		return true, nil
@@ -116,26 +116,26 @@ func (plugin pluginDirectoryInstall) needsUpdate() (bool, error) {
 
 	for name, content := range plugin.files {
 		path := filepath.Join(plugin.dir, name)
-		current, readErr := os.ReadFile(path)
-		if readErr != nil {
-			if errors.Is(readErr, os.ErrNotExist) {
+		current, err := os.ReadFile(path)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
 				return true, nil
 			}
 
-			return false, fmt.Errorf("reading plugin file %s: %w", path, readErr)
+			return false, fmt.Errorf("reading plugin file %s: %w", path, err)
 		}
 		if string(current) != content {
 			return true, nil
 		}
 	}
 
-	entries, readDirErr := os.ReadDir(plugin.dir)
-	if readDirErr != nil {
-		if errors.Is(readDirErr, os.ErrNotExist) {
+	entries, err := os.ReadDir(plugin.dir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
 			return true, nil
 		}
 
-		return false, fmt.Errorf("reading plugin directory %s: %w", plugin.dir, readDirErr)
+		return false, fmt.Errorf("reading plugin directory %s: %w", plugin.dir, err)
 	}
 	for _, entry := range entries {
 		if _, ok := plugin.files[entry.Name()]; !ok {
@@ -148,13 +148,13 @@ func (plugin pluginDirectoryInstall) needsUpdate() (bool, error) {
 
 func (plugin pluginDirectoryInstall) stage() (string, error) {
 	parent := filepath.Dir(plugin.dir)
-	if mkdirErr := os.MkdirAll(parent, 0o700); mkdirErr != nil {
-		return "", fmt.Errorf("creating plugin parent directory: %w", mkdirErr)
+	if err := os.MkdirAll(parent, 0o700); err != nil {
+		return "", fmt.Errorf("creating plugin parent directory: %w", err)
 	}
 
-	stagedDir, stageErr := os.MkdirTemp(parent, "."+filepath.Base(plugin.dir)+".stage-*")
-	if stageErr != nil {
-		return "", fmt.Errorf("creating staged plugin directory: %w", stageErr)
+	stagedDir, err := os.MkdirTemp(parent, "."+filepath.Base(plugin.dir)+".stage-*")
+	if err != nil {
+		return "", fmt.Errorf("creating staged plugin directory: %w", err)
 	}
 	keep := false
 	defer func() {
@@ -165,12 +165,12 @@ func (plugin pluginDirectoryInstall) stage() (string, error) {
 
 	for name, content := range plugin.files {
 		path := filepath.Join(stagedDir, name)
-		if writeErr := writeStagedPluginFile(path, []byte(content)); writeErr != nil {
-			return "", fmt.Errorf("writing plugin file %s: %w", path, writeErr)
+		if err := writeStagedPluginFile(path, []byte(content)); err != nil {
+			return "", fmt.Errorf("writing plugin file %s: %w", path, err)
 		}
 	}
-	if syncErr := syncDir(stagedDir); syncErr != nil {
-		return "", syncErr
+	if err := syncDir(stagedDir); err != nil {
+		return "", err
 	}
 	keep = true
 
@@ -178,9 +178,9 @@ func (plugin pluginDirectoryInstall) stage() (string, error) {
 }
 
 func writeStagedPluginFile(path string, data []byte) error {
-	file, openErr := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if openErr != nil {
-		return fmt.Errorf("opening staged plugin file: %w", openErr)
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return fmt.Errorf("opening staged plugin file: %w", err)
 	}
 	keepOpen := true
 	defer func() {
@@ -189,14 +189,14 @@ func writeStagedPluginFile(path string, data []byte) error {
 		}
 	}()
 
-	if _, writeErr := file.Write(data); writeErr != nil {
-		return fmt.Errorf("writing staged plugin file: %w", writeErr)
+	if _, err := file.Write(data); err != nil {
+		return fmt.Errorf("writing staged plugin file: %w", err)
 	}
-	if syncErr := file.Sync(); syncErr != nil {
-		return fmt.Errorf("syncing staged plugin file: %w", syncErr)
+	if err := file.Sync(); err != nil {
+		return fmt.Errorf("syncing staged plugin file: %w", err)
 	}
-	if closeErr := file.Close(); closeErr != nil {
-		return fmt.Errorf("closing staged plugin file: %w", closeErr)
+	if err := file.Close(); err != nil {
+		return fmt.Errorf("closing staged plugin file: %w", err)
 	}
 	keepOpen = false
 
@@ -204,9 +204,9 @@ func writeStagedPluginFile(path string, data []byte) error {
 }
 
 func (plugin pluginDirectoryInstall) installStaged() (func() error, func() error, error) {
-	stagedDir, stageErr := plugin.stage()
-	if stageErr != nil {
-		return nil, nil, stageErr
+	stagedDir, err := plugin.stage()
+	if err != nil {
+		return nil, nil, err
 	}
 	defer func() {
 		_ = os.RemoveAll(stagedDir)
@@ -220,39 +220,39 @@ func (plugin pluginDirectoryInstall) installStaged() (func() error, func() error
 // at the install operation level.
 func (plugin pluginDirectoryInstall) replace(stagedDir string) (func() error, func() error, error) {
 	parent := filepath.Dir(plugin.dir)
-	backup, backupErr := os.MkdirTemp(parent, "."+filepath.Base(plugin.dir)+".backup-*")
-	if backupErr != nil {
-		return nil, nil, fmt.Errorf("creating plugin backup path: %w", backupErr)
+	backup, err := os.MkdirTemp(parent, "."+filepath.Base(plugin.dir)+".backup-*")
+	if err != nil {
+		return nil, nil, fmt.Errorf("creating plugin backup path: %w", err)
 	}
-	if removeErr := os.Remove(backup); removeErr != nil {
-		return nil, nil, fmt.Errorf("preparing plugin backup path: %w", removeErr)
+	if err := os.Remove(backup); err != nil {
+		return nil, nil, fmt.Errorf("preparing plugin backup path: %w", err)
 	}
 
 	backupExists := false
-	if renameErr := os.Rename(plugin.dir, backup); renameErr != nil {
-		if !errors.Is(renameErr, os.ErrNotExist) {
-			return nil, nil, fmt.Errorf("backing up plugin directory: %w", renameErr)
+	if err := os.Rename(plugin.dir, backup); err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			return nil, nil, fmt.Errorf("backing up plugin directory: %w", err)
 		}
 	} else {
 		backupExists = true
 	}
 
-	if renameErr := os.Rename(stagedDir, plugin.dir); renameErr != nil {
+	if err := os.Rename(stagedDir, plugin.dir); err != nil {
 		if backupExists {
 			_ = os.Rename(backup, plugin.dir)
 		}
 
-		return nil, nil, fmt.Errorf("installing staged plugin directory: %w", renameErr)
+		return nil, nil, fmt.Errorf("installing staged plugin directory: %w", err)
 	}
 
 	rollback := func() error {
-		removeErr := os.RemoveAll(plugin.dir)
-		if removeErr != nil {
-			return fmt.Errorf("removing staged plugin directory: %w", removeErr)
+		err := os.RemoveAll(plugin.dir)
+		if err != nil {
+			return fmt.Errorf("removing staged plugin directory: %w", err)
 		}
 		if backupExists {
-			if restoreErr := os.Rename(backup, plugin.dir); restoreErr != nil {
-				return fmt.Errorf("restoring plugin directory backup: %w", restoreErr)
+			if err := os.Rename(backup, plugin.dir); err != nil {
+				return fmt.Errorf("restoring plugin directory backup: %w", err)
 			}
 		}
 
@@ -262,8 +262,8 @@ func (plugin pluginDirectoryInstall) replace(stagedDir string) (func() error, fu
 		if !backupExists {
 			return syncDir(parent)
 		}
-		if removeErr := os.RemoveAll(backup); removeErr != nil {
-			return fmt.Errorf("removing plugin directory backup: %w", removeErr)
+		if err := os.RemoveAll(backup); err != nil {
+			return fmt.Errorf("removing plugin directory backup: %w", err)
 		}
 
 		return syncDir(parent)

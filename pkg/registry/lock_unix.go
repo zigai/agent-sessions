@@ -17,10 +17,9 @@ func openStoreLock(path string) (*storeLock, error) {
 	if err != nil {
 		return nil, fmt.Errorf("opening store lock: %w", err)
 	}
-	flockErr := syscall.Flock(int(file.Fd()), syscall.LOCK_EX)
-	if flockErr != nil {
+	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX); err != nil {
 		_ = file.Close()
-		return nil, fmt.Errorf("locking store: %w", flockErr)
+		return nil, fmt.Errorf("locking store: %w", err)
 	}
 
 	return &storeLock{file: file}, nil
@@ -30,10 +29,10 @@ func (l *storeLock) Close() error {
 	if l == nil || l.file == nil {
 		return nil
 	}
-	err := syscall.Flock(int(l.file.Fd()), syscall.LOCK_UN)
+	unlockErr := syscall.Flock(int(l.file.Fd()), syscall.LOCK_UN)
 	closeErr := l.file.Close()
-	if err != nil {
-		return fmt.Errorf("unlocking store: %w", err)
+	if unlockErr != nil {
+		return fmt.Errorf("unlocking store: %w", unlockErr)
 	}
 	if closeErr != nil {
 		return fmt.Errorf("closing store lock: %w", closeErr)

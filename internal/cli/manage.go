@@ -82,9 +82,8 @@ func (defaultSessionStopSignaler) SendProcessInterrupt(pid int) error {
 	if err != nil {
 		return fmt.Errorf("finding process %d: %w", pid, err)
 	}
-	signalErr := process.Signal(os.Interrupt)
-	if signalErr != nil {
-		return fmt.Errorf("sending interrupt to process %d: %w", pid, signalErr)
+	if err := process.Signal(os.Interrupt); err != nil {
+		return fmt.Errorf("sending interrupt to process %d: %w", pid, err)
 	}
 
 	return nil
@@ -161,9 +160,8 @@ func (app *application) newManageStopAllCommand() *cobra.Command {
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			result, err := app.runManageStopAll(cmd.Context(), options)
-			writeErr := app.writeManageStopAllResult(result)
-			if writeErr != nil {
-				return writeErr
+			if err := app.writeManageStopAllResult(result); err != nil {
+				return err
 			}
 
 			return err
@@ -232,10 +230,10 @@ func (app *application) runManageStopAll(ctx context.Context, options manageStop
 			continue
 		}
 
-		validation, validateErr := options.signaler.ValidateStopTarget(ctx, session, target)
-		if validateErr != nil {
+		validation, err := options.signaler.ValidateStopTarget(ctx, session, target)
+		if err != nil {
 			entry.Status = "failed"
-			entry.Error = validateErr.Error()
+			entry.Error = err.Error()
 			result.Failed++
 			result.Results = append(result.Results, entry)
 
@@ -250,10 +248,9 @@ func (app *application) runManageStopAll(ctx context.Context, options manageStop
 			continue
 		}
 
-		stopErr := sendStopSignal(ctx, options.signaler, target)
-		if stopErr != nil {
+		if err := sendStopSignal(ctx, options.signaler, target); err != nil {
 			entry.Status = "failed"
-			entry.Error = stopErr.Error()
+			entry.Error = err.Error()
 			result.Failed++
 			result.Results = append(result.Results, entry)
 

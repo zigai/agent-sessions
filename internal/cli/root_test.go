@@ -408,20 +408,20 @@ func TestListShortensHomeCWDInTextOutput(t *testing.T) {
 	store := registry.NewFileStore(storePath)
 	store.SetNowForTest(func() time.Time { return time.Date(2026, 6, 17, 10, 0, 0, 0, time.UTC) })
 	cwd := filepath.Join(home, "Projects", "sesh")
-	if _, reportErr := store.Report(context.Background(), registry.Report{
+	if _, err := store.Report(context.Background(), registry.Report{
 		Harness:   registry.HarnessCodex,
 		State:     registry.StateRunning,
 		SessionID: testSessionID,
 		CWD:       cwd,
-	}); reportErr != nil {
-		t.Fatalf("reporting session: %v", reportErr)
+	}); err != nil {
+		t.Fatalf("reporting session: %v", err)
 	}
 
 	var listOut bytes.Buffer
 	listCmd := NewRootCommand(&listOut, &bytes.Buffer{})
 	listCmd.SetArgs([]string{storeFlag, storePath, listCommandName})
-	if executeErr := listCmd.Execute(); executeErr != nil {
-		t.Fatalf("list command failed: %v", executeErr)
+	if err := listCmd.Execute(); err != nil {
+		t.Fatalf("list command failed: %v", err)
 	}
 
 	output := listOut.String()
@@ -843,8 +843,8 @@ func TestScanMarksMissingTmuxPaneSessionsExited(t *testing.T) {
 			}, nil
 		},
 	}
-	if scanErr := app.runScan(ctx, scanOptions{state: string(registry.StateIdle)}); scanErr != nil {
-		t.Fatalf("runScan returned error: %v", scanErr)
+	if err := app.runScan(ctx, scanOptions{state: string(registry.StateIdle)}); err != nil {
+		t.Fatalf("runScan returned error: %v", err)
 	}
 
 	updated, err := store.Get(ctx, stale.ID)
@@ -905,11 +905,11 @@ func TestScanMarksStaleOwnerlessSessionsExited(t *testing.T) {
 			return nil, nil
 		},
 	}
-	if scanErr := app.runScan(ctx, scanOptions{
+	if err := app.runScan(ctx, scanOptions{
 		state:               string(registry.StateIdle),
 		staleOwnerlessAfter: defaultStaleOwnerlessAfter,
-	}); scanErr != nil {
-		t.Fatalf("runScan returned error: %v", scanErr)
+	}); err != nil {
+		t.Fatalf("runScan returned error: %v", err)
 	}
 
 	updatedStale, err := store.Get(ctx, stale.ID)
@@ -949,8 +949,8 @@ func TestListAbsoluteTime(t *testing.T) {
 	var listOut bytes.Buffer
 	listCmd := NewRootCommand(&listOut, &bytes.Buffer{})
 	listCmd.SetArgs([]string{storeFlag, storePath, listCommandName, "--absolute-time"})
-	if executeErr := listCmd.Execute(); executeErr != nil {
-		t.Fatalf("list command failed: %v", executeErr)
+	if err := listCmd.Execute(); err != nil {
+		t.Fatalf("list command failed: %v", err)
 	}
 
 	output := listOut.String()
@@ -1026,9 +1026,8 @@ func TestListSortUpdatedDesc(t *testing.T) {
 	var listOut bytes.Buffer
 	listCmd := NewRootCommand(&listOut, &bytes.Buffer{})
 	listCmd.SetArgs([]string{storeFlag, storePath, listCommandName, "--sort", "updated", "--desc", "--absolute-time"})
-	executeErr := listCmd.Execute()
-	if executeErr != nil {
-		t.Fatalf("list command failed: %v", executeErr)
+	if err := listCmd.Execute(); err != nil {
+		t.Fatalf("list command failed: %v", err)
 	}
 
 	output := listOut.String()
@@ -1072,8 +1071,8 @@ func TestListDefaultsToUpdatedAscending(t *testing.T) {
 	var listOut bytes.Buffer
 	listCmd := NewRootCommand(&listOut, &bytes.Buffer{})
 	listCmd.SetArgs([]string{storeFlag, storePath, listCommandName, "--absolute-time"})
-	if executeErr := listCmd.Execute(); executeErr != nil {
-		t.Fatalf("list command failed: %v", executeErr)
+	if err := listCmd.Execute(); err != nil {
+		t.Fatalf("list command failed: %v", err)
 	}
 
 	output := listOut.String()
@@ -1628,8 +1627,7 @@ func TestParseObservedAt(t *testing.T) {
 		t.Fatalf("expected %s, got %s", want, got)
 	}
 
-	_, invalidErr := parseObservedAt("not-a-time")
-	if invalidErr == nil {
+	if _, err := parseObservedAt("not-a-time"); err == nil {
 		t.Fatal("expected invalid observed-at to fail")
 	}
 }

@@ -219,7 +219,7 @@ func kimiCodeSessionPath(sessionID string) string {
 	scanner.Buffer(make([]byte, 0, kimiCodeSessionIndexInitialBufferSize), kimiCodeSessionIndexMaxBufferSize)
 	for scanner.Scan() {
 		var entry map[string]any
-		if unmarshalErr := json.Unmarshal([]byte(strings.TrimSpace(scanner.Text())), &entry); unmarshalErr != nil {
+		if err := json.Unmarshal([]byte(strings.TrimSpace(scanner.Text())), &entry); err != nil {
 			continue
 		}
 		sessionDir := payloadString(entry, "sessionDir")

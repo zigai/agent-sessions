@@ -52,9 +52,8 @@ func TestInstallCodexMergesHooks(t *testing.T) {
 	}
 
 	var config map[string]any
-	unmarshalErr := json.Unmarshal(data, &config)
-	if unmarshalErr != nil {
-		t.Fatalf("installed hooks are not valid JSON: %v", unmarshalErr)
+	if err := json.Unmarshal(data, &config); err != nil {
+		t.Fatalf("installed hooks are not valid JSON: %v", err)
 	}
 
 	hooks, hooksOK := config["hooks"].(map[string]any)
@@ -117,9 +116,8 @@ func TestInstallClaudeWritesHooks(t *testing.T) {
 	}
 
 	var config map[string]any
-	unmarshalErr := json.Unmarshal(data, &config)
-	if unmarshalErr != nil {
-		t.Fatalf("installed hooks are not valid JSON: %v", unmarshalErr)
+	if err := json.Unmarshal(data, &config); err != nil {
+		t.Fatalf("installed hooks are not valid JSON: %v", err)
 	}
 
 	hooks, hooksOK := config["hooks"].(map[string]any)
@@ -198,9 +196,8 @@ func TestInstallClaudeRepairsManagedHookMatcher(t *testing.T) {
 	if err != nil {
 		t.Fatalf("encoding modified hooks: %v", err)
 	}
-	writeErr := os.WriteFile(first.Path, append(data, '\n'), 0o600)
-	if writeErr != nil {
-		t.Fatalf("writing modified hooks: %v", writeErr)
+	if err := os.WriteFile(first.Path, append(data, '\n'), 0o600); err != nil {
+		t.Fatalf("writing modified hooks: %v", err)
 	}
 
 	second, err := Run(Options{
@@ -842,7 +839,7 @@ func TestInstallKimiCodeDryRunDoesNotWrite(t *testing.T) {
 	if !strings.Contains(result.Snippet, `event = "`+hookEventSessionStart+`"`) {
 		t.Fatalf("expected dry-run snippet to include Kimi hooks: %s", result.Snippet)
 	}
-	if _, statErr := os.Stat(result.Path); statErr == nil {
+	if _, err := os.Stat(result.Path); err == nil {
 		t.Fatalf("expected dry-run not to write %s", result.Path)
 	}
 }
@@ -871,9 +868,8 @@ func TestInstallGrokWritesHooks(t *testing.T) {
 	}
 
 	var config map[string]any
-	unmarshalErr := json.Unmarshal(data, &config)
-	if unmarshalErr != nil {
-		t.Fatalf("installed hooks are not valid JSON: %v", unmarshalErr)
+	if err := json.Unmarshal(data, &config); err != nil {
+		t.Fatalf("installed hooks are not valid JSON: %v", err)
 	}
 
 	hooks, hooksOK := config["hooks"].(map[string]any)
@@ -1061,9 +1057,9 @@ func requireManagedReplacement(t *testing.T, test managedReplacementCase) {
 func readTestFile(t *testing.T, path string, context string) []byte {
 	t.Helper()
 
-	data, readErr := os.ReadFile(path)
-	if readErr != nil {
-		t.Fatalf("%s: %v", context, readErr)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("%s: %v", context, err)
 	}
 
 	return data
@@ -1073,9 +1069,8 @@ func decodeTestJSONObject(t *testing.T, data []byte, context string) map[string]
 	t.Helper()
 
 	var config map[string]any
-	unmarshalErr := json.Unmarshal(data, &config)
-	if unmarshalErr != nil {
-		t.Fatalf("invalid JSON for %s: %v", context, unmarshalErr)
+	if err := json.Unmarshal(data, &config); err != nil {
+		t.Fatalf("invalid JSON for %s: %v", context, err)
 	}
 
 	return config

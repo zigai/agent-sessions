@@ -28,19 +28,16 @@ func installShim(options Options, harness registry.Harness) (Result, error) {
 	}
 
 	if changed && !options.DryRun {
-		mkdirErr := os.MkdirAll(dir, 0o700)
-		if mkdirErr != nil {
-			return Result{}, fmt.Errorf("creating shim directory: %w", mkdirErr)
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return Result{}, fmt.Errorf("creating shim directory: %w", err)
 		}
 
-		writeErr := os.WriteFile(path, []byte(script), 0o600)
-		if writeErr != nil {
-			return Result{}, fmt.Errorf("writing shim: %w", writeErr)
+		if err := os.WriteFile(path, []byte(script), 0o600); err != nil {
+			return Result{}, fmt.Errorf("writing shim: %w", err)
 		}
 
-		chmodErr := os.Chmod(path, 0o700)
-		if chmodErr != nil {
-			return Result{}, fmt.Errorf("making shim executable: %w", chmodErr)
+		if err := os.Chmod(path, 0o700); err != nil {
+			return Result{}, fmt.Errorf("making shim executable: %w", err)
 		}
 	}
 

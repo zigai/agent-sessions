@@ -28,8 +28,8 @@ func installRenderedFile(options Options, file renderedFileInstall) (Result, err
 		return Result{}, err
 	}
 
-	if writeErr := writeInstallFile(file.Path, []byte(file.Content), changed, options.DryRun, file.CreateDirError, file.WriteError); writeErr != nil {
-		return Result{}, writeErr
+	if err := writeInstallFile(file.Path, []byte(file.Content), changed, options.DryRun, file.CreateDirError, file.WriteError); err != nil {
+		return Result{}, err
 	}
 
 	return Result{
@@ -78,8 +78,8 @@ func installJSONHookFile(options Options, file jsonHookFileInstall) (Result, err
 	}
 	data = append(data, '\n')
 
-	if writeErr := writeInstallFile(file.Path, data, changed, options.DryRun, file.CreateDirError, file.WriteError); writeErr != nil {
-		return Result{}, writeErr
+	if err := writeInstallFile(file.Path, data, changed, options.DryRun, file.CreateDirError, file.WriteError); err != nil {
+		return Result{}, err
 	}
 
 	return Result{
@@ -133,9 +133,8 @@ func readJSONObject(path string) (map[string]any, error) {
 	}
 
 	var config map[string]any
-	unmarshalErr := json.Unmarshal(data, &config)
-	if unmarshalErr != nil {
-		return nil, fmt.Errorf("parsing %s: %w", path, unmarshalErr)
+	if err := json.Unmarshal(data, &config); err != nil {
+		return nil, fmt.Errorf("parsing %s: %w", path, err)
 	}
 	if config == nil {
 		config = map[string]any{"hooks": map[string]any{}}

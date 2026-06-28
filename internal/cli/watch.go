@@ -117,9 +117,8 @@ func (app *application) runWatch(ctx context.Context, options watchOptions) erro
 		_ = watcher.Close()
 	}()
 
-	addErr := watcher.Add(dir)
-	if addErr != nil {
-		return fmt.Errorf("watching state directory: %w", addErr)
+	if err := watcher.Add(dir); err != nil {
+		return fmt.Errorf("watching state directory: %w", err)
 	}
 
 	observedAt := normalizedOptions.now()
@@ -144,9 +143,9 @@ func (app *application) loadInitialWatchState(
 			return nil, nil, fmt.Errorf("loading initial summary snapshot: %w", err)
 		}
 		if !options.noSnapshot {
-			writeErr := app.writeWatchSummaryEvents(snapshotWatchSummaryEvents(summaries, observedAt), options.format)
-			if writeErr != nil {
-				return nil, nil, writeErr
+			err := app.writeWatchSummaryEvents(snapshotWatchSummaryEvents(summaries, observedAt), options.format)
+			if err != nil {
+				return nil, nil, err
 			}
 		}
 
@@ -158,9 +157,9 @@ func (app *application) loadInitialWatchState(
 		return nil, nil, fmt.Errorf("loading initial snapshot: %w", err)
 	}
 	if !options.noSnapshot {
-		writeErr := app.writeWatchEvents(snapshotWatchEvents(sessions, observedAt), options.format)
-		if writeErr != nil {
-			return nil, nil, writeErr
+		err := app.writeWatchEvents(snapshotWatchEvents(sessions, observedAt), options.format)
+		if err != nil {
+			return nil, nil, err
 		}
 	}
 
@@ -192,13 +191,13 @@ func watchTarget(store *registry.FileStore) (string, string, error) {
 		return "", "", fmt.Errorf("resolving store path: %w", err)
 	}
 	dir := filepath.Dir(target)
-	info, statErr := os.Stat(dir)
-	if statErr != nil {
-		if os.IsNotExist(statErr) {
+	info, err := os.Stat(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
 			return "", "", fmt.Errorf("%w: %s", errWatchStateDirectoryMissing, dir)
 		}
 
-		return "", "", fmt.Errorf("checking state directory: %w", statErr)
+		return "", "", fmt.Errorf("checking state directory: %w", err)
 	}
 	if !info.IsDir() {
 		return "", "", fmt.Errorf("%w: %s", errWatchStateDirectoryNotDir, dir)
@@ -377,9 +376,8 @@ func (loop *watchLoop) reloadSessions(ctx context.Context) error {
 	}
 	next := watchSessionMap(nextSessions)
 	events := diffWatchEvents(loop.previousSessions, next, observedAt)
-	writeErr := loop.app.writeWatchEvents(events, loop.options.format)
-	if writeErr != nil {
-		return writeErr
+	if err := loop.app.writeWatchEvents(events, loop.options.format); err != nil {
+		return err
 	}
 	loop.previousSessions = next
 
@@ -396,9 +394,8 @@ func (loop *watchLoop) reloadSummaries(ctx context.Context) error {
 	}
 	next := watchSummaryMap(nextSummaries)
 	events := diffWatchSummaryEvents(loop.previousSummaries, next, observedAt)
-	writeErr := loop.app.writeWatchSummaryEvents(events, loop.options.format)
-	if writeErr != nil {
-		return writeErr
+	if err := loop.app.writeWatchSummaryEvents(events, loop.options.format); err != nil {
+		return err
 	}
 	loop.previousSummaries = next
 

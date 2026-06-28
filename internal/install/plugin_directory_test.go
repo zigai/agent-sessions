@@ -19,11 +19,11 @@ func TestReplacePluginDirectoryRollbackRestoresExistingDirectory(t *testing.T) {
 	}
 
 	staged := filepath.Join(root, "staged")
-	if mkdirErr := os.MkdirAll(staged, 0o700); mkdirErr != nil {
-		t.Fatalf("creating staged dir: %v", mkdirErr)
+	if err := os.MkdirAll(staged, 0o700); err != nil {
+		t.Fatalf("creating staged dir: %v", err)
 	}
-	if writeErr := os.WriteFile(filepath.Join(staged, "new.txt"), []byte("new"), 0o600); writeErr != nil {
-		t.Fatalf("writing staged plugin file: %v", writeErr)
+	if err := os.WriteFile(filepath.Join(staged, "new.txt"), []byte("new"), 0o600); err != nil {
+		t.Fatalf("writing staged plugin file: %v", err)
 	}
 
 	plugin := pluginDirectoryInstall{dir: dir, markerFile: "", files: nil, snippetOrder: nil}
@@ -31,17 +31,17 @@ func TestReplacePluginDirectoryRollbackRestoresExistingDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("plugin.replace returned error: %v", err)
 	}
-	if _, statErr := os.Stat(filepath.Join(dir, "new.txt")); statErr != nil {
-		t.Fatalf("expected staged plugin to be installed: %v", statErr)
+	if _, err := os.Stat(filepath.Join(dir, "new.txt")); err != nil {
+		t.Fatalf("expected staged plugin to be installed: %v", err)
 	}
-	if rollbackErr := rollback(); rollbackErr != nil {
-		t.Fatalf("rollback returned error: %v", rollbackErr)
+	if err := rollback(); err != nil {
+		t.Fatalf("rollback returned error: %v", err)
 	}
-	if _, statErr := os.Stat(filepath.Join(dir, "old.txt")); statErr != nil {
-		t.Fatalf("expected old plugin to be restored: %v", statErr)
+	if _, err := os.Stat(filepath.Join(dir, "old.txt")); err != nil {
+		t.Fatalf("expected old plugin to be restored: %v", err)
 	}
-	if _, statErr := os.Stat(filepath.Join(dir, "new.txt")); !os.IsNotExist(statErr) {
-		t.Fatalf("expected staged plugin file to be removed, stat err=%v", statErr)
+	if _, err := os.Stat(filepath.Join(dir, "new.txt")); !os.IsNotExist(err) {
+		t.Fatalf("expected staged plugin file to be removed, stat err=%v", err)
 	}
 }
 

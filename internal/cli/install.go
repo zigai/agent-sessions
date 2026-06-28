@@ -53,20 +53,17 @@ func (app *application) newInstallHooksCommand() *cobra.Command {
 				return app.writeJSON(result)
 			}
 
-			writeErr := app.writef("%s\npath: %s\n", result.Message, result.Path)
-			if writeErr != nil {
-				return writeErr
+			if err := app.writef("%s\npath: %s\n", result.Message, result.Path); err != nil {
+				return err
 			}
 
 			if dryRun && result.Snippet != "" {
-				newlineErr := app.writeln()
-				if newlineErr != nil {
-					return newlineErr
+				if err := app.writeln(); err != nil {
+					return err
 				}
 
-				snippetErr := app.writeln(result.Snippet)
-				if snippetErr != nil {
-					return snippetErr
+				if err := app.writeln(result.Snippet); err != nil {
+					return err
 				}
 			}
 
@@ -92,26 +89,26 @@ func (app *application) runInstallAll(binary string, targetBinary string, dryRun
 		UseShim:      useShim,
 	})
 	if app.outputJSON {
-		writeErr := app.writeJSON(results)
-		if writeErr != nil {
-			return writeErr
+		err := app.writeJSON(results)
+		if err != nil {
+			return err
 		}
 	}
 
 	if !app.outputJSON {
 		for _, result := range results {
 			if result.Error != "" {
-				writeErr := app.writef("%s: %s\n", result.Harness, result.Error)
-				if writeErr != nil {
-					return writeErr
+				err := app.writef("%s: %s\n", result.Harness, result.Error)
+				if err != nil {
+					return err
 				}
 
 				continue
 			}
 
-			writeErr := app.writef("%s: %s\npath: %s\n", result.Harness, result.Message, result.Path)
-			if writeErr != nil {
-				return writeErr
+			err := app.writef("%s: %s\npath: %s\n", result.Harness, result.Message, result.Path)
+			if err != nil {
+				return err
 			}
 		}
 	}
