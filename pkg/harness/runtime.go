@@ -176,7 +176,14 @@ func headlessRuntimePolicyForHarness(harness registry.Harness) (headlessRuntimeP
 		return kiloHeadlessRuntimePolicy, true
 	case registry.HarnessKimiCode:
 		return kimiCodeHeadlessRuntimePolicy, true
-	case registry.HarnessClaude, registry.HarnessCursor, registry.HarnessPi, registry.HarnessAgy:
+	case registry.HarnessClaude,
+		registry.HarnessCursor,
+		registry.HarnessCopilot,
+		registry.HarnessCline,
+		registry.HarnessGoose,
+		registry.HarnessPi,
+		registry.HarnessAgy,
+		registry.HarnessDroid:
 		return headlessRuntimePolicy{harness: "", eventAttributeKey: "", idleEvents: nil, argsMatch: nil}, false
 	}
 

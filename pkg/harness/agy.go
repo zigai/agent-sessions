@@ -99,11 +99,11 @@ func (agyHarness) HandleHook(invocation HookInvocation) HookResult {
 func agyHookConfig(binary string) map[string]any {
 	return map[string]any{
 		agyPluginName: map[string]any{
-			"PreInvocation":  []any{agyHookHandler(binary, "PreInvocation")},
-			"PostInvocation": []any{agyHookHandler(binary, "PostInvocation")},
-			"PreToolUse":     []any{agyToolHookGroup(binary, "PreToolUse")},
-			"PostToolUse":    []any{agyToolHookGroup(binary, "PostToolUse")},
-			HookEventStop:    []any{agyHookHandler(binary, HookEventStop)},
+			"PreInvocation":     []any{agyHookHandler(binary, "PreInvocation")},
+			"PostInvocation":    []any{agyHookHandler(binary, "PostInvocation")},
+			HookEventPreToolUse: []any{agyToolHookGroup(binary, HookEventPreToolUse)},
+			"PostToolUse":       []any{agyToolHookGroup(binary, "PostToolUse")},
+			HookEventStop:       []any{agyHookHandler(binary, HookEventStop)},
 		},
 	}
 }
@@ -119,7 +119,7 @@ func agyToolHookGroup(binary string, event string) map[string]any {
 
 func agyHookHandler(binary string, event string) map[string]any {
 	return map[string]any{
-		"type":    "command",
+		"type":    HookTypeCommand,
 		"command": agyHookCommand(binary, event),
 		"timeout": float64(HookTimeoutSeconds),
 	}
@@ -244,7 +244,7 @@ func agyStateForHook(event string, payload map[string]any, parentArgs []string) 
 	switch event {
 	case "PreInvocation", "PostInvocation":
 		return registry.StateRunning
-	case "PreToolUse":
+	case HookEventPreToolUse:
 		if isAgyInputWaitingTool(payload) {
 			return registry.StateWaiting
 		}
@@ -273,7 +273,7 @@ func agyStateForHook(event string, payload map[string]any, parentArgs []string) 
 
 func agyHookResponse(event string) map[string]any {
 	switch event {
-	case "PreToolUse":
+	case HookEventPreToolUse:
 		return map[string]any{"decision": "allow"}
 	case "Stop":
 		return map[string]any{"decision": ""}

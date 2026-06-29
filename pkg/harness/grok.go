@@ -47,7 +47,7 @@ func (grokHarness) ResumeCommand(sessionID string, _ string) []string {
 		return nil
 	}
 
-	return []string{"grok", "--resume", sessionID}
+	return []string{"grok", resumeFlag, sessionID}
 }
 
 func (grokHarness) PayloadCompatible(rawPayload json.RawMessage) bool {
@@ -77,9 +77,9 @@ func grokHookConfig(binary string) map[string]any {
 			command: grokHookCommand(binary, registry.StateIdle, HookEventSessionStart),
 		},
 		{
-			event:   "UserPromptSubmit",
+			event:   HookEventUserPromptSubmit,
 			matcher: "",
-			command: grokHookCommand(binary, registry.StateRunning, "UserPromptSubmit"),
+			command: grokHookCommand(binary, registry.StateRunning, HookEventUserPromptSubmit),
 		},
 		{
 			event:   "Notification",
@@ -114,7 +114,7 @@ func grokCommandHookGroup(command string, matcher string) map[string]any {
 	group := map[string]any{
 		"hooks": []any{
 			map[string]any{
-				"type":          "command",
+				"type":          HookTypeCommand,
 				"command":       command,
 				"timeout":       float64(HookTimeoutSeconds),
 				"statusMessage": ManagedMarker,

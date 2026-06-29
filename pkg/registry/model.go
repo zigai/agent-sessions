@@ -22,12 +22,16 @@ const (
 	HarnessClaude   Harness = harnessmeta.IDClaude
 	HarnessCodex    Harness = harnessmeta.IDCodex
 	HarnessCursor   Harness = harnessmeta.IDCursor
+	HarnessCopilot  Harness = harnessmeta.IDCopilot
+	HarnessCline    Harness = harnessmeta.IDCline
 	HarnessKimiCode Harness = harnessmeta.IDKimiCode
 	HarnessGrok     Harness = harnessmeta.IDGrok
+	HarnessGoose    Harness = harnessmeta.IDGoose
 	HarnessPi       Harness = harnessmeta.IDPi
 	HarnessOpenCode Harness = harnessmeta.IDOpenCode
 	HarnessAgy      Harness = harnessmeta.IDAgy
 	HarnessKilo     Harness = harnessmeta.IDKilo
+	HarnessDroid    Harness = harnessmeta.IDDroid
 )
 
 var (

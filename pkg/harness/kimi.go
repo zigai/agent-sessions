@@ -85,9 +85,9 @@ func kimiCodeHookBlock(binary string) string {
 			timeout: HookTimeoutSeconds,
 		},
 		{
-			event:   "UserPromptSubmit",
+			event:   HookEventUserPromptSubmit,
 			matcher: "",
-			command: kimiCodeHookCommand(binary, registry.StateRunning, "UserPromptSubmit"),
+			command: kimiCodeHookCommand(binary, registry.StateRunning, HookEventUserPromptSubmit),
 			timeout: HookTimeoutSeconds,
 		},
 		{

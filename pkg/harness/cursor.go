@@ -73,7 +73,7 @@ func (cursorHarness) ResumeCommand(sessionID string, _ string) []string {
 		return nil
 	}
 
-	return []string{cursorCommand, "--resume", sessionID}
+	return []string{cursorCommand, resumeFlag, sessionID}
 }
 
 func (cursorHarness) PayloadCompatible(rawPayload json.RawMessage) bool {

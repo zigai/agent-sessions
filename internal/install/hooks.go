@@ -13,14 +13,18 @@ const (
 )
 
 func commandHookGroup(command string, matcher string, statusMessage string) map[string]any {
+	hook := map[string]any{
+		"type":    harnesspkg.HookTypeCommand,
+		"command": command,
+		"timeout": float64(harnesspkg.HookTimeoutSeconds),
+	}
+	if statusMessage != "" {
+		hook["statusMessage"] = statusMessage
+	}
+
 	group := map[string]any{
 		"hooks": []any{
-			map[string]any{
-				"type":          "command",
-				"command":       command,
-				"timeout":       float64(harnesspkg.HookTimeoutSeconds),
-				"statusMessage": statusMessage,
-			},
+			hook,
 		},
 	}
 	if matcher != "" {

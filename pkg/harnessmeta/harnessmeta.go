@@ -16,12 +16,16 @@ const (
 	IDClaude   = "claude"
 	IDCodex    = "codex"
 	IDCursor   = "cursor"
+	IDCopilot  = "copilot"
+	IDCline    = "cline"
 	IDKimiCode = "kimi-code"
 	IDGrok     = "grok"
+	IDGoose    = "goose"
 	IDPi       = "pi"
 	IDOpenCode = "opencode"
 	IDAgy      = "agy"
 	IDKilo     = "kilo"
+	IDDroid    = "droid"
 )
 
 var definitions = []Definition{
@@ -41,6 +45,16 @@ var definitions = []Definition{
 		ProcessNames: []string{"cursor", "cursor-agent", "cursor-cli"},
 	},
 	{
+		ID:           IDCopilot,
+		Aliases:      []string{"github-copilot", "github_copilot", "copilot-cli", "copilot_cli", "github-copilot-cli", "github_copilot_cli"},
+		ProcessNames: []string{"copilot"},
+	},
+	{
+		ID:           IDCline,
+		Aliases:      nil,
+		ProcessNames: []string{"cline"},
+	},
+	{
 		ID:           IDKimiCode,
 		Aliases:      []string{"kimi", "kimi_code", "kimicode"},
 		ProcessNames: []string{"kimi", "kimi-code", "kimi_code", "kimicode"},
@@ -49,6 +63,11 @@ var definitions = []Definition{
 		ID:           IDGrok,
 		Aliases:      []string{"grok-build", "grok_build"},
 		ProcessNames: []string{"grok", "grok-build"},
+	},
+	{
+		ID:           IDGoose,
+		Aliases:      nil,
+		ProcessNames: []string{"goose"},
 	},
 	{
 		ID:           IDPi,
@@ -75,6 +94,17 @@ var definitions = []Definition{
 		ID:           IDKilo,
 		Aliases:      []string{"kilocode", "kilo-code", "kilo_code"},
 		ProcessNames: []string{"kilo", "kilocode", "kilo-code", "kilo_code"},
+	},
+	{
+		ID: IDDroid,
+		Aliases: []string{
+			"factory",
+			"factory-droid",
+			"factory_droid",
+			"factory-cli",
+			"factory_cli",
+		},
+		ProcessNames: []string{"droid"},
 	},
 }
 

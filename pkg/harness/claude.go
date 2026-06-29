@@ -33,11 +33,12 @@ func claudeAdapter() Adapter {
 func (claudeHarness) InstallPlan(binary string) InstallPlan {
 	return InstallPlan{
 		Actions: []InstallAction{JSONCommandHooksAction{Plan: JSONCommandHookInstallPlan{
-			Path:          filepath.Join(claudeConfigDir(), "settings.json"),
-			Source:        claudeIntegrationSource,
-			Label:         "claude hooks",
-			ConfigLabel:   "claude config",
-			StatusMessage: "",
+			Path:              filepath.Join(claudeConfigDir(), "settings.json"),
+			Source:            claudeIntegrationSource,
+			Label:             "claude hooks",
+			ConfigLabel:       "claude config",
+			StatusMessage:     "",
+			OmitStatusMessage: false,
 			Hooks: []CommandHookInstallSpec{
 				{
 					Event:   HookEventSessionStart,
@@ -51,13 +52,13 @@ func (claudeHarness) InstallPlan(binary string) InstallPlan {
 					),
 				},
 				{
-					Event:   "UserPromptSubmit",
+					Event:   HookEventUserPromptSubmit,
 					Matcher: "",
 					Command: ReportHookCommand(
 						binary,
 						registry.HarnessClaude,
 						registry.StateRunning,
-						"UserPromptSubmit",
+						HookEventUserPromptSubmit,
 						claudeIntegrationSource,
 					),
 				},
@@ -104,7 +105,7 @@ func (claudeHarness) ResumeCommand(sessionID string, _ string) []string {
 		return nil
 	}
 
-	return []string{claudeCommand, "--resume", sessionID}
+	return []string{claudeCommand, resumeFlag, sessionID}
 }
 
 func (claudeHarness) PayloadCompatible(rawPayload json.RawMessage) bool {

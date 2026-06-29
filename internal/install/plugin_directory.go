@@ -13,12 +13,13 @@ import (
 var (
 	errDuplicatePluginFileName = errors.New("duplicate plugin file name")
 	errInvalidPluginFileName   = errors.New("invalid plugin file name")
+	errStalePluginFile         = errors.New("stale plugin file")
 )
 
 func renderPluginFiles(specs []harnesspkg.PluginFileInstallSpec) (map[string]string, error) {
 	files := make(map[string]string, len(specs))
 	for _, spec := range specs {
-		if err := validatePluginFileName(spec.Name); err != nil {
+		if err := validateInstallRelativePath(spec.Name); err != nil {
 			return nil, err
 		}
 		content, err := renderInstallContent(spec.Content, spec.JSONContent)
@@ -34,9 +35,19 @@ func renderPluginFiles(specs []harnesspkg.PluginFileInstallSpec) (map[string]str
 	return files, nil
 }
 
-func validatePluginFileName(name string) error {
-	if strings.TrimSpace(name) == "" || filepath.Base(name) != name {
+func validateInstallRelativePath(name string) error {
+	trimmed := strings.TrimSpace(name)
+	if trimmed == "" || filepath.IsAbs(trimmed) || strings.Contains(trimmed, `\`) {
 		return fmt.Errorf("%w: %q", errInvalidPluginFileName, name)
+	}
+	cleaned := filepath.Clean(trimmed)
+	if cleaned != trimmed || cleaned == "." {
+		return fmt.Errorf("%w: %q", errInvalidPluginFileName, name)
+	}
+	for part := range strings.SplitSeq(cleaned, string(filepath.Separator)) {
+		if part == "" || part == "." || part == ".." {
+			return fmt.Errorf("%w: %q", errInvalidPluginFileName, name)
+		}
 	}
 
 	return nil
@@ -129,21 +140,7 @@ func (plugin pluginDirectoryInstall) needsUpdate() (bool, error) {
 		}
 	}
 
-	entries, err := os.ReadDir(plugin.dir)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return true, nil
-		}
-
-		return false, fmt.Errorf("reading plugin directory %s: %w", plugin.dir, err)
-	}
-	for _, entry := range entries {
-		if _, ok := plugin.files[entry.Name()]; !ok {
-			return true, nil
-		}
-	}
-
-	return false, nil
+	return plugin.hasStaleFiles()
 }
 
 func (plugin pluginDirectoryInstall) stage() (string, error) {
@@ -178,6 +175,10 @@ func (plugin pluginDirectoryInstall) stage() (string, error) {
 }
 
 func writeStagedPluginFile(path string, data []byte) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return fmt.Errorf("creating staged plugin file directory: %w", err)
+	}
+
 	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		return fmt.Errorf("opening staged plugin file: %w", err)
@@ -201,6 +202,59 @@ func writeStagedPluginFile(path string, data []byte) error {
 	keepOpen = false
 
 	return nil
+}
+
+func (plugin pluginDirectoryInstall) hasStaleFiles() (bool, error) {
+	expectedDirs := plugin.expectedDirs()
+	err := filepath.WalkDir(plugin.dir, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if path == plugin.dir {
+			return nil
+		}
+
+		rel, err := filepath.Rel(plugin.dir, path)
+		if err != nil {
+			return fmt.Errorf("relativizing plugin path: %w", err)
+		}
+		if entry.IsDir() {
+			if _, ok := expectedDirs[rel]; ok {
+				return nil
+			}
+
+			return errStalePluginFile
+		}
+		if _, ok := plugin.files[rel]; !ok {
+			return errStalePluginFile
+		}
+
+		return nil
+	})
+	if err == nil {
+		return false, nil
+	}
+	if errors.Is(err, errStalePluginFile) {
+		return true, nil
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		return true, nil
+	}
+
+	return false, fmt.Errorf("walking plugin directory %s: %w", plugin.dir, err)
+}
+
+func (plugin pluginDirectoryInstall) expectedDirs() map[string]struct{} {
+	dirs := make(map[string]struct{})
+	for name := range plugin.files {
+		dir := filepath.Dir(name)
+		for dir != "." {
+			dirs[dir] = struct{}{}
+			dir = filepath.Dir(dir)
+		}
+	}
+
+	return dirs
 }
 
 func (plugin pluginDirectoryInstall) installStaged() (func() error, func() error, error) {

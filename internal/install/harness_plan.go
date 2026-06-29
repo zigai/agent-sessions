@@ -69,6 +69,10 @@ func installPlanAction(options Options, harness registry.Harness, action harness
 		result, err := installRenderedPlan(options, harness, typed.Plan)
 
 		return result, true, err
+	case harnesspkg.RenderedFilesAction:
+		result, err := installRenderedFilesPlan(options, harness, typed.Plan)
+
+		return result, true, err
 	case harnesspkg.PluginDirectoryAction:
 		result, err := installPluginDirectory(options, harness, typed.Plan)
 
@@ -111,7 +115,7 @@ func applyJSONCommandHooks(
 ) func(map[string]any) bool {
 	source := managedSource(plan.Source, harness)
 	statusMessage := strings.TrimSpace(plan.StatusMessage)
-	if statusMessage == "" {
+	if !plan.OmitStatusMessage && statusMessage == "" {
 		statusMessage = managedMarker
 	}
 	isManaged := isManagedSourceHookCommand(source)
@@ -374,6 +378,50 @@ func installRenderedPlan(
 	})
 }
 
+func installRenderedFilesPlan(
+	options Options,
+	harness registry.Harness,
+	plan harnesspkg.RenderedFilesInstallPlan,
+) (Result, error) {
+	files, err := renderRenderedFiles(plan.Files)
+	if err != nil {
+		return Result{}, err
+	}
+
+	label := installLabel(plan.Label, harness, "artifacts")
+	configLabel := installLabel(plan.ConfigLabel, harness, "artifacts")
+
+	changed, needsUpdate, err := renderedFilesNeedUpdate(plan.Dir, files, options.Force)
+	if err != nil {
+		return Result{}, err
+	}
+	if changed && !options.DryRun {
+		for name, content := range files {
+			path := filepath.Join(plan.Dir, name)
+			err := writeInstallFile(
+				path,
+				[]byte(content),
+				needsUpdate[name],
+				false,
+				"creating "+configLabel+" directory",
+				"writing "+label,
+			)
+			if err != nil {
+				return Result{}, err
+			}
+		}
+	}
+
+	return Result{
+		Harness: string(harness),
+		Path:    plan.Dir,
+		Changed: changed,
+		Message: installMessage(label, changed, options.DryRun),
+		Snippet: renderedFilesSnippet(files, plan.SnippetOrder),
+		Error:   "",
+	}, nil
+}
+
 func renderInstallContent(content string, jsonContent any) (string, error) {
 	if jsonContent == nil {
 		return content, nil
@@ -385,6 +433,63 @@ func renderInstallContent(content string, jsonContent any) (string, error) {
 	}
 
 	return string(append(data, '\n')), nil
+}
+
+func renderRenderedFiles(specs []harnesspkg.RenderedFileInstallSpec) (map[string]string, error) {
+	files := make(map[string]string, len(specs))
+	for _, spec := range specs {
+		if err := validateInstallRelativePath(spec.Name); err != nil {
+			return nil, err
+		}
+		content, err := renderInstallContent(spec.Content, spec.JSONContent)
+		if err != nil {
+			return nil, fmt.Errorf("encoding rendered file %s: %w", spec.Name, err)
+		}
+		if _, exists := files[spec.Name]; exists {
+			return nil, fmt.Errorf("%w: %q", errDuplicatePluginFileName, spec.Name)
+		}
+		files[spec.Name] = content
+	}
+
+	return files, nil
+}
+
+func renderedFilesNeedUpdate(
+	dir string,
+	files map[string]string,
+	force bool,
+) (bool, map[string]bool, error) {
+	changed := false
+	needsUpdate := make(map[string]bool, len(files))
+	for name, content := range files {
+		path := filepath.Join(dir, name)
+		update, err := fileNeedsUpdate(path, content, force)
+		if err != nil {
+			return false, nil, err
+		}
+		needsUpdate[name] = update
+		changed = changed || update
+	}
+
+	return changed, needsUpdate, nil
+}
+
+func renderedFilesSnippet(files map[string]string, snippetOrder []string) string {
+	order := snippetOrder
+	if len(order) == 0 {
+		order = make([]string, 0, len(files))
+		for name := range files {
+			order = append(order, name)
+		}
+		slices.Sort(order)
+	}
+
+	parts := make([]string, 0, len(order))
+	for _, name := range order {
+		parts = append(parts, "== "+name+" ==\n"+files[name])
+	}
+
+	return strings.Join(parts, "\n")
 }
 
 func installPluginDirectory(

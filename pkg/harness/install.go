@@ -8,10 +8,14 @@ import (
 )
 
 const (
-	ManagedMarker         = "agent-sessions managed integration"
-	HookTimeoutSeconds    = 5
-	HookEventSessionStart = "SessionStart"
-	HookEventStop         = "Stop"
+	ManagedMarker             = "agent-sessions managed integration"
+	HookTimeoutSeconds        = 5
+	HookTypeCommand           = "command"
+	HookEventSessionStart     = "SessionStart"
+	HookEventUserPromptSubmit = "UserPromptSubmit"
+	HookEventPreToolUse       = "PreToolUse"
+	HookEventStop             = "Stop"
+	resumeFlag                = "--resume"
 )
 
 type InstallPlan struct {
@@ -46,6 +50,12 @@ type RenderedFileAction struct {
 
 func (RenderedFileAction) installAction() {}
 
+type RenderedFilesAction struct {
+	Plan RenderedFilesInstallPlan
+}
+
+func (RenderedFilesAction) installAction() {}
+
 type PluginDirectoryAction struct {
 	Plan PluginDirectoryInstallPlan
 }
@@ -57,12 +67,13 @@ type ShimAction struct{}
 func (ShimAction) installAction() {}
 
 type JSONCommandHookInstallPlan struct {
-	Path          string
-	Source        string
-	Label         string
-	ConfigLabel   string
-	StatusMessage string
-	Hooks         []CommandHookInstallSpec
+	Path              string
+	Source            string
+	Label             string
+	ConfigLabel       string
+	StatusMessage     string
+	OmitStatusMessage bool
+	Hooks             []CommandHookInstallSpec
 }
 
 type CommandHookInstallSpec struct {
@@ -97,6 +108,20 @@ type RenderedFileInstallPlan struct {
 	Path        string
 	Label       string
 	ConfigLabel string
+	Content     string
+	JSONContent any
+}
+
+type RenderedFilesInstallPlan struct {
+	Dir          string
+	Label        string
+	ConfigLabel  string
+	Files        []RenderedFileInstallSpec
+	SnippetOrder []string
+}
+
+type RenderedFileInstallSpec struct {
+	Name        string
 	Content     string
 	JSONContent any
 }

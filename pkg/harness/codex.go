@@ -33,11 +33,12 @@ func codexAdapter() Adapter {
 func (codexHarness) InstallPlan(binary string) InstallPlan {
 	return InstallPlan{
 		Actions: []InstallAction{JSONCommandHooksAction{Plan: JSONCommandHookInstallPlan{
-			Path:          filepath.Join(codexHome(), "hooks.json"),
-			Source:        codexIntegrationSource,
-			Label:         "codex hooks",
-			ConfigLabel:   "codex config",
-			StatusMessage: "Recording agent session",
+			Path:              filepath.Join(codexHome(), "hooks.json"),
+			Source:            codexIntegrationSource,
+			Label:             "codex hooks",
+			ConfigLabel:       "codex config",
+			StatusMessage:     "Recording agent session",
+			OmitStatusMessage: false,
 			Hooks: []CommandHookInstallSpec{
 				{
 					Event:   HookEventSessionStart,
@@ -51,13 +52,13 @@ func (codexHarness) InstallPlan(binary string) InstallPlan {
 					),
 				},
 				{
-					Event:   "UserPromptSubmit",
+					Event:   HookEventUserPromptSubmit,
 					Matcher: "",
 					Command: ReportHookCommand(
 						binary,
 						registry.HarnessCodex,
 						registry.StateRunning,
-						"UserPromptSubmit",
+						HookEventUserPromptSubmit,
 						codexIntegrationSource,
 					),
 				},
