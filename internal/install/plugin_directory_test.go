@@ -66,3 +66,69 @@ func TestPluginDirectoryNeedsUpdateDetectsStaleFiles(t *testing.T) {
 		t.Fatal("expected stale generated file to require plugin directory replacement")
 	}
 }
+
+func TestPluginDirectorySupportsNestedFiles(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	files := map[string]string{
+		"plugin.json":       "{}\n",
+		"hooks/hooks.json":  "{\"hooks\":{}}\n",
+		"scripts/report.sh": "#!/bin/sh\n",
+	}
+	plugin := pluginDirectoryInstall{
+		dir:          filepath.Join(root, "plugin"),
+		markerFile:   "",
+		files:        files,
+		snippetOrder: []string{"plugin.json", "hooks/hooks.json", "scripts/report.sh"},
+	}
+
+	staged, err := plugin.stage()
+	if err != nil {
+		t.Fatalf("plugin.stage returned error: %v", err)
+	}
+	defer func() {
+		_ = os.RemoveAll(staged)
+	}()
+
+	for name, want := range files {
+		got, err := os.ReadFile(filepath.Join(staged, name))
+		if err != nil {
+			t.Fatalf("reading staged file %s: %v", name, err)
+		}
+		if string(got) != want {
+			t.Fatalf("expected %s content %q, got %q", name, want, got)
+		}
+	}
+}
+
+func TestPluginDirectoryNeedsUpdateDetectsNestedStaleFiles(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	files := map[string]string{
+		"plugin.json":      "{}\n",
+		"hooks/hooks.json": "{\"hooks\":{}}\n",
+	}
+	for name, content := range files {
+		path := filepath.Join(dir, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatalf("creating directory for %s: %v", name, err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatalf("writing expected plugin file %s: %v", name, err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(dir, "hooks", "old.json"), []byte("old"), 0o600); err != nil {
+		t.Fatalf("writing stale nested plugin file: %v", err)
+	}
+
+	plugin := pluginDirectoryInstall{dir: dir, markerFile: "", files: files, snippetOrder: nil}
+	changed, err := plugin.needsUpdate()
+	if err != nil {
+		t.Fatalf("plugin.needsUpdate returned error: %v", err)
+	}
+	if !changed {
+		t.Fatal("expected stale nested generated file to require plugin directory replacement")
+	}
+}

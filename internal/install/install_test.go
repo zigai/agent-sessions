@@ -23,6 +23,9 @@ const (
 	agyImportManifestName = "import_manifest.json"
 	agyImportSource       = "antigravity"
 	agyImportComponent    = "hooks"
+	copilotHookFileName   = "agent-sessions.json"
+	goosePluginName       = "agent-sessions-state"
+	gooseMarkerFileName   = ".agent-sessions-managed"
 	kimiCodeManagedStart  = "# BEGIN agent-sessions managed integration: kimi-code"
 	kimiCodeManagedEnd    = "# END agent-sessions managed integration: kimi-code"
 	grokHookFileName      = "agent-sessions-state.json"
@@ -333,6 +336,134 @@ func TestInstallCursorReplacesManagedHooks(t *testing.T) {
 	}
 	if second.Changed {
 		t.Fatal("expected second cursor install to be idempotent")
+	}
+}
+
+func TestInstallCopilotWritesHooks(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("COPILOT_HOME", dir)
+
+	result, err := Run(Options{
+		Harness:      registry.HarnessCopilot,
+		Binary:       testInstallBinary,
+		TargetBinary: "",
+		DryRun:       false,
+		Force:        false,
+		UseShim:      false,
+	})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("expected copilot install to report changed")
+	}
+	if result.Path != filepath.Join(dir, "hooks", copilotHookFileName) {
+		t.Fatalf("unexpected path %q", result.Path)
+	}
+
+	config := decodeTestJSONObject(t, readTestFile(t, result.Path, "reading copilot hooks"), "copilot hooks")
+	if config["version"] != float64(1) {
+		t.Fatalf("expected Copilot hooks version 1, got %#v", config["version"])
+	}
+	hooks := requireTestHooks(t, config)
+	requireTestHookEvents(t, hooks, []string{
+		"sessionStart",
+		"userPromptSubmitted",
+		"preToolUse",
+		"permissionRequest",
+		"postToolUse",
+		"postToolUseFailure",
+		"agentStop",
+		"sessionEnd",
+	})
+	text := string(readTestFile(t, result.Path, "reading copilot hooks text"))
+	requireTextContainsAll(t, text, []string{
+		"--raw-stdin-defaults-only",
+		"agent_sessions_integration=copilot-hook",
+		"copilot_hook_event=preToolUse",
+		managedMarker,
+		"|| true",
+	}, "copilot hooks")
+}
+
+func TestInstallClineWritesHookFiles(t *testing.T) {
+	hooksDir := filepath.Join(t.TempDir(), "hooks")
+	t.Setenv("CLINE_HOOKS_DIR", hooksDir)
+
+	result, err := Run(Options{
+		Harness:      registry.HarnessCline,
+		Binary:       testInstallBinary,
+		TargetBinary: "",
+		DryRun:       false,
+		Force:        false,
+		UseShim:      false,
+	})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("expected cline install to report changed")
+	}
+	if result.Path != hooksDir {
+		t.Fatalf("unexpected path %q", result.Path)
+	}
+
+	for _, name := range []string{
+		"TaskStart.sh",
+		"TaskResume.sh",
+		"UserPromptSubmit.sh",
+		"PreToolUse.sh",
+		"PostToolUse.sh",
+		"TaskComplete.sh",
+		"TaskError.sh",
+		"TaskCancel.sh",
+		"SessionShutdown.sh",
+	} {
+		text := string(readTestFile(t, filepath.Join(hooksDir, name), "reading cline hook "+name))
+		requireTextContainsAll(t, text, []string{
+			managedMarker,
+			"--raw-stdin-defaults-only",
+			"agent_sessions_integration=cline-hook",
+			"printf '%s\\n' '{}'",
+		}, "cline hook "+name)
+	}
+
+	second, err := Run(Options{
+		Harness:      registry.HarnessCline,
+		Binary:       testInstallBinary,
+		TargetBinary: "",
+		DryRun:       false,
+		Force:        false,
+		UseShim:      false,
+	})
+	if err != nil {
+		t.Fatalf("second Run returned error: %v", err)
+	}
+	if second.Changed {
+		t.Fatal("expected second cline install to be idempotent")
+	}
+}
+
+func TestInstallClineRequiresForceForForeignHook(t *testing.T) {
+	hooksDir := filepath.Join(t.TempDir(), "hooks")
+	t.Setenv("CLINE_HOOKS_DIR", hooksDir)
+	if err := os.MkdirAll(hooksDir, 0o700); err != nil {
+		t.Fatalf("creating cline hooks dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(hooksDir, "TaskStart.sh"), []byte("#!/bin/sh\n"), 0o600); err != nil {
+		t.Fatalf("writing foreign cline hook: %v", err)
+	}
+
+	_, err := Run(Options{
+		Harness:      registry.HarnessCline,
+		Binary:       testInstallBinary,
+		TargetBinary: "",
+		DryRun:       false,
+		Force:        false,
+		UseShim:      false,
+	})
+	if err == nil {
+		t.Fatal("expected error for unmanaged cline hook")
 	}
 }
 
@@ -689,6 +820,111 @@ func TestInstallAgyRequiresForceForForeignPlugin(t *testing.T) {
 	}
 	if !result.Changed {
 		t.Fatal("expected forced agy install to report changed")
+	}
+}
+
+func TestInstallGooseWritesPlugin(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	result, err := Run(Options{
+		Harness:      registry.HarnessGoose,
+		Binary:       testInstallBinary,
+		TargetBinary: "",
+		DryRun:       false,
+		Force:        false,
+		UseShim:      false,
+	})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("expected goose install to report changed")
+	}
+	if result.Path != filepath.Join(home, ".agents", "plugins", goosePluginName) {
+		t.Fatalf("unexpected path %q", result.Path)
+	}
+
+	requireGoosePluginManifest(t, result.Path)
+	requireGoosePluginHooks(t, result.Path)
+	requireGoosePluginScript(t, result.Path)
+	requireGoosePluginMarker(t, result.Path)
+
+	second, err := Run(Options{
+		Harness:      registry.HarnessGoose,
+		Binary:       testInstallBinary,
+		TargetBinary: "",
+		DryRun:       false,
+		Force:        false,
+		UseShim:      false,
+	})
+	if err != nil {
+		t.Fatalf("second Run returned error: %v", err)
+	}
+	if second.Changed {
+		t.Fatal("expected second goose install to be idempotent")
+	}
+}
+
+func TestInstallDroidWritesHooks(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	result, err := Run(Options{
+		Harness:      registry.HarnessDroid,
+		Binary:       testInstallBinary,
+		TargetBinary: "",
+		DryRun:       false,
+		Force:        false,
+		UseShim:      false,
+	})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("expected droid install to report changed")
+	}
+	if result.Path != filepath.Join(home, ".factory", "hooks.json") {
+		t.Fatalf("unexpected path %q", result.Path)
+	}
+
+	data := readTestFile(t, result.Path, "reading droid hooks")
+	config := decodeTestJSONObject(t, data, "droid hooks")
+	hooks := requireTestHooks(t, config)
+	requireTestHookEvents(t, hooks, []string{
+		hookEventSessionStart,
+		"UserPromptSubmit",
+		"PreToolUse",
+		"PostToolUse",
+		"Notification",
+		hookEventStop,
+		"SubagentStop",
+		"PreCompact",
+		"SessionEnd",
+	})
+	text := string(data)
+	requireTextContainsAll(t, text, []string{
+		"--raw-stdin-defaults-only",
+		"agent_sessions_integration=droid-hook",
+		"install-hooks droid",
+	}, "droid hooks")
+	if strings.Contains(text, "statusMessage") {
+		t.Fatalf("expected Droid hooks not to include unsupported statusMessage field: %s", text)
+	}
+
+	second, err := Run(Options{
+		Harness:      registry.HarnessDroid,
+		Binary:       testInstallBinary,
+		TargetBinary: "",
+		DryRun:       false,
+		Force:        false,
+		UseShim:      false,
+	})
+	if err != nil {
+		t.Fatalf("second Run returned error: %v", err)
+	}
+	if second.Changed {
+		t.Fatal("expected second droid install to be idempotent")
 	}
 }
 
@@ -1182,6 +1418,68 @@ func requireAgyImportManifest(t *testing.T, path string) {
 	}
 
 	t.Fatalf("expected agy import for %q, got %#v", agyPluginName, imports)
+}
+
+func requireGoosePluginManifest(t *testing.T, dir string) {
+	t.Helper()
+
+	manifestData := readTestFile(t, filepath.Join(dir, "plugin.json"), "reading goose plugin manifest")
+	manifest := decodeTestJSONObject(t, manifestData, "goose plugin manifest")
+	if manifest["name"] != goosePluginName {
+		t.Fatalf("expected plugin name %q, got %#v", goosePluginName, manifest["name"])
+	}
+	if manifest["description"] != managedMarker {
+		t.Fatalf("expected managed marker description, got %#v", manifest["description"])
+	}
+}
+
+func requireGoosePluginHooks(t *testing.T, dir string) {
+	t.Helper()
+
+	hooksData := readTestFile(t, filepath.Join(dir, "hooks", "hooks.json"), "reading goose hooks")
+	hooksConfig := decodeTestJSONObject(t, hooksData, "goose hooks")
+	hooks := requireTestHooks(t, hooksConfig)
+	requireTestHookEvents(t, hooks, []string{
+		hookEventSessionStart,
+		"UserPromptSubmit",
+		"PreToolUse",
+		"PostToolUse",
+		"PostToolUseFailure",
+		"BeforeReadFile",
+		"AfterFileEdit",
+		"BeforeShellExecution",
+		"AfterShellExecution",
+		hookEventStop,
+		"SessionEnd",
+	})
+
+	text := string(hooksData)
+	requireTextContainsAll(t, text, []string{
+		"${PLUGIN_ROOT}/scripts/report.sh",
+		"install-hooks goose",
+	}, "goose hooks")
+}
+
+func requireGoosePluginScript(t *testing.T, dir string) {
+	t.Helper()
+
+	text := string(readTestFile(t, filepath.Join(dir, "scripts", "report.sh"), "reading goose report script"))
+	requireTextContainsAll(t, text, []string{
+		managedMarker,
+		"--raw-stdin-defaults-only",
+		"agent_sessions_integration=goose-hook",
+		`--state "$state"`,
+		`--event "$event"`,
+	}, "goose report script")
+}
+
+func requireGoosePluginMarker(t *testing.T, dir string) {
+	t.Helper()
+
+	marker := readTestFile(t, filepath.Join(dir, gooseMarkerFileName), "reading goose marker")
+	if !strings.Contains(string(marker), managedMarker) {
+		t.Fatalf("expected managed marker, got %q", marker)
+	}
 }
 
 func writeExecutableTestFile(path string, data []byte) error {

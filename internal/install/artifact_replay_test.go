@@ -311,6 +311,70 @@ func TestArtifactReplayJSONCommandHooks(t *testing.T) {
 				},
 			},
 		},
+		{
+			name:    "droid",
+			harness: registry.HarnessDroid,
+			setup: func(t *testing.T, env replayEnv) {
+				t.Helper()
+				t.Setenv("HOME", env.home)
+			},
+			selfRefresh: []string{hookEventSessionStart},
+			cases: []jsonReplayCase{
+				{
+					event:     hookEventSessionStart,
+					payload:   `{"session_id":"droid-replay","transcript_path":"/tmp/droid-replay.jsonl","cwd":"/repo/droid","hook_event_name":"SessionStart","source":"startup"}`,
+					wantState: registry.StateIdle,
+					wantID:    "droid-replay",
+					wantPath:  "/tmp/droid-replay.jsonl",
+					wantCWD:   "/repo/droid",
+					wantEvent: hookEventSessionStart,
+					wantAttrs: map[string]string{
+						"agent_sessions_integration": "droid-hook",
+						"droid_hook_event":           "SessionStart",
+						"droid_source":               "startup",
+					},
+				},
+				{
+					event:     "PreToolUse",
+					payload:   `{"session_id":"droid-replay","transcript_path":"/tmp/droid-replay.jsonl","cwd":"/repo/droid","hook_event_name":"PreToolUse","tool_name":"Bash"}`,
+					wantState: registry.StateRunning,
+					wantID:    "droid-replay",
+					wantPath:  "/tmp/droid-replay.jsonl",
+					wantCWD:   "/repo/droid",
+					wantEvent: "PreToolUse",
+					wantAttrs: map[string]string{
+						"agent_sessions_integration": "droid-hook",
+						"droid_hook_event":           "PreToolUse",
+						"droid_tool_name":            "Bash",
+					},
+				},
+				{
+					event:     "Notification",
+					payload:   `{"session_id":"droid-replay","transcript_path":"/tmp/droid-replay.jsonl","cwd":"/repo/droid","hook_event_name":"Notification","permission_mode":"on-request"}`,
+					wantState: registry.StateWaiting,
+					wantID:    "droid-replay",
+					wantPath:  "/tmp/droid-replay.jsonl",
+					wantCWD:   "/repo/droid",
+					wantEvent: "Notification",
+					wantAttrs: map[string]string{
+						"agent_sessions_integration": "droid-hook",
+						"droid_hook_event":           "Notification",
+						"droid_permission_mode":      "on-request",
+					},
+				},
+				{
+					event:      "SessionEnd",
+					payload:    `{"session_id":"droid-replay","transcript_path":"/tmp/droid-replay.jsonl","cwd":"/repo/droid","hook_event_name":"SessionEnd","reason":"exit"}`,
+					wantState:  registry.StateExited,
+					wantID:     "droid-replay",
+					wantPath:   "/tmp/droid-replay.jsonl",
+					wantCWD:    "/repo/droid",
+					wantEvent:  "SessionEnd",
+					wantAttrs:  map[string]string{"agent_sessions_integration": "droid-hook", "droid_hook_event": "SessionEnd", "droid_reason": "exit"},
+					wantExited: true,
+				},
+			},
+		},
 	}
 
 	for _, test := range tests {
@@ -444,6 +508,238 @@ func TestArtifactReplayCursorHooks(t *testing.T) {
 		requireReplayOutput(t, got, "{\"continue\":true}\n")
 		requireNoReplaySessions(t, env.storePath, registry.HarnessCursor)
 	})
+}
+
+//nolint:exhaustruct // Replay cases intentionally omit zero-value expectations for readability.
+func TestArtifactReplayCopilotHooks(t *testing.T) {
+	env := newReplayEnv(t)
+	t.Setenv("COPILOT_HOME", filepath.Join(env.home, ".copilot"))
+	resetReplayStore(t, env)
+
+	result := installReplayHarness(t, registry.HarnessCopilot, env)
+	commands := readCopilotCommandHooks(t, result.Path)
+	tests := []jsonReplayCase{
+		{
+			event:     "sessionStart",
+			payload:   `{"sessionId":"copilot-replay","timestamp":"2026-06-29T10:00:00Z","cwd":"/repo/copilot","source":"startup"}`,
+			wantState: registry.StateIdle,
+			wantID:    "copilot-replay",
+			wantCWD:   "/repo/copilot",
+			wantEvent: "sessionStart",
+			wantAttrs: map[string]string{
+				"agent_sessions_integration": "copilot-hook",
+				"copilot_hook_event":         "sessionStart",
+				"copilot_start_source":       "startup",
+			},
+		},
+		{
+			event:     "preToolUse",
+			payload:   `{"sessionId":"copilot-replay","timestamp":"2026-06-29T10:00:01Z","cwd":"/repo/copilot","toolName":"Bash","toolArgs":{"command":"echo hi"}}`,
+			wantState: registry.StateRunning,
+			wantID:    "copilot-replay",
+			wantCWD:   "/repo/copilot",
+			wantEvent: "preToolUse",
+			wantAttrs: map[string]string{
+				"agent_sessions_integration": "copilot-hook",
+				"copilot_hook_event":         "preToolUse",
+				"copilot_tool_name":          "Bash",
+			},
+		},
+		{
+			event:     "permissionRequest",
+			payload:   `{"sessionId":"copilot-replay","timestamp":"2026-06-29T10:00:02Z","cwd":"/repo/copilot","toolName":"Bash"}`,
+			wantState: registry.StateWaiting,
+			wantID:    "copilot-replay",
+			wantCWD:   "/repo/copilot",
+			wantEvent: "permissionRequest",
+			wantAttrs: map[string]string{
+				"agent_sessions_integration": "copilot-hook",
+				"copilot_hook_event":         "permissionRequest",
+				"copilot_tool_name":          "Bash",
+			},
+		},
+		{
+			event:      "sessionEnd",
+			payload:    `{"sessionId":"copilot-replay","timestamp":"2026-06-29T10:00:03Z","cwd":"/repo/copilot","reason":"exit"}`,
+			wantState:  registry.StateExited,
+			wantID:     "copilot-replay",
+			wantCWD:    "/repo/copilot",
+			wantEvent:  "sessionEnd",
+			wantAttrs:  map[string]string{"agent_sessions_integration": "copilot-hook", "copilot_hook_event": "sessionEnd", "copilot_reason": "exit"},
+			wantExited: true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.event, func(t *testing.T) {
+			got := runReplayCommand(t, env, commands[test.event], test.payload)
+			requireReplayOutput(t, got, "")
+			session := waitForReplaySession(t, env.storePath, registry.HarnessCopilot, test.wantState, test.wantEvent)
+			requireReplaySessionFields(t, session, test)
+		})
+	}
+}
+
+//nolint:exhaustruct // Replay cases intentionally omit zero-value expectations for readability.
+func TestArtifactReplayClineHookFiles(t *testing.T) {
+	env := newReplayEnv(t)
+	hooksDir := filepath.Join(env.home, ".cline", "hooks")
+	dataDir := filepath.Join(env.home, ".cline", "data")
+	t.Setenv("CLINE_HOOKS_DIR", hooksDir)
+	t.Setenv("CLINE_DATA_DIR", dataDir)
+	resetReplayStore(t, env)
+
+	result := installReplayHarness(t, registry.HarnessCline, env)
+	script := func(name string) string {
+		return filepath.Join(result.Path, name+".sh")
+	}
+	payload := func(hookName string) string {
+		return fmt.Sprintf(
+			`{"clineVersion":"3.2.1","hookName":%s,"taskId":"cline-task","sessionContext":{"rootSessionId":"cline-replay"},"workspaceRoots":["/repo/cline"],"tool_call":{"name":"execute_command"}}`,
+			strconv.Quote(hookName),
+		)
+	}
+	tests := []jsonReplayCase{
+		{
+			event:     "TaskStart",
+			payload:   payload("TaskStart"),
+			wantState: registry.StateIdle,
+			wantID:    "cline-replay",
+			wantPath:  filepath.Join(dataDir, "sessions", "cline-replay", "cline-replay.messages.json"),
+			wantCWD:   "/repo/cline",
+			wantRoot:  "/repo/cline",
+			wantEvent: "TaskStart",
+			wantAttrs: map[string]string{"agent_sessions_integration": "cline-hook", "cline_hook_event": "TaskStart"},
+		},
+		{
+			event:     "UserPromptSubmit",
+			payload:   payload("UserPromptSubmit"),
+			wantState: registry.StateRunning,
+			wantID:    "cline-replay",
+			wantPath:  filepath.Join(dataDir, "sessions", "cline-replay", "cline-replay.messages.json"),
+			wantCWD:   "/repo/cline",
+			wantRoot:  "/repo/cline",
+			wantEvent: "UserPromptSubmit",
+			wantAttrs: map[string]string{
+				"agent_sessions_integration": "cline-hook",
+				"cline_hook_event":           "UserPromptSubmit",
+				"cline_tool_name":            "execute_command",
+			},
+		},
+		{
+			event:     "PreToolUse",
+			payload:   payload("PreToolUse"),
+			wantState: registry.StateRunning,
+			wantID:    "cline-replay",
+			wantPath:  filepath.Join(dataDir, "sessions", "cline-replay", "cline-replay.messages.json"),
+			wantCWD:   "/repo/cline",
+			wantRoot:  "/repo/cline",
+			wantEvent: "PreToolUse",
+			wantAttrs: map[string]string{"agent_sessions_integration": "cline-hook", "cline_hook_event": "PreToolUse"},
+		},
+		{
+			event:      "SessionShutdown",
+			payload:    payload("SessionShutdown"),
+			wantState:  registry.StateExited,
+			wantID:     "cline-replay",
+			wantPath:   filepath.Join(dataDir, "sessions", "cline-replay", "cline-replay.messages.json"),
+			wantCWD:    "/repo/cline",
+			wantRoot:   "/repo/cline",
+			wantEvent:  "SessionShutdown",
+			wantAttrs:  map[string]string{"agent_sessions_integration": "cline-hook", "cline_hook_event": "SessionShutdown"},
+			wantExited: true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.event, func(t *testing.T) {
+			got := runReplayCommand(t, env, "sh "+strconv.Quote(script(test.event)), test.payload)
+			requireReplayOutput(t, got, "{}\n")
+			session := waitForReplaySession(t, env.storePath, registry.HarnessCline, test.wantState, test.wantEvent)
+			requireReplaySessionFields(t, session, test)
+		})
+	}
+
+	t.Run("invalid payload still returns cline protocol response without report", func(t *testing.T) {
+		resetReplayStore(t, env)
+		got := runReplayCommand(t, env, "sh "+strconv.Quote(script("UserPromptSubmit")), `{"hookName":"UserPromptSubmit"}`)
+		requireReplayOutput(t, got, "{}\n")
+		requireNoReplaySessions(t, env.storePath, registry.HarnessCline)
+	})
+}
+
+//nolint:exhaustruct // Replay cases intentionally omit zero-value expectations for readability.
+func TestArtifactReplayGoosePluginHooks(t *testing.T) {
+	env := newReplayEnv(t)
+	t.Setenv("HOME", env.home)
+	resetReplayStore(t, env)
+
+	result := installReplayHarness(t, registry.HarnessGoose, env)
+	commands := readGoosePluginCommands(t, result.Path)
+
+	selfRefreshCommand := requireCommandContaining(t, commands[hookEventSessionStart], " install-hooks ")
+	selfRefreshGot := runGooseReplayCommand(t, env, result.Path, selfRefreshCommand, "{}")
+	requireReplayOutput(t, selfRefreshGot, "")
+	requireNoReplaySessions(t, env.storePath, registry.HarnessGoose)
+
+	tests := []jsonReplayCase{
+		{
+			event:     hookEventSessionStart,
+			payload:   `{"event":"SessionStart","session_id":"goose-replay","working_dir":"/repo/goose"}`,
+			wantState: registry.StateIdle,
+			wantID:    "goose-replay",
+			wantCWD:   "/repo/goose",
+			wantRoot:  "/repo/goose",
+			wantEvent: hookEventSessionStart,
+			wantAttrs: map[string]string{"agent_sessions_integration": "goose-hook", "goose_event": "SessionStart"},
+		},
+		{
+			event:     "UserPromptSubmit",
+			payload:   `{"event":"UserPromptSubmit","session_id":"goose-replay","working_dir":"/repo/goose","message":"must not be stored"}`,
+			wantState: registry.StateRunning,
+			wantID:    "goose-replay",
+			wantCWD:   "/repo/goose",
+			wantRoot:  "/repo/goose",
+			wantEvent: "UserPromptSubmit",
+			wantAttrs: map[string]string{"agent_sessions_integration": "goose-hook", "goose_event": "UserPromptSubmit"},
+		},
+		{
+			event:     "PreToolUse",
+			payload:   `{"event":"PreToolUse","session_id":"goose-replay","working_dir":"/repo/goose","tool_name":"shell","matcher_context":"*","tool_input":{"command":"echo hi"}}`,
+			wantState: registry.StateRunning,
+			wantID:    "goose-replay",
+			wantCWD:   "/repo/goose",
+			wantRoot:  "/repo/goose",
+			wantEvent: "PreToolUse",
+			wantAttrs: map[string]string{
+				"agent_sessions_integration": "goose-hook",
+				"goose_event":                "PreToolUse",
+				"goose_tool_name":            "shell",
+				"goose_matcher_context":      "*",
+			},
+		},
+		{
+			event:      "SessionEnd",
+			payload:    `{"event":"SessionEnd","session_id":"goose-replay","working_dir":"/repo/goose"}`,
+			wantState:  registry.StateExited,
+			wantID:     "goose-replay",
+			wantCWD:    "/repo/goose",
+			wantRoot:   "/repo/goose",
+			wantEvent:  "SessionEnd",
+			wantAttrs:  map[string]string{"agent_sessions_integration": "goose-hook", "goose_event": "SessionEnd"},
+			wantExited: true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.event, func(t *testing.T) {
+			command := requireCommandContaining(t, commands[test.event], "report.sh")
+			got := runGooseReplayCommand(t, env, result.Path, command, test.payload)
+			requireReplayOutput(t, got, "")
+			session := waitForReplaySession(t, env.storePath, registry.HarnessGoose, test.wantState, test.wantEvent)
+			requireReplaySessionFields(t, session, test)
+		})
+	}
 }
 
 //nolint:exhaustruct // Kimi replay cases intentionally omit zero-value expectations.
@@ -1226,6 +1522,14 @@ func runReplayCommand(t *testing.T, env replayEnv, command string, stdin string)
 	return replayResult{stdout: stdout.String(), stderr: stderr.String()}
 }
 
+func runGooseReplayCommand(t *testing.T, env replayEnv, pluginRoot string, command string, stdin string) replayResult {
+	t.Helper()
+
+	prefixedCommand := "PLUGIN_ROOT=" + strconv.Quote(pluginRoot) + "; export PLUGIN_ROOT; " + command
+
+	return runReplayCommand(t, env, prefixedCommand, stdin)
+}
+
 func replayEnvVars(env replayEnv) []string {
 	values := append([]string(nil), os.Environ()...)
 	values = append(values,
@@ -1508,6 +1812,31 @@ func readCursorCommandHooks(t *testing.T, path string) map[string]string {
 	return commands
 }
 
+func readCopilotCommandHooks(t *testing.T, path string) map[string]string {
+	t.Helper()
+
+	config := decodeTestJSONObject(t, readTestFile(t, path, "reading Copilot replay hooks"), "Copilot replay hooks")
+	hooks := requireTestHooks(t, config)
+	commands := make(map[string]string, len(hooks))
+	for event, value := range hooks {
+		definitions, ok := value.([]any)
+		if !ok || len(definitions) != 1 {
+			t.Fatalf("expected one Copilot hook definition for %s, got %#v", event, value)
+		}
+		definition, ok := definitions[0].(map[string]any)
+		if !ok {
+			t.Fatalf("expected Copilot hook definition object for %s, got %#v", event, definitions[0])
+		}
+		command, ok := definition["command"].(string)
+		if !ok || strings.TrimSpace(command) == "" {
+			t.Fatalf("expected Copilot command for %s, got %#v", event, definition)
+		}
+		commands[event] = command
+	}
+
+	return commands
+}
+
 func readKimiManagedTextCommands(t *testing.T, path string) map[string][]string {
 	t.Helper()
 
@@ -1545,6 +1874,23 @@ func readKimiManagedTextCommands(t *testing.T, path string) map[string][]string 
 	}
 	if len(commands) == 0 {
 		t.Fatalf("expected Kimi hook commands in %s", text)
+	}
+
+	return commands
+}
+
+func readGoosePluginCommands(t *testing.T, dir string) map[string][]string {
+	t.Helper()
+
+	config := decodeTestJSONObject(
+		t,
+		readTestFile(t, filepath.Join(dir, "hooks", "hooks.json"), "reading Goose replay hooks"),
+		"Goose replay hooks",
+	)
+	hooks := requireTestHooks(t, config)
+	commands := make(map[string][]string, len(hooks))
+	for event, value := range hooks {
+		commands[event] = append(commands[event], jsonCommandsFromHookGroups(t, event, value)...)
 	}
 
 	return commands
@@ -1768,6 +2114,43 @@ func TestArtifactReplayReadersRequireExpectedEvents(t *testing.T) {
 		})
 	})
 
+	t.Run("copilot", func(t *testing.T) {
+		t.Setenv("COPILOT_HOME", filepath.Join(env.home, ".copilot"))
+		result := installReplayHarness(t, registry.HarnessCopilot, env)
+		requireCommands(t, readCopilotCommandHooks(t, result.Path), []string{
+			"sessionStart",
+			"userPromptSubmitted",
+			"preToolUse",
+			"permissionRequest",
+			"notification",
+			"postToolUse",
+			"postToolUseFailure",
+			"agentStop",
+			"sessionEnd",
+		})
+	})
+
+	t.Run("cline", func(t *testing.T) {
+		t.Setenv("CLINE_HOOKS_DIR", filepath.Join(env.home, ".cline", "hooks"))
+		result := installReplayHarness(t, registry.HarnessCline, env)
+		for _, name := range []string{
+			"TaskStart",
+			"TaskResume",
+			"UserPromptSubmit",
+			"PreToolUse",
+			"PostToolUse",
+			"TaskComplete",
+			"TaskError",
+			"TaskCancel",
+			"SessionShutdown",
+		} {
+			path := filepath.Join(result.Path, name+".sh")
+			if _, err := os.Stat(path); err != nil {
+				t.Fatalf("expected Cline hook file %s: %v", path, err)
+			}
+		}
+	})
+
 	t.Run("kimi", func(t *testing.T) {
 		t.Setenv("KIMI_CODE_HOME", filepath.Join(env.home, ".kimi-code"))
 		result := installReplayHarness(t, registry.HarnessKimiCode, env)
@@ -1783,11 +2166,45 @@ func TestArtifactReplayReadersRequireExpectedEvents(t *testing.T) {
 		})
 	})
 
+	t.Run("goose", func(t *testing.T) {
+		t.Setenv("HOME", env.home)
+		result := installReplayHarness(t, registry.HarnessGoose, env)
+		requireCommandSlices(t, readGoosePluginCommands(t, result.Path), []string{
+			hookEventSessionStart,
+			"UserPromptSubmit",
+			"PreToolUse",
+			"PostToolUse",
+			"PostToolUseFailure",
+			"BeforeReadFile",
+			"AfterFileEdit",
+			"BeforeShellExecution",
+			"AfterShellExecution",
+			hookEventStop,
+			"SessionEnd",
+		})
+	})
+
 	t.Run("agy", func(t *testing.T) {
 		t.Setenv("AGY_CONFIG_HOME", filepath.Join(env.home, ".gemini", "config"))
 		result := installReplayHarness(t, registry.HarnessAgy, env)
 		commands := readAgyPluginCommands(t, result.Path)
 		requireCommands(t, commands, []string{"PreInvocation", "PostInvocation", "PreToolUse", "PostToolUse", hookEventStop})
+	})
+
+	t.Run("droid", func(t *testing.T) {
+		t.Setenv("HOME", env.home)
+		result := installReplayHarness(t, registry.HarnessDroid, env)
+		requireCommandSlices(t, readJSONCommandHooks(t, result.Path), []string{
+			hookEventSessionStart,
+			"UserPromptSubmit",
+			"PreToolUse",
+			"PostToolUse",
+			"Notification",
+			hookEventStop,
+			"SubagentStop",
+			"PreCompact",
+			"SessionEnd",
+		})
 	})
 }
 
@@ -1796,9 +2213,13 @@ func TestArtifactReplayDoesNotUseUnexpectedHarnesses(t *testing.T) {
 		registry.HarnessCodex,
 		registry.HarnessClaude,
 		registry.HarnessCursor,
+		registry.HarnessCopilot,
+		registry.HarnessCline,
 		registry.HarnessKimiCode,
 		registry.HarnessGrok,
+		registry.HarnessGoose,
 		registry.HarnessAgy,
+		registry.HarnessDroid,
 	}
 	for _, harness := range all {
 		if !slices.Contains(AllHarnesses, harness) {

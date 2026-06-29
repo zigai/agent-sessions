@@ -236,7 +236,21 @@ func TestReportHelpListsSupportedHarnesses(t *testing.T) {
 	}
 
 	got := output.String()
-	for _, harness := range []string{"claude", "codex", "cursor", "kimi-code", "grok", "pi", "opencode", "agy", "kilo"} {
+	for _, harness := range []string{
+		"claude",
+		"codex",
+		"cursor",
+		"copilot",
+		"cline",
+		"kimi-code",
+		"grok",
+		"goose",
+		"pi",
+		"opencode",
+		"agy",
+		"kilo",
+		"droid",
+	} {
 		if !strings.Contains(got, harness) {
 			t.Fatalf("expected report help to include %s, got %q", harness, got)
 		}
@@ -1715,7 +1729,21 @@ func TestInstallHooksAll(t *testing.T) {
 	}
 
 	got := output.String()
-	for _, harness := range []string{"claude", "codex", "cursor", "kimi-code", "grok", "pi", "opencode", "agy", "kilo"} {
+	for _, harness := range []string{
+		"claude",
+		"codex",
+		"cursor",
+		"copilot",
+		"cline",
+		"kimi-code",
+		"grok",
+		"goose",
+		"pi",
+		"opencode",
+		"agy",
+		"kilo",
+		"droid",
+	} {
 		if !strings.Contains(got, harness) {
 			t.Fatalf("expected output to include %s, got %q", harness, got)
 		}

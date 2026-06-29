@@ -44,6 +44,13 @@ func TestResumeCommandFor(t *testing.T) {
 			want:        []string{cursorCommand, "--resume", testSessionID},
 		},
 		{
+			name:        clineCommand,
+			harness:     registry.HarnessCline,
+			sessionID:   testSessionID,
+			sessionPath: "",
+			want:        []string{clineCommand, "--id", testSessionID},
+		},
+		{
 			name:        kimiCommand,
 			harness:     registry.HarnessKimiCode,
 			sessionID:   testSessionID,
@@ -56,6 +63,13 @@ func TestResumeCommandFor(t *testing.T) {
 			sessionID:   testSessionID,
 			sessionPath: "",
 			want:        []string{"grok", "--resume", testSessionID},
+		},
+		{
+			name:        gooseCommand,
+			harness:     registry.HarnessGoose,
+			sessionID:   testSessionID,
+			sessionPath: "",
+			want:        []string{gooseCommand, "session", "--resume", "--session-id", testSessionID},
 		},
 		{
 			name:        "pi path",
@@ -85,6 +99,13 @@ func TestResumeCommandFor(t *testing.T) {
 			sessionPath: "",
 			want:        []string{kiloCommand, "--session", testSessionID},
 		},
+		{
+			name:        droidCommand,
+			harness:     registry.HarnessDroid,
+			sessionID:   testSessionID,
+			sessionPath: "",
+			want:        []string{droidCommand, "--resume", testSessionID},
+		},
 	}
 
 	for _, test := range tests {
@@ -111,6 +132,10 @@ func TestNormalize(t *testing.T) {
 		{name: "cursor alias binary", value: "cursor-agent", want: registry.HarnessCursor},
 		{name: "cursor alias cli hyphen", value: "cursor-cli", want: registry.HarnessCursor},
 		{name: "cursor alias cli underscore", value: "cursor_cli", want: registry.HarnessCursor},
+		{name: "copilot", value: "copilot", want: registry.HarnessCopilot},
+		{name: "copilot alias hyphen", value: "github-copilot-cli", want: registry.HarnessCopilot},
+		{name: "copilot alias underscore", value: "github_copilot", want: registry.HarnessCopilot},
+		{name: "cline", value: "cline", want: registry.HarnessCline},
 		{name: "claude alias hyphen", value: "claude-code", want: registry.HarnessClaude},
 		{name: "claude alias underscore", value: "claude_code", want: registry.HarnessClaude},
 		{name: "kimi-code", value: "kimi-code", want: registry.HarnessKimiCode},
@@ -119,6 +144,7 @@ func TestNormalize(t *testing.T) {
 		{name: "kimi alias compact", value: "kimicode", want: registry.HarnessKimiCode},
 		{name: "grok alias hyphen", value: "grok-build", want: registry.HarnessGrok},
 		{name: "grok alias underscore", value: "grok_build", want: registry.HarnessGrok},
+		{name: "goose", value: "goose", want: registry.HarnessGoose},
 		{name: "opencode alias hyphen", value: "open-code", want: registry.HarnessOpenCode},
 		{name: "opencode alias underscore", value: "open_code", want: registry.HarnessOpenCode},
 		{name: "agy alias", value: "antigravity-cli", want: registry.HarnessAgy},
@@ -127,6 +153,9 @@ func TestNormalize(t *testing.T) {
 		{name: "kilo alias command", value: "kilocode", want: registry.HarnessKilo},
 		{name: "kilo alias hyphen", value: "kilo-code", want: registry.HarnessKilo},
 		{name: "kilo alias underscore", value: "kilo_code", want: registry.HarnessKilo},
+		{name: "droid", value: "droid", want: registry.HarnessDroid},
+		{name: "droid factory alias", value: "factory", want: registry.HarnessDroid},
+		{name: "droid factory cli alias", value: "factory_cli", want: registry.HarnessDroid},
 	}
 
 	for _, test := range tests {
@@ -147,7 +176,21 @@ func TestNormalize(t *testing.T) {
 func TestSupportedNames(t *testing.T) {
 	t.Parallel()
 
-	want := []string{"claude", codexCommand, "cursor", "kimi-code", "grok", "pi", "opencode", "agy", kiloCommand}
+	want := []string{
+		"claude",
+		codexCommand,
+		"cursor",
+		"copilot",
+		"cline",
+		"kimi-code",
+		"grok",
+		"goose",
+		"pi",
+		"opencode",
+		"agy",
+		kiloCommand,
+		"droid",
+	}
 	got := SupportedNames()
 	if !slices.Equal(got, want) {
 		t.Fatalf("expected %#v, got %#v", want, got)
@@ -214,6 +257,7 @@ func TestEnvNames(t *testing.T) {
 				"GROK_WORKSPACE_ROOT",
 				"KILO_PROJECT_ROOT",
 				"KILOCODE_PROJECT_ROOT",
+				"FACTORY_PROJECT_DIR",
 			},
 		},
 	}
@@ -240,11 +284,14 @@ func TestFromCommand(t *testing.T) {
 	}{
 		{command: "/usr/bin/codex", want: registry.HarnessCodex, wantOK: true},
 		{command: "/usr/local/bin/cursor-agent", want: registry.HarnessCursor, wantOK: true},
+		{command: "/opt/bin/copilot", want: registry.HarnessCopilot, wantOK: true},
+		{command: "cline", want: registry.HarnessCline, wantOK: true},
 		{command: "agent", want: "", wantOK: false},
 		{command: "claude", want: registry.HarnessClaude, wantOK: true},
 		{command: "kimi", want: registry.HarnessKimiCode, wantOK: true},
 		{command: "grok", want: registry.HarnessGrok, wantOK: true},
 		{command: "grok-build", want: registry.HarnessGrok, wantOK: true},
+		{command: "goose", want: registry.HarnessGoose, wantOK: true},
 		{command: "pi", want: registry.HarnessPi, wantOK: true},
 		{command: "opencode", want: registry.HarnessOpenCode, wantOK: true},
 		{command: "agy", want: registry.HarnessAgy, wantOK: true},
@@ -252,6 +299,7 @@ func TestFromCommand(t *testing.T) {
 		{command: "kilocode", want: registry.HarnessKilo, wantOK: true},
 		{command: "kilo-code", want: registry.HarnessKilo, wantOK: true},
 		{command: "kilo_code", want: registry.HarnessKilo, wantOK: true},
+		{command: "droid", want: registry.HarnessDroid, wantOK: true},
 		{command: "zsh", want: "", wantOK: false},
 	}
 
@@ -319,6 +367,18 @@ func TestDefaultsFromPayload(t *testing.T) {
 			wantAttrKV: "run_terminal_command",
 		},
 		{
+			name:       "goose",
+			harness:    registry.HarnessGoose,
+			payload:    `{"event":"PreToolUse","session_id":"goose-session","working_dir":"/repo/goose","tool_name":"shell"}`,
+			wantID:     "goose-session",
+			wantPath:   "",
+			wantCWD:    "/repo/goose",
+			wantRoot:   "/repo/goose",
+			wantEvent:  "PreToolUse",
+			wantAttr:   "goose_tool_name",
+			wantAttrKV: "shell",
+		},
+		{
 			name:       "cursor",
 			harness:    registry.HarnessCursor,
 			payload:    `{"conversation_id":"cursor-conversation","session_id":"cursor-session","transcript_path":"/tmp/cursor.jsonl","workspace_roots":["/repo"],"hook_event_name":"beforeSubmitPrompt","model":"gpt-5.2","cursor_version":"1.7.2","composer_mode":"agent","is_background_agent":false}`,
@@ -329,6 +389,30 @@ func TestDefaultsFromPayload(t *testing.T) {
 			wantEvent:  "beforeSubmitPrompt",
 			wantAttr:   "cursor_model",
 			wantAttrKV: "gpt-5.2",
+		},
+		{
+			name:       "copilot",
+			harness:    registry.HarnessCopilot,
+			payload:    `{"sessionId":"copilot-session","timestamp":"2026-06-29T10:00:00Z","cwd":"/repo/copilot","toolName":"Bash"}`,
+			wantID:     "copilot-session",
+			wantPath:   "",
+			wantCWD:    "/repo/copilot",
+			wantRoot:   "",
+			wantEvent:  "",
+			wantAttr:   "copilot_tool_name",
+			wantAttrKV: "Bash",
+		},
+		{
+			name:       "cline",
+			harness:    registry.HarnessCline,
+			payload:    `{"clineVersion":"3.2.1","hookName":"PreToolUse","taskId":"cline-task","sessionContext":{"rootSessionId":"cline-root"},"workspaceRoots":["/repo/cline"],"tool_call":{"name":"execute_command"}}`,
+			wantID:     "cline-root",
+			wantPath:   clineSessionPath("cline-root"),
+			wantCWD:    "/repo/cline",
+			wantRoot:   "/repo/cline",
+			wantEvent:  "PreToolUse",
+			wantAttr:   "cline_tool_name",
+			wantAttrKV: "execute_command",
 		},
 		{
 			name:       kimiCommand,
@@ -353,6 +437,18 @@ func TestDefaultsFromPayload(t *testing.T) {
 			wantEvent:  "PreToolUse",
 			wantAttr:   "agy_tool_name",
 			wantAttrKV: "run_command",
+		},
+		{
+			name:       "droid",
+			harness:    registry.HarnessDroid,
+			payload:    `{"session_id":"droid-session","transcript_path":"/tmp/droid.jsonl","cwd":"/repo/droid","hook_event_name":"PreToolUse","tool_name":"Bash"}`,
+			wantID:     "droid-session",
+			wantPath:   "/tmp/droid.jsonl",
+			wantCWD:    "/repo/droid",
+			wantRoot:   "",
+			wantEvent:  "PreToolUse",
+			wantAttr:   "droid_tool_name",
+			wantAttrKV: "Bash",
 		},
 	}
 
@@ -436,6 +532,18 @@ func TestPayloadCompatibleWithHarness(t *testing.T) {
 			want:    true,
 		},
 		{
+			name:    "copilot accepts native hook payload",
+			harness: registry.HarnessCopilot,
+			payload: `{"sessionId":"copilot-session","timestamp":"2026-06-29T10:00:00Z","cwd":"/repo","toolName":"Bash"}`,
+			want:    true,
+		},
+		{
+			name:    "cline accepts native hook payload",
+			harness: registry.HarnessCline,
+			payload: `{"hookName":"TaskStart","taskId":"cline-task","sessionContext":{"rootSessionId":"cline-root"},"workspaceRoots":["/repo"]}`,
+			want:    true,
+		},
+		{
 			name:    "grok accepts native hook payload",
 			harness: registry.HarnessGrok,
 			payload: `{"hookEventName":"stop","sessionId":"grok-session","cwd":"/repo","workspaceRoot":"/repo"}`,
@@ -445,6 +553,12 @@ func TestPayloadCompatibleWithHarness(t *testing.T) {
 			name:    "grok accepts snake case hook payload",
 			harness: registry.HarnessGrok,
 			payload: `{"hook_event_name":"stop","session_id":"grok-session","cwd":"/repo","workspace_root":"/repo"}`,
+			want:    true,
+		},
+		{
+			name:    "goose accepts native hook payload",
+			harness: registry.HarnessGoose,
+			payload: `{"event":"Stop","session_id":"goose-session","working_dir":"/repo"}`,
 			want:    true,
 		},
 		{
@@ -463,6 +577,12 @@ func TestPayloadCompatibleWithHarness(t *testing.T) {
 			name:    "agy accepts snake case hook payload",
 			harness: registry.HarnessAgy,
 			payload: `{"conversation_id":"agy-session","workspace_paths":["/repo"],"event":"Stop"}`,
+			want:    true,
+		},
+		{
+			name:    "droid accepts native hook payload",
+			harness: registry.HarnessDroid,
+			payload: `{"session_id":"droid-session","transcript_path":"/tmp/droid.jsonl","cwd":"/repo","hook_event_name":"Stop"}`,
 			want:    true,
 		},
 		{
@@ -511,6 +631,30 @@ func TestPayloadCompatibleWithHarness(t *testing.T) {
 			name:    "cursor rejects blank workspace roots",
 			harness: registry.HarnessCursor,
 			payload: `{"session_id":"cursor-session","transcript_path":"/tmp/cursor.jsonl","workspace_roots":["  "],"hook_event_name":"sessionEnd","cursor_version":"2026.06.15"}`,
+			want:    false,
+		},
+		{
+			name:    "copilot rejects payload without cwd",
+			harness: registry.HarnessCopilot,
+			payload: `{"sessionId":"copilot-session"}`,
+			want:    false,
+		},
+		{
+			name:    "cline rejects payload without hook name",
+			harness: registry.HarnessCline,
+			payload: `{"taskId":"cline-task","sessionContext":{"rootSessionId":"cline-root"}}`,
+			want:    false,
+		},
+		{
+			name:    "goose rejects payload without session id",
+			harness: registry.HarnessGoose,
+			payload: `{"event":"Stop","working_dir":"/repo"}`,
+			want:    false,
+		},
+		{
+			name:    "droid rejects payload without event",
+			harness: registry.HarnessDroid,
+			payload: `{"session_id":"droid-session","cwd":"/repo"}`,
 			want:    false,
 		},
 		{
