@@ -10,7 +10,7 @@ other tools can answer questions like:
 - which tmux session, window, and pane the agent belongs to
 - which command can resume the harness session
 
-Supported harnesses: `claude`, `codex`, `cursor`, `kimi-code`, `grok`, `pi`, `opencode`, `agy`, and `kilo`.
+Supported harnesses: `claude`, `codex`, `cursor`, `copilot`, `cline`, `kimi-code`, `grok`, `goose`, `pi`, `opencode`, `agy`, `kilo`, and `droid`.
 
 ## Installation
 
@@ -93,7 +93,7 @@ agent-sessions install-hooks codex --dry-run
 
 Each session record stores:
 - registry id
-- harness: `claude`, `codex`, `cursor`, `kimi-code`, `grok`, `pi`, `opencode`, `agy`, or `kilo`
+- harness: `claude`, `codex`, `cursor`, `copilot`, `cline`, `kimi-code`, `grok`, `goose`, `pi`, `opencode`, `agy`, `kilo`, or `droid`
 - normalized state: `idle`, `running`, `waiting`, `unknown`, `exited`
 - harness session id and/or session path when known
 - resume command when a harness adapter can derive one from session id/path
