@@ -517,6 +517,46 @@ func TestInstallShimWritesManagedScript(t *testing.T) {
 	}
 }
 
+func TestInstallShimSupportsHarnessesMissingExitHooks(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		harness      registry.Harness
+		targetBinary string
+	}{
+		{name: "codex", harness: registry.HarnessCodex, targetBinary: "/usr/bin/codex"},
+		{name: "agy", harness: registry.HarnessAgy, targetBinary: "/usr/bin/agy"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			t.Setenv(registry.StateDirEnv, dir)
+
+			result, err := Run(Options{
+				Harness:      tc.harness,
+				Binary:       defaultBinary,
+				TargetBinary: tc.targetBinary,
+				DryRun:       false,
+				Force:        false,
+				UseShim:      true,
+			})
+			if err != nil {
+				t.Fatalf("Run returned error: %v", err)
+			}
+			if !result.Changed {
+				t.Fatal("expected shim install to report changed")
+			}
+			if result.Path != filepath.Join(dir, "shims", string(tc.harness)) {
+				t.Fatalf("unexpected path %q", result.Path)
+			}
+			requireTextContainsAll(t, result.Snippet, []string{
+				managedMarker,
+				"harness_bin=" + tc.targetBinary,
+				"report --harness " + string(tc.harness) + " --state idle --event process.start --source " + string(tc.harness) + "-shim",
+				"report --harness " + string(tc.harness) + " --state exited --event process.exit --source " + string(tc.harness) + "-shim",
+			}, "shim script")
+		})
+	}
+}
+
 func TestInstallShimResolvesTargetOutsideManagedShimDir(t *testing.T) {
 	dir := t.TempDir()
 	realDir := t.TempDir()
