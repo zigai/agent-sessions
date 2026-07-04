@@ -85,7 +85,7 @@ func (codexHarness) InstallPlan(binary string) InstallPlan {
 					),
 				},
 			},
-		}}},
+		}}, ShimAction{}},
 	}
 }
 

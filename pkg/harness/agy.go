@@ -74,7 +74,7 @@ func (agyHarness) InstallPlan(binary string) InstallPlan {
 				Source:     agyImportSource,
 				Components: []string{agyImportComponent},
 			},
-		}}},
+		}}, ShimAction{}},
 	}
 }
 
