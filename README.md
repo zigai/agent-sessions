@@ -89,6 +89,15 @@ agent-sessions install-hooks codex --dry-run
 
 `<harness>` is a supported harness name from the list above.
 
+## Shim Fallback
+
+Some harnesses do not expose a native interactive session-exit event. For those cases,
+`agent-sessions install-hooks <harness> --shim --target-binary <real-binary>` can install
+a PATH shim that reports `process.start` and `process.exit` around the real command.
+Put the generated shim directory before the real harness binary in `PATH`. The shim is a
+fallback for process lifetime only; native hooks remain the source of truth for turn,
+permission, and idle/running state changes.
+
 ## Data Model
 
 Each session record stores:
