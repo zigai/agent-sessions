@@ -1,37 +1,52 @@
-@_:
-  just --list
+_:
+    @just help
 
+# List available commands
+help:
+    @just --list
+
+# Run tests
 test:
     go test ./...
 
+# Run tests with the race detector
 race:
     go test -race ./...
 
+# Tidy dependencies
 tidy:
     go mod tidy
 
+# Apply automatic fixes
 fix:
     golangci-lint run --fix
 
+# Check code for lint issues
 lint:
     golangci-lint run
 
+# Run all non-mutating checks
 check: lint test race
     go mod tidy -diff
     go build -o /dev/null .
 
+# Build the project
 build:
     go build -o agent-sessions .
 
+# Install the project
 install:
     go install .
 
+# Remove build artifacts
 clean:
     rm -rf agent-sessions agent-sessions.exe dist/
 
+# Build with local development version metadata
 build-dev:
     go build -ldflags "-X github.com/zigai/agent-sessions/internal/cli.version=dev -X github.com/zigai/agent-sessions/internal/cli.commit=$(git rev-parse --short HEAD) -X github.com/zigai/agent-sessions/internal/cli.date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" -o agent-sessions .
 
+# Run a dry-run release
 release-dry-run:
     goreleaser release --snapshot --clean
 
@@ -63,6 +78,7 @@ _release-check:
         fi
     fi
 
+# Release a new patch version
 release-patch: _release-check
     #!/usr/bin/env sh
     set -e
@@ -75,6 +91,7 @@ release-patch: _release-check
     git tag "$new"
     git push origin "$new"
 
+# Release a new minor version
 release-minor: _release-check
     #!/usr/bin/env sh
     set -e
@@ -86,6 +103,7 @@ release-minor: _release-check
     git tag "$new"
     git push origin "$new"
 
+# Release a new major version
 release-major: _release-check
     #!/usr/bin/env sh
     set -e
