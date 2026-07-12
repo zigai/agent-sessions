@@ -582,17 +582,26 @@ func watchTestSummary(sessionID string, sessionName string, active int, total in
 }
 
 type safeBuffer struct {
-	mu     sync.Mutex
-	buffer bytes.Buffer
+	mu      sync.Mutex
+	buffer  bytes.Buffer
+	changed chan struct{}
 }
 
 func (b *safeBuffer) Write(data []byte) (int, error) {
 	b.mu.Lock()
-	defer b.mu.Unlock()
-
 	written, err := b.buffer.Write(data)
 	if err != nil {
+		b.mu.Unlock()
 		return written, fmt.Errorf("writing safe buffer: %w", err)
+	}
+	if b.changed == nil {
+		b.changed = make(chan struct{}, 1)
+	}
+	changed := b.changed
+	b.mu.Unlock()
+	select {
+	case changed <- struct{}{}:
+	default:
 	}
 
 	return written, nil
@@ -603,6 +612,17 @@ func (b *safeBuffer) String() string {
 	defer b.mu.Unlock()
 
 	return b.buffer.String()
+}
+
+func (b *safeBuffer) notifications() <-chan struct{} {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if b.changed == nil {
+		b.changed = make(chan struct{}, 1)
+	}
+
+	return b.changed
 }
 
 func waitForWatchReady(t *testing.T, ready <-chan struct{}, done <-chan error) {
@@ -633,15 +653,19 @@ func waitForWatchDone(t *testing.T, done <-chan error) {
 func waitForOutput(t *testing.T, output *safeBuffer, want string) {
 	t.Helper()
 
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
+	timer := time.NewTimer(2 * time.Second)
+	defer timer.Stop()
+	changes := output.notifications()
+	for {
 		if strings.Contains(output.String(), want) {
 			return
 		}
-		time.Sleep(10 * time.Millisecond)
+		select {
+		case <-changes:
+		case <-timer.C:
+			t.Fatalf("timed out waiting for %q in output %q", want, output.String())
+		}
 	}
-
-	t.Fatalf("timed out waiting for %q in output %q", want, output.String())
 }
 
 func assertPathMissing(t *testing.T, path string) {
