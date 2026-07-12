@@ -243,6 +243,10 @@ func kickQueueDrainer(ctx context.Context, storePath string) {
 		return
 	}
 	_ = devNull.Close()
+	go func() {
+		// The kick is best-effort and has no caller left to receive a child error.
+		_ = cmd.Wait()
+	}()
 }
 
 func kickQueueDrainerForArgs(args []string) {
