@@ -1,3 +1,5 @@
+//go:build integration
+
 package install
 
 import (
@@ -16,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/fsnotify/fsnotify"
 	"github.com/zigai/agent-sessions/pkg/registry"
 )
 
@@ -1171,7 +1174,6 @@ func TestArtifactReplayTypeScriptPluginsWithBun(t *testing.T) {
 
 		t.Run("unknown event ignored", func(t *testing.T) {
 			runOpenCodePluginEvent(t, bun, env, result.Path, "event", `{"type":"unknown.event","sessionID":"opencode-ignored","sessionPath":"/tmp/opencode-ignored.jsonl"}`)
-			time.Sleep(100 * time.Millisecond)
 			requireNoReplaySessions(t, env.storePath, registry.HarnessOpenCode)
 		})
 
@@ -1329,7 +1331,6 @@ func TestArtifactReplayTypeScriptPluginsWithBun(t *testing.T) {
 
 		t.Run("unknown event ignored", func(t *testing.T) {
 			runKiloPluginEvent(t, bun, env, result.Path, "event", `{"type":"unknown.event","sessionID":"kilo-ignored","sessionPath":"/tmp/kilo-ignored.jsonl"}`)
-			time.Sleep(100 * time.Millisecond)
 			requireNoReplaySessions(t, env.storePath, registry.HarnessKilo)
 		})
 
@@ -1433,11 +1434,16 @@ func newReplayEnv(t *testing.T) replayEnv {
 	binary := filepath.Join(binDir, "agent sessions")
 	buildReplayBinary(t, binary)
 
+	storePath := filepath.Join(root, "state", "state.json")
+	if err := os.MkdirAll(filepath.Dir(storePath), 0o700); err != nil {
+		t.Fatalf("creating replay state directory: %v", err)
+	}
+
 	return replayEnv{
 		root:      root,
 		home:      home,
 		binary:    binary,
-		storePath: filepath.Join(root, "state", "state.json"),
+		storePath: storePath,
 	}
 }
 
@@ -1588,22 +1594,39 @@ func waitForReplaySession(
 ) registry.Session {
 	t.Helper()
 
-	deadline := time.Now().Add(5 * time.Second)
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		t.Fatalf("creating state watcher: %v", err)
+	}
+	defer func() {
+		if err := watcher.Close(); err != nil {
+			t.Fatalf("closing state watcher: %v", err)
+		}
+	}()
+	if err := watcher.Add(filepath.Dir(storePath)); err != nil {
+		t.Fatalf("watching replay state directory: %v", err)
+	}
+
+	timer := time.NewTimer(5 * time.Second)
+	defer timer.Stop()
 	var sessions []registry.Session
-	var err error
-	for time.Now().Before(deadline) {
+	for {
 		sessions, err = registry.NewFileStore(storePath).List(context.Background(), replayHarnessFilter(harness))
 		if err == nil && len(sessions) == 1 && sessions[0].State == state && sessions[0].LastEvent == event {
 			return sessions[0]
 		}
-		time.Sleep(25 * time.Millisecond)
-	}
-	if err != nil {
-		t.Fatalf("listing replay sessions: %v", err)
-	}
-	t.Fatalf("timed out waiting for %s state=%s event=%s, got %#v", harness, state, event, sessions)
 
-	panic("unreachable")
+		select {
+		case <-watcher.Events:
+		case watchErr := <-watcher.Errors:
+			t.Fatalf("watching replay state: %v", watchErr)
+		case <-timer.C:
+			if err != nil {
+				t.Fatalf("listing replay sessions: %v", err)
+			}
+			t.Fatalf("timed out waiting for %s state=%s event=%s, got %#v", harness, state, event, sessions)
+		}
+	}
 }
 
 func requireNoReplaySessions(t *testing.T, storePath string, harness registry.Harness) {
