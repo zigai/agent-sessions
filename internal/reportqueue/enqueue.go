@@ -16,9 +16,15 @@ type EnqueueOptions struct {
 	Now func() time.Time
 }
 
-func (q Queue) Enqueue(_ context.Context, envelope Envelope, options EnqueueOptions) (EnqueueResult, error) {
+func (q Queue) Enqueue(ctx context.Context, envelope Envelope, options EnqueueOptions) (EnqueueResult, error) {
+	if err := ctx.Err(); err != nil {
+		return EnqueueResult{}, fmt.Errorf("checking context: %w", err)
+	}
 	if err := ensureQueueDirs(q); err != nil {
 		return EnqueueResult{}, err
+	}
+	if err := ctx.Err(); err != nil {
+		return EnqueueResult{}, fmt.Errorf("checking context: %w", err)
 	}
 	now := time.Now().UTC()
 	if options.Now != nil {

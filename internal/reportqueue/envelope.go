@@ -153,6 +153,10 @@ func (q Queue) lockPath() string {
 	return filepath.Join(q.root, "drain.lock")
 }
 
+func (q Queue) tmuxCacheLockPath() string {
+	return filepath.Join(q.root, "tmux-cache.lock")
+}
+
 func NewEnvelopeID(now time.Time) string {
 	var random [8]byte
 	if _, err := rand.Read(random[:]); err != nil {

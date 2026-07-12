@@ -3,6 +3,7 @@ package reportqueue
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -170,6 +171,76 @@ func TestTmuxCacheRespectsTTL(t *testing.T) {
 	}
 	if got, ok := queue.LookupTmuxContext(tmux, now.Add(time.Minute), 30*time.Second); ok || !got.Empty() {
 		t.Fatalf("expected stale cache miss, got %#v ok=%v", got, ok)
+	}
+}
+
+func TestStoreTmuxContextPrunesExpiredAndExcessEntries(t *testing.T) {
+	storePath := filepath.Join(t.TempDir(), "state.json")
+	queue := New(storePath)
+	now := time.Date(2026, 6, 27, 16, 30, 0, 0, time.UTC)
+	expired := testTmuxContext()
+	expired.PaneID = "%expired"
+	if err := queue.StoreTmuxContext(context.Background(), expired, now); err != nil {
+		t.Fatalf("StoreTmuxContext() error = %v", err)
+	}
+
+	for index := range maxTmuxCacheEntries + 1 {
+		tmux := testTmuxContext()
+		tmux.PaneID = fmt.Sprintf("%%%d", index)
+		if err := queue.StoreTmuxContext(context.Background(), tmux, now.Add(defaultTmuxCacheTTL+time.Duration(index+1)*time.Nanosecond)); err != nil {
+			t.Fatalf("StoreTmuxContext(%d) error = %v", index, err)
+		}
+	}
+
+	cache, err := queue.loadTmuxCache()
+	if err != nil {
+		t.Fatalf("loadTmuxCache() error = %v", err)
+	}
+	if len(cache.Panes) != maxTmuxCacheEntries {
+		t.Fatalf("cache entries = %d, want %d", len(cache.Panes), maxTmuxCacheEntries)
+	}
+	if _, ok := cache.Panes[tmuxCacheKey(expired)]; ok {
+		t.Fatal("expected expired cache entry to be pruned")
+	}
+}
+
+func TestStoreTmuxContextUsesCacheLock(t *testing.T) {
+	queue := New(filepath.Join(t.TempDir(), "state.json"))
+	if err := ensureQueueDirs(queue); err != nil {
+		t.Fatalf("ensureQueueDirs() error = %v", err)
+	}
+	lock, err := tryOpenQueueLock(queue.tmuxCacheLockPath())
+	if err != nil {
+		t.Fatalf("tryOpenQueueLock() error = %v", err)
+	}
+	defer func() {
+		if err := lock.Close(); err != nil {
+			t.Fatalf("closing cache lock: %v", err)
+		}
+	}()
+
+	err = queue.StoreTmuxContext(context.Background(), testTmuxContext(), time.Now().UTC())
+	if !errors.Is(err, ErrLocked) {
+		t.Fatalf("StoreTmuxContext() error = %v, want ErrLocked", err)
+	}
+}
+
+func TestQueueOperationsHonorCanceledContext(t *testing.T) {
+	queue := New(filepath.Join(t.TempDir(), "state.json"))
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, enqueueErr := queue.Enqueue(ctx, testEnvelope("", "", "", time.Time{}), EnqueueOptions{Now: nil})
+	if !errors.Is(enqueueErr, context.Canceled) {
+		t.Fatalf("Enqueue() error = %v, want context.Canceled", enqueueErr)
+	}
+	storeErr := queue.StoreTmuxContext(ctx, testTmuxContext(), time.Now().UTC())
+	if !errors.Is(storeErr, context.Canceled) {
+		t.Fatalf("StoreTmuxContext() error = %v, want context.Canceled", storeErr)
+	}
+	_, statusErr := queue.Status(ctx)
+	if !errors.Is(statusErr, context.Canceled) {
+		t.Fatalf("Status() error = %v, want context.Canceled", statusErr)
 	}
 }
 

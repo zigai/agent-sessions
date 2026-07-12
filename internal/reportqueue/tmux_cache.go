@@ -3,15 +3,20 @@ package reportqueue
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"time"
 
 	"github.com/zigai/agent-sessions/pkg/registry"
 )
 
-const defaultTmuxCacheTTL = 30 * time.Second
+const (
+	defaultTmuxCacheTTL = 30 * time.Second
+	maxTmuxCacheEntries = 256
+)
 
 type tmuxCacheFile struct {
 	Version int                       `json:"version"`
@@ -23,21 +28,79 @@ type tmuxCacheEntry struct {
 	Tmux      registry.TmuxContext `json:"tmux"`
 }
 
-func (q Queue) StoreTmuxContext(_ context.Context, tmux registry.TmuxContext, now time.Time) error {
+func (q Queue) StoreTmuxContext(ctx context.Context, tmux registry.TmuxContext, now time.Time) error {
 	if tmux.PaneID == "" {
 		return nil
+	}
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("checking context: %w", err)
 	}
 	if now.IsZero() {
 		now = time.Now().UTC()
 	}
-	cache, _ := q.loadTmuxCache()
+	if err := ensureQueueDirs(q); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("checking context: %w", err)
+	}
+	lock, err := tryOpenQueueLock(q.tmuxCacheLockPath())
+	if err != nil {
+		return fmt.Errorf("locking tmux cache: %w", err)
+	}
+	cache, err := q.loadTmuxCache()
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return closeTmuxCacheLock(lock, fmt.Errorf("loading tmux cache: %w", err))
+	}
 	if cache.Panes == nil {
 		cache.Panes = make(map[string]tmuxCacheEntry)
 	}
+	pruneTmuxCache(&cache, now)
 	cache.Version = 1
 	cache.Panes[tmuxCacheKey(tmux)] = tmuxCacheEntry{UpdatedAt: now.UTC(), Tmux: tmux}
+	pruneTmuxCache(&cache, now)
 
-	return writeJSONAtomic(q.tmuxCachePath(), cache)
+	if err := ctx.Err(); err != nil {
+		return closeTmuxCacheLock(lock, fmt.Errorf("checking context: %w", err))
+	}
+
+	return closeTmuxCacheLock(lock, writeJSONAtomic(q.tmuxCachePath(), cache))
+}
+
+func closeTmuxCacheLock(lock *queueLock, operationErr error) error {
+	if closeErr := lock.Close(); closeErr != nil {
+		return errors.Join(operationErr, closeErr)
+	}
+
+	return operationErr
+}
+
+func pruneTmuxCache(cache *tmuxCacheFile, now time.Time) {
+	for key, entry := range cache.Panes {
+		if now.Sub(entry.UpdatedAt) > defaultTmuxCacheTTL {
+			delete(cache.Panes, key)
+		}
+	}
+	if len(cache.Panes) <= maxTmuxCacheEntries {
+		return
+	}
+
+	keys := make([]string, 0, len(cache.Panes))
+	for key := range cache.Panes {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i int, j int) bool {
+		left := cache.Panes[keys[i]]
+		right := cache.Panes[keys[j]]
+		if left.UpdatedAt.Equal(right.UpdatedAt) {
+			return keys[i] < keys[j]
+		}
+
+		return left.UpdatedAt.Before(right.UpdatedAt)
+	})
+	for _, key := range keys[:len(cache.Panes)-maxTmuxCacheEntries] {
+		delete(cache.Panes, key)
+	}
 }
 
 func (q Queue) LookupTmuxContext(reference registry.TmuxContext, now time.Time, ttl time.Duration) (registry.TmuxContext, bool) {
