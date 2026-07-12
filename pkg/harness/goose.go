@@ -121,11 +121,12 @@ func gooseHookSpecs() []gooseHookSpec {
 }
 
 func gooseSessionStartHookRule(binary string) map[string]any {
-	rule := gooseHookRule(gooseHookSpec{event: HookEventSessionStart, state: registry.StateIdle, matcher: ""})
-	hookValues, _ := rule["hooks"].([]any)
-	rule["hooks"] = append([]any{gooseSelfRefreshHook(binary)}, hookValues...)
-
-	return rule
+	return map[string]any{
+		"hooks": []any{
+			gooseSelfRefreshHook(binary),
+			gooseCommandHook(gooseHookSpec{event: HookEventSessionStart, state: registry.StateIdle, matcher: ""}),
+		},
+	}
 }
 
 func gooseHookRule(spec gooseHookSpec) map[string]any {
