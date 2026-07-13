@@ -2,7 +2,15 @@
 
 package processinfo
 
-import "context"
+import (
+	"context"
+	"runtime"
+)
+
+// List reports that this operating system has no supported process observer.
+func List(_ context.Context) ([]Process, error) {
+	return nil, &UnsupportedError{Platform: runtime.GOOS}
+}
 
 // StartIdentity returns a stable process start identity for pid when the
 // platform exposes one through the local processinfo implementation.

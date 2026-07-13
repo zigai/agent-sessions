@@ -1,34 +1,16 @@
 "{{MANAGED_MARKER}}";
 "AGENT_SESSIONS_INTEGRATION_ID={{INTEGRATION_ID}}";
 "AGENT_SESSIONS_INTEGRATION_VERSION={{INTEGRATION_VERSION}}";
+"agent_sessions_integration_version={{INTEGRATION_VERSION}}";
 
 import { spawn } from "node:child_process";
 
 const agentSessionsBin = {{BINARY}};
-const source = {{SOURCE}};
-const disableSelfRefreshEnv = "AGENT_SESSIONS_DISABLE_PI_SELF_REFRESH";
+const currentSessionSource = {{SOURCE}};
 
 let currentSessionId: string | undefined;
 let currentSessionPath: string | undefined;
 let currentCwd: string | undefined;
-let selfRefreshStarted = false;
-
-function selfRefresh(): void {
-  if (selfRefreshStarted || process.env[disableSelfRefreshEnv] === "1") {
-    return;
-  }
-  selfRefreshStarted = true;
-
-  try {
-    const child = spawn(agentSessionsBin, ["install-hooks", "pi", "--binary", agentSessionsBin], {
-      detached: true,
-      stdio: "ignore",
-    });
-    child.unref();
-  } catch {
-    // Refresh is best-effort. Reporting still works with the loaded extension.
-  }
-}
 
 function updateSessionRef(ctx: any): void {
   try {
@@ -60,14 +42,16 @@ function addEvent(args: string[], value: unknown): void {
   }
 }
 
-function report(state: string, ctx?: any, event?: any): void {
+function report(transition: string, ctx?: any, event?: any): void {
   const observedAt = new Date().toISOString();
   if (ctx) {
     updateSessionRef(ctx);
   }
 
-  const args = ["report", "--harness", "pi", "--state", state, "--source", source, "--observed-at", observedAt, "--queue", "--quiet"];
-  addEvent(args, event?.type);
+  const args = ["report", "pi", "--observed-at", observedAt, "--queue", "--quiet"];
+  args.push(transition === "gone" ? "--presence" : "--activity", transition);
+  args.push("--attribute", `agent_sessions_integration_version={{INTEGRATION_VERSION}}`);
+  args.push("--attribute", `agent_sessions_integration=${currentSessionSource}`);
   if (currentSessionPath) {
     args.push("--session-path", currentSessionPath);
   } else if (currentSessionId) {
@@ -89,10 +73,8 @@ function report(state: string, ctx?: any, event?: any): void {
     // Session reporting must never break Pi startup or turns.
   }
 }
-
 export default function (pi: any) {
   pi.on("session_start", (event: any, ctx: any) => {
-    selfRefresh();
     report("idle", ctx, event);
   });
 
@@ -104,11 +86,11 @@ export default function (pi: any) {
     report("running", ctx, event);
   });
 
-  pi.on("agent_end", (event: any, ctx: any) => {
+  pi.on("agent_settled", (event: any, ctx: any) => {
     report("idle", ctx, event);
   });
 
   pi.on("session_shutdown", (event: any, ctx: any) => {
-    report("exited", ctx, event);
+    report("gone", ctx, event);
   });
 }

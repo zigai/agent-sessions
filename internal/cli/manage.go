@@ -32,399 +32,273 @@ type manageResetResult struct {
 
 	Path string `json:"path"`
 }
-
 type manageStopAllOptions struct {
 	dryRun   bool
 	signaler sessionStopSignaler
 }
-
 type sessionStopSignaler interface {
 	ValidateStopTarget(ctx context.Context, session registry.Session, target stopTarget) (stopTargetValidation, error)
 	SendTmuxInterrupt(ctx context.Context, paneID string) error
 	SendProcessInterrupt(pid int) error
 }
+type (
+	defaultSessionStopSignaler struct{}
+	stopTargetValidation       struct {
+		OK     bool
+		Reason string
+	}
+)
 
-type defaultSessionStopSignaler struct{}
-
-type stopTargetValidation struct {
-	OK     bool
-	Reason string
+type stopTarget struct {
+	Method, Target string
+	PID            int
+}
+type manageStopAllResult struct {
+	Stoppable, Stopped, Skipped, Failed int
+	DryRun                              bool                      `json:"dry_run,omitempty"`
+	Results                             []manageStopSessionResult `json:"results,omitempty"`
+}
+type manageStopSessionResult struct {
+	ID       string             `json:"id"`
+	Harness  registry.Harness   `json:"harness"`
+	Presence registry.Presence  `json:"presence"`
+	Activity *registry.Activity `json:"activity"`
+	Method   string             `json:"method,omitempty"`
+	Target   string             `json:"target,omitempty"`
+	Status   string             `json:"status"`
+	Reason   string             `json:"reason,omitempty"`
+	Error    string             `json:"error,omitempty"`
 }
 
-func (defaultSessionStopSignaler) ValidateStopTarget(
-	ctx context.Context,
-	session registry.Session,
-	target stopTarget,
-) (stopTargetValidation, error) {
-	if reason := staleStopTargetReason(session, time.Now().UTC()); reason != "" {
-		return stopTargetValidation{OK: false, Reason: reason}, nil
+func (defaultSessionStopSignaler) ValidateStopTarget(ctx context.Context, s registry.Session, t stopTarget) (stopTargetValidation, error) {
+	latest := time.Time{}
+	if s.Observations.Process != nil {
+		latest = s.Observations.Process.ObservedAt
 	}
-
-	switch target.Method {
+	if s.Observations.Tmux != nil && s.Observations.Tmux.ObservedAt.After(latest) {
+		latest = s.Observations.Tmux.ObservedAt
+	}
+	if latest.IsZero() || time.Since(latest) > stopTargetMaxAge {
+		return stopTargetValidation{Reason: "observation too old"}, nil
+	}
+	switch t.Method {
 	case "tmux-interrupt":
-		return validateTmuxStopTarget(ctx, session)
+		return validateTmuxStopTarget(ctx, s)
 	case "pid-interrupt":
-		return validateProcessStopTarget(ctx, session)
+		return validateProcessStopTarget(ctx, s)
 	default:
-		return stopTargetValidation{}, fmt.Errorf("%w: %q", errUnknownStopMethod, target.Method)
+		return stopTargetValidation{}, fmt.Errorf("%w: %q", errUnknownStopMethod, t.Method)
 	}
 }
 
-func (defaultSessionStopSignaler) SendTmuxInterrupt(ctx context.Context, paneID string) error {
-	if err := tmuxctx.SendInterrupt(ctx, paneID); err != nil {
-		return fmt.Errorf("sending tmux interrupt: %w", err)
+func (defaultSessionStopSignaler) SendTmuxInterrupt(ctx context.Context, p string) error {
+	if err := tmuxctx.SendInterrupt(ctx, p); err != nil {
+		return fmt.Errorf("send tmux interrupt: %w", err)
 	}
-
 	return nil
 }
 
 func (defaultSessionStopSignaler) SendProcessInterrupt(pid int) error {
-	process, err := os.FindProcess(pid)
-	if err != nil {
-		return fmt.Errorf("finding process %d: %w", pid, err)
+	p, e := os.FindProcess(pid)
+	if e != nil {
+		return fmt.Errorf("find process %d: %w", pid, e)
 	}
-	if err := process.Signal(os.Interrupt); err != nil {
-		return fmt.Errorf("sending interrupt to process %d: %w", pid, err)
+	if err := p.Signal(os.Interrupt); err != nil {
+		return fmt.Errorf("signal process %d: %w", pid, err)
 	}
-
 	return nil
 }
 
-type stopTarget struct {
-	Method string
-	Target string
-	PID    int
-}
-
-type manageStopAllResult struct {
-	Stoppable int                       `json:"stoppable"`
-	Stopped   int                       `json:"stopped"`
-	Skipped   int                       `json:"skipped"`
-	Failed    int                       `json:"failed"`
-	DryRun    bool                      `json:"dry_run,omitempty"`
-	Results   []manageStopSessionResult `json:"results,omitempty"`
-}
-
-type manageStopSessionResult struct {
-	ID      string           `json:"id"`
-	Harness registry.Harness `json:"harness"`
-	State   registry.State   `json:"state"`
-	Method  string           `json:"method,omitempty"`
-	Target  string           `json:"target,omitempty"`
-	Status  string           `json:"status"`
-	Reason  string           `json:"reason,omitempty"`
-	Error   string           `json:"error,omitempty"`
-}
-
 func (app *application) newManageCommand() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "manage",
-		Short: "Manage registry state and agent sessions",
-	}
-	cmd.AddCommand(
-		app.newManageResetCommand(),
-		app.newManageStopAllCommand(),
-	)
-
-	return cmd
+	c := &cobra.Command{Use: "manage", Short: "Manage registry and agent sessions"}
+	c.AddCommand(app.newManageResetCommand(), app.newManageStopAllCommand())
+	return c
 }
 
 func (app *application) newManageResetCommand() *cobra.Command {
-	return &cobra.Command{
-		Use:   "reset",
-		Short: "Reset the registry state file",
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			store := app.store()
-			result, err := store.Reset(cmd.Context())
-			if err != nil {
-				return fmt.Errorf("resetting store: %w", err)
-			}
-
-			output := manageResetResult{
-				ResetResult: result,
-				Path:        store.Path(),
-			}
-			if app.outputJSON {
-				return app.writeJSON(output)
-			}
-
-			return app.writef("cleared=%d remaining=%d path=%s\n", output.Cleared, output.Remaining, output.Path)
-		},
-	}
+	return &cobra.Command{Use: "reset", Short: "Reset the registry state file", RunE: func(cmd *cobra.Command, _ []string) error {
+		s := app.store()
+		r, e := s.Reset(cmd.Context())
+		if e != nil {
+			return fmt.Errorf("resetting store: %w", e)
+		}
+		o := manageResetResult{ResetResult: r, Path: s.Path()}
+		if app.outputJSON {
+			return app.writeJSON(o)
+		}
+		return app.writef("cleared=%d remaining=%d path=%s\n", o.Cleared, o.Remaining, o.Path)
+	}}
 }
 
 func (app *application) newManageStopAllCommand() *cobra.Command {
-	options := manageStopAllOptions{}
-	cmd := &cobra.Command{
-		Use:          "stop-all",
-		Short:        "Send graceful stop signals to all known agent sessions",
-		SilenceUsage: true,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			result, err := app.runManageStopAll(cmd.Context(), options)
-			if err := app.writeManageStopAllResult(result); err != nil {
-				return err
-			}
-
-			return err
-		},
-	}
-	cmd.Flags().BoolVar(&options.dryRun, "dry-run", false, "show sessions that would be stopped without sending signals")
-
-	return cmd
+	o := manageStopAllOptions{}
+	c := &cobra.Command{Use: "stop-all", Short: "Send graceful stop signals to live sessions", SilenceUsage: true, RunE: func(cmd *cobra.Command, _ []string) error {
+		r, e := app.runManageStopAll(cmd.Context(), o)
+		if we := app.writeManageStopAllResult(r); we != nil {
+			return we
+		}
+		return e
+	}}
+	c.Flags().BoolVar(&o.dryRun, "dry-run", false, "show sessions without sending signals")
+	return c
 }
 
-func (app *application) runManageStopAll(ctx context.Context, options manageStopAllOptions) (manageStopAllResult, error) {
-	if options.signaler == nil {
-		options.signaler = defaultSessionStopSignaler{}
+func (app *application) runManageStopAll(ctx context.Context, o manageStopAllOptions) (manageStopAllResult, error) {
+	if o.signaler == nil {
+		o.signaler = defaultSessionStopSignaler{}
 	}
-
-	sessions, err := app.store().List(ctx, registry.Filter{})
-	if err != nil {
-		return manageStopAllResult{}, fmt.Errorf("listing sessions: %w", err)
+	ss, e := app.store().List(ctx, registry.Filter{Presence: registry.PresenceLive})
+	if e != nil {
+		return manageStopAllResult{}, fmt.Errorf("list live sessions: %w", e)
 	}
-	sort.SliceStable(sessions, func(i int, j int) bool {
-		return compareSessionID(sessions[i], sessions[j]) < 0
-	})
-
-	result := manageStopAllResult{
-		DryRun:  options.dryRun,
-		Results: make([]manageStopSessionResult, 0, len(sessions)),
-	}
-	seenTargets := make(map[string]bool)
-	for _, session := range sessions {
-		if session.State == registry.StateExited {
-			continue
-		}
-
-		target, ok := stopTargetForSession(session)
-		entry := manageStopSessionResult{
-			ID:      session.ID,
-			Harness: session.Harness,
-			State:   session.State,
-			Status:  "skipped",
-		}
+	sort.Slice(ss, func(i, j int) bool { return ss[i].ID < ss[j].ID })
+	r := manageStopAllResult{DryRun: o.dryRun, Results: make([]manageStopSessionResult, 0, len(ss))}
+	seen := map[string]bool{}
+	for _, s := range ss {
+		t, ok := stopTargetForSession(s)
+		entry := manageStopSessionResult{ID: s.ID, Harness: s.Harness, Presence: s.Presence, Activity: s.Activity, Status: "skipped"}
 		if !ok {
 			entry.Reason = "no stop target"
-			result.Skipped++
-			result.Results = append(result.Results, entry)
-
+			r.Skipped++
+			r.Results = append(r.Results, entry)
 			continue
 		}
-
-		entry.Method = target.Method
-		entry.Target = target.Target
-		targetKey := target.Method + "\x00" + target.Target
-		if seenTargets[targetKey] {
+		entry.Method = t.Method
+		entry.Target = t.Target
+		k := t.Method + "\x00" + t.Target
+		if seen[k] {
 			entry.Reason = "duplicate target"
-			result.Skipped++
-			result.Results = append(result.Results, entry)
-
+			r.Skipped++
+			r.Results = append(r.Results, entry)
 			continue
 		}
-		seenTargets[targetKey] = true
-		result.Stoppable++
-
-		if options.dryRun {
+		seen[k] = true
+		r.Stoppable++
+		if o.dryRun {
 			entry.Status = "would_stop"
-			result.Results = append(result.Results, entry)
-
+			r.Results = append(r.Results, entry)
 			continue
 		}
-
-		validation, err := options.signaler.ValidateStopTarget(ctx, session, target)
-		if err != nil {
+		v, e := o.signaler.ValidateStopTarget(ctx, s, t)
+		if e != nil {
 			entry.Status = "failed"
-			entry.Error = err.Error()
-			result.Failed++
-			result.Results = append(result.Results, entry)
-
+			entry.Error = e.Error()
+			r.Failed++
+			r.Results = append(r.Results, entry)
 			continue
 		}
-		if !validation.OK {
-			entry.Reason = validation.Reason
-			result.Skipped++
-			result.Stoppable--
-			result.Results = append(result.Results, entry)
-
+		if !v.OK {
+			entry.Reason = v.Reason
+			r.Skipped++
+			r.Stoppable--
+			r.Results = append(r.Results, entry)
 			continue
 		}
-
-		if err := sendStopSignal(ctx, options.signaler, target); err != nil {
+		if e = sendStopSignal(ctx, o.signaler, t); e != nil {
 			entry.Status = "failed"
-			entry.Error = err.Error()
-			result.Failed++
-			result.Results = append(result.Results, entry)
-
+			entry.Error = e.Error()
+			r.Failed++
+			r.Results = append(r.Results, entry)
 			continue
 		}
-
 		entry.Status = "stopped"
-		result.Stopped++
-		result.Results = append(result.Results, entry)
+		r.Stopped++
+		r.Results = append(r.Results, entry)
 	}
-
-	if result.Failed > 0 {
-		return result, errManageStopAllFailed
+	if r.Failed > 0 {
+		return r, errManageStopAllFailed
 	}
-
-	return result, nil
+	return r, nil
 }
 
-func staleStopTargetReason(session registry.Session, now time.Time) string {
-	if session.LastSeenAt.IsZero() {
-		return "missing last-seen timestamp"
+func validateTmuxStopTarget(ctx context.Context, s registry.Session) (stopTargetValidation, error) {
+	panes, e := tmuxctx.ListPanes(ctx)
+	if e != nil {
+		return stopTargetValidation{}, fmt.Errorf("list tmux panes: %w", e)
 	}
-	if now.Sub(session.LastSeenAt) > stopTargetMaxAge {
-		return "last seen too long ago"
-	}
-
-	return ""
-}
-
-func validateTmuxStopTarget(ctx context.Context, session registry.Session) (stopTargetValidation, error) {
-	panes, err := tmuxctx.ListPanes(ctx)
-	if err != nil {
-		return stopTargetValidation{}, fmt.Errorf("listing tmux panes: %w", err)
-	}
-	for _, pane := range panes {
-		if pane.Tmux.PaneID != session.Tmux.PaneID {
+	for _, p := range panes {
+		if p.Tmux.PaneID != s.Tmux.PaneID {
 			continue
 		}
-		if !tmuxTargetMatchesSession(session.Tmux, pane.Tmux) {
-			return stopTargetValidation{OK: false, Reason: "tmux pane identity changed"}, nil
+		if !tmuxTargetMatchesSession(s.Tmux, p.Tmux) {
+			return stopTargetValidation{Reason: "tmux pane identity changed"}, nil
 		}
-		if !harnessCommandMatches(session.Harness, pane.CurrentCommand) {
-			return stopTargetValidation{OK: false, Reason: "tmux pane command changed"}, nil
-		}
-
 		return stopTargetValidation{OK: true}, nil
 	}
-
-	return stopTargetValidation{OK: false, Reason: "tmux pane no longer exists"}, nil
+	return stopTargetValidation{Reason: "tmux pane no longer exists"}, nil
 }
 
-func validateProcessStopTarget(ctx context.Context, session registry.Session) (stopTargetValidation, error) {
-	if session.ProcessStartTime == "" {
-		return stopTargetValidation{OK: false, Reason: "missing process start identity"}, nil
+func validateProcessStopTarget(ctx context.Context, s registry.Session) (stopTargetValidation, error) {
+	if s.Process == nil || !s.Process.Complete() {
+		return stopTargetValidation{Reason: "missing process start identity"}, nil
 	}
-
-	currentStartTime := processinfo.StartIdentity(ctx, session.PID)
-	if currentStartTime == "" {
-		return stopTargetValidation{OK: false, Reason: "process no longer exists"}, nil
+	id := processinfo.StartIdentity(ctx, s.Process.PID)
+	if id == "" {
+		return stopTargetValidation{Reason: "process no longer exists"}, nil
 	}
-	if currentStartTime != session.ProcessStartTime {
-		return stopTargetValidation{OK: false, Reason: "process identity changed"}, nil
+	if id != s.Process.StartIdentity {
+		return stopTargetValidation{Reason: "process identity changed"}, nil
 	}
-
-	command, err := processinfo.CommandName(ctx, session.PID)
-	if err != nil {
-		return stopTargetValidation{}, fmt.Errorf("reading process command: %w", err)
+	cmd, e := processinfo.CommandName(ctx, s.Process.PID)
+	if e != nil {
+		return stopTargetValidation{}, fmt.Errorf("read process command: %w", e)
 	}
-	if !harnessCommandMatches(session.Harness, command) {
-		return stopTargetValidation{OK: false, Reason: "process command changed"}, nil
+	if !harnessCommandMatches(s.Harness, cmd) {
+		return stopTargetValidation{Reason: "process command changed"}, nil
 	}
-
 	return stopTargetValidation{OK: true}, nil
 }
 
-func tmuxTargetMatchesSession(stored registry.TmuxContext, current registry.TmuxContext) bool {
-	if stored.ServerSocket != "" && current.ServerSocket == "" {
+func tmuxTargetMatchesSession(a, b registry.TmuxContext) bool {
+	if a.ServerSocket != "" && a.ServerSocket != b.ServerSocket {
 		return false
 	}
-	if stored.PanePID > 0 && current.PanePID > 0 && stored.PanePID != current.PanePID {
+	if a.PanePID > 0 && b.PanePID > 0 && a.PanePID != b.PanePID {
 		return false
 	}
-
-	return matchingOptionalStringPairs([][2]string{
-		{stored.ServerSocket, current.ServerSocket},
-		{stored.SessionID, current.SessionID},
-		{stored.SessionName, current.SessionName},
-		{stored.WindowID, current.WindowID},
-		{stored.WindowIndex, current.WindowIndex},
-		{stored.PaneIndex, current.PaneIndex},
-	})
-}
-
-func matchingOptionalStringPairs(pairs [][2]string) bool {
-	for _, pair := range pairs {
-		if pair[0] != "" && pair[1] != "" && pair[0] != pair[1] {
+	for _, p := range [][2]string{{a.SessionID, b.SessionID}, {a.SessionName, b.SessionName}, {a.WindowID, b.WindowID}, {a.WindowIndex, b.WindowIndex}, {a.PaneIndex, b.PaneIndex}} {
+		if p[0] != "" && p[1] != "" && p[0] != p[1] {
 			return false
 		}
 	}
-
 	return true
 }
 
-func harnessCommandMatches(harness registry.Harness, command string) bool {
-	command = filepath.Base(strings.TrimSpace(command))
-	if command == "" {
-		return false
-	}
-
-	return slices.Contains(harnessCommandNames(harness), command)
+func harnessCommandMatches(h registry.Harness, c string) bool {
+	base := filepath.Base(strings.TrimSpace(c))
+	return slices.Contains(harnesspkg.ProcessNames(h), base)
 }
 
-func harnessCommandNames(harness registry.Harness) []string {
-	return harnesspkg.ProcessNames(harness)
-}
-
-func (app *application) writeManageStopAllResult(result manageStopAllResult) error {
-	if app.outputJSON {
-		return app.writeJSON(result)
+func stopTargetForSession(s registry.Session) (stopTarget, bool) {
+	if s.Tmux.PaneID != "" {
+		return stopTarget{Method: "tmux-interrupt", Target: s.Tmux.PaneID}, true
 	}
-
-	if result.DryRun {
-		return app.writef(
-			"stoppable=%d stopped=%d skipped=%d failed=%d dry_run=true\n",
-			result.Stoppable,
-			result.Stopped,
-			result.Skipped,
-			result.Failed,
-		)
+	if s.Process != nil && s.Process.PID > 0 {
+		return stopTarget{Method: "pid-interrupt", Target: strconv.Itoa(s.Process.PID), PID: s.Process.PID}, true
 	}
-
-	return app.writef(
-		"stoppable=%d stopped=%d skipped=%d failed=%d\n",
-		result.Stoppable,
-		result.Stopped,
-		result.Skipped,
-		result.Failed,
-	)
-}
-
-func stopTargetForSession(session registry.Session) (stopTarget, bool) {
-	if session.Tmux.PaneID != "" {
-		return stopTarget{
-			Method: "tmux-interrupt",
-			Target: session.Tmux.PaneID,
-		}, true
-	}
-	if session.PID > 0 {
-		return stopTarget{
-			Method: "pid-interrupt",
-			Target: strconv.Itoa(session.PID),
-			PID:    session.PID,
-		}, true
-	}
-
 	return stopTarget{}, false
 }
 
-func sendStopSignal(ctx context.Context, signaler sessionStopSignaler, target stopTarget) error {
-	switch target.Method {
+func sendStopSignal(ctx context.Context, s sessionStopSignaler, t stopTarget) error {
+	switch t.Method {
 	case "tmux-interrupt":
-		if err := signaler.SendTmuxInterrupt(ctx, target.Target); err != nil {
-			return fmt.Errorf("sending tmux interrupt to %s: %w", target.Target, err)
+		if err := s.SendTmuxInterrupt(ctx, t.Target); err != nil {
+			return fmt.Errorf("send tmux interrupt: %w", err)
 		}
-
 		return nil
 	case "pid-interrupt":
-		if err := signaler.SendProcessInterrupt(target.PID); err != nil {
-			return fmt.Errorf("sending process interrupt to %d: %w", target.PID, err)
+		if err := s.SendProcessInterrupt(t.PID); err != nil {
+			return fmt.Errorf("send process interrupt: %w", err)
 		}
-
 		return nil
 	default:
-		return fmt.Errorf("%w: %q", errUnknownStopMethod, target.Method)
+		return fmt.Errorf("%w: %q", errUnknownStopMethod, t.Method)
 	}
+}
+
+func (app *application) writeManageStopAllResult(r manageStopAllResult) error {
+	if app.outputJSON {
+		return app.writeJSON(r)
+	}
+	return app.writef("stoppable=%d stopped=%d skipped=%d failed=%d\n", r.Stoppable, r.Stopped, r.Skipped, r.Failed)
 }

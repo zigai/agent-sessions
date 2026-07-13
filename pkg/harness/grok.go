@@ -69,32 +69,27 @@ func grokHookConfig(binary string) map[string]any {
 		{
 			event:   HookEventSessionStart,
 			matcher: "",
-			command: SelfRefreshCommand(binary, registry.HarnessGrok, false),
-		},
-		{
-			event:   HookEventSessionStart,
-			matcher: "",
-			command: grokHookCommand(binary, registry.StateIdle, HookEventSessionStart),
+			command: grokHookCommand(binary, registry.ActivityIdle, HookEventSessionStart),
 		},
 		{
 			event:   HookEventUserPromptSubmit,
 			matcher: "",
-			command: grokHookCommand(binary, registry.StateRunning, HookEventUserPromptSubmit),
+			command: grokHookCommand(binary, registry.ActivityRunning, HookEventUserPromptSubmit),
 		},
 		{
 			event:   "Notification",
 			matcher: "approval_required",
-			command: grokHookCommand(binary, registry.StateWaiting, "Notification"),
+			command: grokHookCommand(binary, registry.ActivityWaiting, "Notification"),
 		},
 		{
 			event:   HookEventStop,
 			matcher: "",
-			command: grokHookCommand(binary, registry.StateIdle, HookEventStop),
+			command: grokHookCommand(binary, registry.ActivityIdle, HookEventStop),
 		},
 		{
 			event:   "SessionEnd",
 			matcher: "",
-			command: grokHookCommand(binary, registry.StateExited, "SessionEnd"),
+			command: grokHookCommand(binary, registry.PresenceGone, "SessionEnd"),
 		},
 	}
 
@@ -128,8 +123,8 @@ func grokCommandHookGroup(command string, matcher string) map[string]any {
 	return group
 }
 
-func grokHookCommand(binary string, state registry.State, event string) string {
-	return ReportHookCommand(binary, registry.HarnessGrok, state, event, grokIntegrationSource)
+func grokHookCommand(binary string, transition any, event string) string {
+	return ReportHookCommand(binary, registry.HarnessGrok, transition, event, grokIntegrationSource)
 }
 
 func grokPayloadDefaults(payload map[string]any) PayloadDefaults {

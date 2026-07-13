@@ -5,42 +5,52 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
-	"slices"
+	"reflect"
 	"sort"
-	"strings"
+	"strconv"
 	"time"
-
-	"github.com/zigai/agent-sessions/internal/processinfo"
 )
 
 const (
-	storeVersion                    = 1
-	minimumPaneReconcileSessionSize = 2
-	maxObservedAtFutureSkew         = 5 * time.Minute
+	storeSchemaVersion      = 2
+	storeVersion            = storeSchemaVersion
+	maxObservedAtFutureSkew = 5 * time.Minute
 )
 
 var (
-	// ErrSessionNotFound is returned when a session id is not present.
-	ErrSessionNotFound = errors.New("session not found")
-	// ErrHarnessRequired is returned when a report has no harness.
-	ErrHarnessRequired = errors.New("harness is required")
-	// ErrReportIdentityRequired is returned when a report cannot identify a session.
-	ErrReportIdentityRequired = errors.New("report requires state, session id, or session path")
+	ErrSessionNotFound     = errors.New("session not found")
+	ErrHarnessRequired     = errors.New("harness is required")
+	ErrObservationIdentity = errors.New("observation requires identity")
+	ErrObservationConflict = errors.New("observation conflicts with accepted evidence")
 )
 
+type UnsupportedSchemaError struct {
+	Path    string
+	Version int
+}
+
+func (e *UnsupportedSchemaError) Error() string {
+	version := "missing"
+	if e.Version != 0 {
+		version = strconv.Itoa(e.Version)
+	}
+	return fmt.Sprintf("unsupported store schema %s at %s; use manage reset --store %s or move/remove the file", version, e.Path, e.Path)
+}
+
 type snapshot struct {
-	Version   int                `json:"version"`
-	UpdatedAt time.Time          `json:"updated_at"`
-	Sessions  map[string]Session `json:"sessions"`
+	SchemaVersion int                `json:"schema_version"`
+	Version       int                `json:"-"`
+	UpdatedAt     time.Time          `json:"updated_at"`
+	Sessions      map[string]Session `json:"sessions"`
 }
 
 type GCResult struct {
 	Deleted   int `json:"deleted"`
 	Remaining int `json:"remaining"`
 }
-
 type ResetResult struct {
 	Cleared   int `json:"cleared"`
 	Remaining int `json:"remaining"`
@@ -57,466 +67,456 @@ func NewFileStore(path string) *FileStore {
 	if path == "" {
 		path = DefaultStorePath()
 	}
-
-	return &FileStore{
-		path: path,
-		now:  func() time.Time { return time.Now().UTC() },
-	}
+	return &FileStore{path: path, now: func() time.Time { return time.Now().UTC() }}
 }
 
-func (s *FileStore) Path() string {
-	return s.path
-}
+func (s *FileStore) Path() string                       { return s.path }
+func (s *FileStore) SetNowForTest(now func() time.Time) { s.now = now }
 
-func (s *FileStore) SetNowForTest(now func() time.Time) {
-	s.now = now
-}
-
-func (s *FileStore) Report(ctx context.Context, report Report) (Session, error) {
-	if err := ctx.Err(); err != nil {
-		return Session{}, fmt.Errorf("checking context: %w", err)
-	}
-
-	report = enrichReportProcessIdentity(ctx, report)
-	receivedAt := s.now().UTC()
-	observedAt, observedAtReliable := observedAtOrReceivedAt(report.ObservedAt, receivedAt)
-	var saved Session
-	err := s.withSnapshot(func(snap *snapshot) error {
-		if report.Harness == "" {
-			return ErrHarnessRequired
-		}
-		if report.State == "" && report.SessionID == "" && report.SessionPath == "" {
-			return ErrReportIdentityRequired
-		}
-
-		mutation := newReportMutation(snap, report, observedAt, receivedAt, observedAtReliable)
-		saved = mutation.apply()
-
-		return nil
-	})
+func (s *FileStore) Observe(ctx context.Context, observation Observation) (Session, error) {
+	sessions, err := s.ObserveBatch(ctx, []Observation{observation})
 	if err != nil {
 		return Session{}, err
 	}
+	if len(sessions) > 0 {
+		return sessions[0], nil
+	}
+	snap, loadErr := s.load()
+	if loadErr != nil {
+		return Session{}, loadErr
+	}
+	id := findMatchingSession(snap.Sessions, observation)
+	if id == "" {
+		id = sessionIDForObservation(observation)
+	}
+	return s.Get(ctx, id)
+}
 
+//nolint:gocognit,cyclop // batch reduction coordinates identity, timestamp, and evidence precedence
+func (s *FileStore) ObserveBatch(ctx context.Context, observations []Observation) ([]Session, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("checking context: %w", err)
+	}
+	receivedAt := s.now().UTC()
+	saved := make([]Session, 0, len(observations))
+	err := s.withSnapshot(func(snap *snapshot) error {
+		for index := range observations {
+			if err := ctx.Err(); err != nil {
+				return fmt.Errorf("checking context: %w", err)
+			}
+			observation := observations[index]
+			if observation.Harness == "" {
+				return ErrHarnessRequired
+			}
+			if observation.ObservedAt.IsZero() {
+				observation.ObservedAt = receivedAt
+			}
+			if err := ValidateObservation(observation); err != nil {
+				return err
+			}
+			at, _ := observationTime(observation.ObservedAt, receivedAt)
+			id := findMatchingSession(snap.Sessions, observation)
+			if id == "" && observation.Source == ObservationSourceCatalog && (observation.Harness != HarnessClaude || observation.Catalog == nil || !observation.Catalog.Current) {
+				continue
+			}
+			if id == "" {
+				id = sessionIDForObservation(observation)
+			}
+			session := snap.Sessions[id]
+			if session.ID == "" {
+				session = newSession(id, observation.Harness, receivedAt)
+			} else if session.Harness != observation.Harness {
+				id = sessionIDForObservation(observation)
+				session = newSession(id, observation.Harness, receivedAt)
+			}
+			if id != "" && shouldIgnoreNativeAfterGone(session, observation, at) {
+				saved = append(saved, session)
+				continue
+			}
+			if err := applyObservation(&session, observation, at, receivedAt); err != nil {
+				return err
+			}
+			snap.Sessions[session.ID] = session
+			saved = append(saved, session)
+		}
+		snap.UpdatedAt = maxTime(snap.UpdatedAt, receivedAt)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
 	return saved, nil
 }
 
-type reportMutation struct {
-	snap               *snapshot
-	report             Report
-	observedAt         time.Time
-	receivedAt         time.Time
-	observedAtReliable bool
-}
-
-func newReportMutation(
-	snap *snapshot,
-	report Report,
-	observedAt time.Time,
-	receivedAt time.Time,
-	observedAtReliable bool,
-) reportMutation {
-	return reportMutation{
-		snap:               snap,
-		report:             report,
-		observedAt:         observedAt,
-		receivedAt:         receivedAt,
-		observedAtReliable: observedAtReliable,
+func newSession(id string, harness Harness, now time.Time) Session {
+	activity := ActivityUnknown
+	return Session{
+		SchemaVersion:     storeSchemaVersion,
+		ID:                id,
+		Harness:           harness,
+		Presence:          PresenceUnknown,
+		Activity:          &activity,
+		SessionID:         "",
+		SessionPath:       "",
+		ResumeCommand:     nil,
+		CWD:               "",
+		ProjectRoot:       "",
+		Process:           nil,
+		Tmux:              TmuxContext{},  //nolint:exhaustruct // zero-value location is the new session default
+		Observations:      Observations{}, //nolint:exhaustruct // no evidence has been observed yet
+		CreatedAt:         now,
+		UpdatedAt:         now,
+		PresenceChangedAt: time.Time{},
+		ActivityChangedAt: time.Time{},
 	}
 }
 
-func (mutation *reportMutation) apply() Session {
-	saved := mutation.mergeSession()
-	mutation.snap.Sessions[saved.ID] = saved
-	reconciledAt := mutation.reconcilePaneOccupants(saved.ID)
-	saved = mutation.snap.Sessions[saved.ID]
-	mutation.snap.UpdatedAt = maxTime(mutation.snap.UpdatedAt, saved.UpdatedAt, reconciledAt, mutation.receivedAt)
-
-	return saved
+func observationTime(observedAt, receivedAt time.Time) (time.Time, bool) {
+	if observedAt.IsZero() {
+		return receivedAt, true
+	}
+	observedAt = observedAt.UTC()
+	if observedAt.After(receivedAt.Add(maxObservedAtFutureSkew)) {
+		return receivedAt, false
+	}
+	return observedAt, true
 }
 
-func (mutation *reportMutation) mergeSession() Session {
-	reportID := sessionIDForReport(mutation.report)
-	matchingIDs := mutation.matchingSessionIDs(reportID)
-	canonicalID := mutation.canonicalIDForMerge(matchingIDs, reportID)
-	base := mergedExistingSessions(mutation.snap.Sessions, matchingIDs, canonicalID)
-	saved := mergeReport(
-		base,
-		mutation.report,
-		mutation.observedAt,
-		mutation.receivedAt,
-		mutation.observedAtReliable,
-	)
-
-	for _, id := range matchingIDs {
-		delete(mutation.snap.Sessions, id)
-	}
-
-	return saved
-}
-
-func (mutation *reportMutation) canonicalIDForMerge(matchingIDs []string, reportID string) string {
-	if reportHasStrongIdentity(mutation.report) {
-		return reportID
-	}
-
-	for _, id := range matchingIDs {
-		if sessionHasStrongIdentity(mutation.snap.Sessions[id]) {
-			return id
+func sourceSlotTime(session Session, observation Observation) time.Time {
+	switch observation.Source {
+	case ObservationSourceNative:
+		if session.Observations.Native != nil {
+			return session.Observations.Native.ObservedAt
+		}
+	case ObservationSourceProcess:
+		if session.Observations.Process != nil {
+			return session.Observations.Process.ObservedAt
+		}
+	case ObservationSourceTmux:
+		if session.Observations.Tmux != nil {
+			return session.Observations.Tmux.ObservedAt
+		}
+	case ObservationSourceCatalog:
+		if session.Observations.Catalog != nil {
+			return session.Observations.Catalog.ObservedAt
 		}
 	}
-	if len(matchingIDs) == 1 {
-		return matchingIDs[0]
-	}
-
-	return reportID
+	return time.Time{}
 }
 
-// reconcilePaneOccupants enforces that one tmux pane has at most one live
-// harness occupant. A later live report in the same pane means older live
-// records in that pane are stale even if their harness did not emit an exit
-// event.
-func (mutation *reportMutation) reconcilePaneOccupants(currentID string) time.Time {
-	if !mutation.reportOccupiesTmuxPane() {
-		return time.Time{}
+func existingSlot(session Session, observation Observation) any {
+	switch observation.Source {
+	case ObservationSourceNative:
+		return session.Observations.Native
+	case ObservationSourceProcess:
+		return session.Observations.Process
+	case ObservationSourceTmux:
+		return session.Observations.Tmux
+	case ObservationSourceCatalog:
+		return session.Observations.Catalog
+	default:
+		return nil
 	}
+}
 
-	winnerID, winnerTime := mutation.currentPaneOccupant(currentID)
-	if winnerID == "" {
-		return time.Time{}
+func shouldIgnoreNativeAfterGone(session Session, observation Observation, at time.Time) bool {
+	if observation.Source != ObservationSourceNative || session.Presence != PresenceGone {
+		return false
 	}
-	if winnerTime.IsZero() {
-		winnerTime = mutation.observedAt
+	if observation.Lifecycle != nil && (*observation.Lifecycle == NativeLifecycleStart || *observation.Lifecycle == NativeLifecycleResume) {
+		return false
 	}
+	return !at.Before(session.PresenceChangedAt)
+}
 
-	var latest time.Time
-	for id, session := range mutation.snap.Sessions {
-		if id == winnerID || session.State == StateExited || !sameTmuxPane(session.Tmux, mutation.report.Tmux) {
+func applyObservation(session *Session, observation Observation, at, receivedAt time.Time) error {
+	if previous := sourceSlotTime(*session, observation); !previous.IsZero() {
+		if at.Before(previous) {
+			return fmt.Errorf("%w: %s observation at %s precedes %s", ErrObservationConflict, observation.Source, at, previous)
+		}
+		if at.Equal(previous) {
+			if observationEquivalent(*session, observation, at) {
+				return nil
+			}
+			return fmt.Errorf("%w: %s observation at %s", ErrObservationConflict, observation.Source, at)
+		}
+	}
+	previousPresence := session.Presence
+	previousActivity := session.Activity
+	if err := storeObservation(session, observation, at); err != nil {
+		return err
+	}
+	applyIdentity(session, observation)
+	applyMetadata(session, observation)
+	applyPresenceAndActivity(session, observation, at)
+	session.SchemaVersion = storeSchemaVersion
+	session.UpdatedAt = maxTime(session.UpdatedAt, receivedAt)
+	if session.Presence != previousPresence {
+		session.PresenceChangedAt = at
+	}
+	if !activityEqual(session.Activity, previousActivity) {
+		session.ActivityChangedAt = at
+	}
+	return nil
+}
+
+func observationEquivalent(session Session, observation Observation, at time.Time) bool {
+	candidate := session
+	if err := storeObservation(&candidate, observation, at); err != nil {
+		return false
+	}
+	return reflect.DeepEqual(existingSlot(session, observation), existingSlot(candidate, observation))
+}
+
+func storeObservation(session *Session, observation Observation, at time.Time) error {
+	switch observation.Source {
+	case ObservationSourceNative:
+		lifecycle := cloneLifecycle(observation.Lifecycle)
+		presence := clonePresence(observation.Presence)
+		activity := cloneActivity(observation.Activity)
+		session.Observations.Native = &NativeObservation{Event: observation.NativeEvent, Lifecycle: lifecycle, Presence: presence, Activity: activity, SessionID: observation.Identity.SessionID, SessionPath: observation.Identity.SessionPath, ObservedAt: at, Attributes: cloneAttributes(observation.Attributes), RawPayload: cloneRaw(observation.RawPayload)}
+	case ObservationSourceProcess:
+		present := observation.ProcessPresent != nil && *observation.ProcessPresent
+		var process ProcessIdentity
+		if observation.Process != nil {
+			process = *observation.Process
+		}
+		session.Observations.Process = &ProcessObservation{Present: present, Process: process, ObservedAt: at}
+	case ObservationSourceTmux:
+		if observation.Tmux == nil || observation.Process == nil {
+			return ErrInvalidObservation
+		}
+		session.Observations.Tmux = &TmuxObservation{Process: *observation.Process, Context: *observation.Tmux, ObservedAt: at}
+	case ObservationSourceCatalog:
+		if observation.Catalog == nil {
+			return ErrInvalidObservation
+		}
+		session.Observations.Catalog = &CatalogObservation{SessionID: observation.Identity.SessionID, SessionPath: observation.Identity.SessionPath, ResumeCommand: append([]string(nil), observation.Catalog.ResumeCommand...), CWD: observation.Catalog.CWD, ProjectRoot: observation.Catalog.ProjectRoot, ProcessPID: observation.Catalog.ProcessPID, ObservedAt: at}
+	default:
+		return ErrUnknownSource
+	}
+	return nil
+}
+
+func applyIdentity(session *Session, observation Observation) {
+	if observation.Identity.SessionID != "" {
+		session.SessionID = observation.Identity.SessionID
+	}
+	if observation.Identity.SessionPath != "" {
+		session.SessionPath = filepath.Clean(observation.Identity.SessionPath)
+	}
+	if observation.Source == ObservationSourceNative && session.Observations.Native != nil {
+		if session.Observations.Native.SessionID != "" {
+			session.SessionID = session.Observations.Native.SessionID
+		}
+		if session.Observations.Native.SessionPath != "" {
+			session.SessionPath = filepath.Clean(session.Observations.Native.SessionPath)
+		}
+	}
+	if observation.Source == ObservationSourceCatalog && session.Observations.Catalog != nil {
+		if session.SessionID == "" {
+			session.SessionID = session.Observations.Catalog.SessionID
+		}
+		if session.SessionPath == "" && session.Observations.Catalog.SessionPath != "" {
+			session.SessionPath = filepath.Clean(session.Observations.Catalog.SessionPath)
+		}
+	}
+}
+
+func applyMetadata(session *Session, observation Observation) {
+	if observation.Source == ObservationSourceProcess && observation.Process != nil && observation.Process.Complete() {
+		process := *observation.Process
+		session.Process = &process
+		if process.CWD != "" {
+			session.CWD = process.CWD
+		}
+		return
+	}
+	if (observation.Source == ObservationSourceNative || observation.Source == ObservationSourceCatalog) && observation.Catalog != nil {
+		applyCatalogMetadata(session, observation.Catalog)
+	}
+	if observation.Source == ObservationSourceTmux && observation.Tmux != nil {
+		session.Tmux = *observation.Tmux
+		if session.CWD == "" {
+			session.CWD = observation.Tmux.PaneCurrentPath
+		}
+	}
+}
+
+func applyCatalogMetadata(session *Session, catalog *CatalogMetadata) {
+	if session.CWD == "" {
+		session.CWD = catalog.CWD
+	}
+	if session.ProjectRoot == "" {
+		session.ProjectRoot = catalog.ProjectRoot
+	}
+	if len(session.ResumeCommand) == 0 {
+		session.ResumeCommand = append([]string(nil), catalog.ResumeCommand...)
+	}
+}
+
+//nolint:gocognit,cyclop // presence and activity are reduced independently by source precedence
+func applyPresenceAndActivity(session *Session, observation Observation, at time.Time) {
+	switch observation.Source {
+	case ObservationSourceNative:
+		native := session.Observations.Native
+		if native == nil {
+			return
+		}
+		if native.Lifecycle != nil {
+			switch *native.Lifecycle {
+			case NativeLifecycleEnd:
+				setGone(session, at)
+			case NativeLifecycleStart, NativeLifecycleResume:
+				if session.Presence == PresenceGone && at.After(session.PresenceChangedAt) {
+					session.Presence = PresenceUnknown
+					session.Activity = activityPtr(ActivityUnknown)
+				}
+			}
+		}
+		if native.Presence != nil {
+			switch *native.Presence {
+			case PresenceGone:
+				setGone(session, at)
+			case PresenceLive:
+				if !nativeEndAfter(session, at) {
+					session.Presence = PresenceLive
+				}
+			case PresenceUnknown:
+				if !nativeEndAfter(session, at) {
+					session.Presence = PresenceUnknown
+				}
+			}
+		}
+		if native.Activity != nil && session.Presence != PresenceGone && at.After(session.PresenceChangedAt) {
+			session.Activity = cloneActivity(native.Activity)
+		}
+	case ObservationSourceProcess:
+		process := session.Observations.Process
+		if process == nil {
+			return
+		}
+		if process.Present {
+			if !nativeEndAfter(session, at) {
+				session.Presence = PresenceLive
+				if session.Activity == nil {
+					session.Activity = activityPtr(ActivityUnknown)
+				}
+			}
+			return
+		}
+		setGone(session, at)
+	case ObservationSourceTmux, ObservationSourceCatalog:
+		return
+	}
+}
+
+func nativeEndAfter(session *Session, _ time.Time) bool {
+	return session.Observations.Native != nil && session.Observations.Native.Lifecycle != nil && *session.Observations.Native.Lifecycle == NativeLifecycleEnd
+}
+
+func setGone(session *Session, at time.Time) {
+	if session.Presence != PresenceGone {
+		session.Presence = PresenceGone
+		session.PresenceChangedAt = at
+	}
+	session.Activity = nil
+}
+
+//nolint:gocognit,cyclop // matching checks strong identity before deterministic fallback keys
+func findMatchingSession(sessions map[string]Session, observation Observation) string {
+	ids := make([]string, 0)
+	for id, session := range sessions {
+		if session.Harness != observation.Harness {
 			continue
 		}
-
-		session.State = StateExited
-		session.StateChangedAt = winnerTime
-		session.EndedAt = winnerTime
-		session.UpdatedAt = maxTime(session.UpdatedAt, winnerTime)
-		session.LastSeenAt = maxTime(session.LastSeenAt, winnerTime)
-		mutation.snap.Sessions[id] = session
-		latest = maxTime(latest, session.UpdatedAt)
-	}
-
-	return latest
-}
-
-func (mutation *reportMutation) reportOccupiesTmuxPane() bool {
-	return mutation.report.State != "" && mutation.report.State != StateExited && mutation.report.Tmux.PaneID != ""
-}
-
-func (mutation *reportMutation) currentPaneOccupant(currentID string) (string, time.Time) {
-	var winnerID string
-	var winnerTime time.Time
-	for id, session := range mutation.snap.Sessions {
-		if session.State == StateExited || !sameTmuxPane(session.Tmux, mutation.report.Tmux) {
+		if observation.Identity.SessionID != "" {
+			if session.SessionID == observation.Identity.SessionID {
+				ids = append(ids, id)
+			}
 			continue
 		}
-
-		observedAt := paneOccupantObservedAt(session)
-		if paneOccupantWins(id, observedAt, currentID, winnerID, winnerTime) {
-			winnerID = id
-			winnerTime = observedAt
+		if observation.Identity.SessionPath != "" {
+			if session.SessionPath != "" && filepath.Clean(session.SessionPath) == filepath.Clean(observation.Identity.SessionPath) {
+				ids = append(ids, id)
+			}
+			continue
+		}
+		if observation.Process != nil && observation.Process.Complete() && session.Process != nil && session.Process.Equal(*observation.Process) {
+			ids = append(ids, id)
+			continue
+		}
+		if observation.Source == ObservationSourceCatalog && observation.Catalog != nil && observation.Catalog.ProcessPID > 0 && session.Process != nil && session.Process.PID == observation.Catalog.ProcessPID {
+			ids = append(ids, id)
 		}
 	}
-
-	return winnerID, winnerTime
-}
-
-func paneOccupantWins(
-	candidateID string,
-	candidateTime time.Time,
-	currentID string,
-	winnerID string,
-	winnerTime time.Time,
-) bool {
-	if winnerID == "" {
-		return true
-	}
-	if candidateTime.After(winnerTime) {
-		return true
-	}
-	if candidateTime.Before(winnerTime) {
-		return false
-	}
-	if candidateID == currentID && winnerID != currentID {
-		return true
-	}
-	if winnerID == currentID {
-		return false
-	}
-
-	return candidateID > winnerID
-}
-
-func paneOccupantObservedAt(session Session) time.Time {
-	observedAt := session.LastObservedAt
-	if observedAt.IsZero() {
-		observedAt = legacyLastObservedAt(session)
-	}
-	if observedAt.IsZero() {
-		return maxTime(session.UpdatedAt, session.LastSeenAt, session.CreatedAt)
-	}
-
-	return observedAt
-}
-
-func (mutation *reportMutation) matchingSessionIDs(canonicalID string) []string {
-	matchingIDs := make([]string, 0, 1)
-	for id, session := range mutation.snap.Sessions {
-		if id == canonicalID || mutation.sessionMatchesReportIdentity(session) {
-			matchingIDs = append(matchingIDs, id)
-		}
-	}
-	sort.Strings(matchingIDs)
-	if !reportHasStrongIdentity(mutation.report) && len(matchingIDs) > 1 {
-		return []string{mutation.bestWeakIdentityMatch(matchingIDs)}
-	}
-
-	return matchingIDs
-}
-
-func (mutation *reportMutation) bestWeakIdentityMatch(ids []string) string {
-	winnerID := ids[0]
-	for _, id := range ids[1:] {
-		if weakIdentityMatchWins(mutation.snap.Sessions[id], mutation.snap.Sessions[winnerID]) {
-			winnerID = id
-		}
-	}
-
-	return winnerID
-}
-
-func weakIdentityMatchWins(candidate Session, winner Session) bool {
-	if sessionHasStrongIdentity(candidate) != sessionHasStrongIdentity(winner) {
-		return sessionHasStrongIdentity(candidate)
-	}
-	if candidateAt, winnerAt := paneOccupantObservedAt(candidate), paneOccupantObservedAt(winner); !candidateAt.Equal(winnerAt) {
-		return candidateAt.After(winnerAt)
-	}
-	if !candidate.UpdatedAt.Equal(winner.UpdatedAt) {
-		return candidate.UpdatedAt.After(winner.UpdatedAt)
-	}
-
-	return candidate.ID > winner.ID
-}
-
-func (mutation *reportMutation) sessionMatchesReportIdentity(session Session) bool {
-	if session.Harness != mutation.report.Harness || mutation.strongIdentityConflicts(session) {
-		return false
-	}
-	if mutation.reportMatchesStrongSessionIdentity(session) {
-		return true
-	}
-	if reportHasStrongIdentity(mutation.report) && sessionHasStrongIdentity(session) {
-		return false
-	}
-	if sameTmuxPane(session.Tmux, mutation.report.Tmux) {
-		return true
-	}
-	if mutation.report.PID > 0 && session.PID == mutation.report.PID {
-		return true
-	}
-
-	return false
-}
-
-func (mutation *reportMutation) reportMatchesStrongSessionIdentity(session Session) bool {
-	if mutation.report.SessionID != "" && session.SessionID == mutation.report.SessionID {
-		return true
-	}
-
-	return mutation.report.SessionPath != "" && session.SessionPath != "" &&
-		sameSessionPath(session.SessionPath, mutation.report.SessionPath)
-}
-
-func (mutation *reportMutation) strongIdentityConflicts(session Session) bool {
-	if mutation.report.SessionID != "" && session.SessionID != "" && session.SessionID != mutation.report.SessionID {
-		return true
-	}
-	if mutation.report.SessionPath != "" && session.SessionPath != "" &&
-		!sameSessionPath(session.SessionPath, mutation.report.SessionPath) {
-		return true
-	}
-
-	return false
-}
-
-func reportHasStrongIdentity(report Report) bool {
-	return report.SessionID != "" || report.SessionPath != ""
-}
-
-func sessionHasStrongIdentity(session Session) bool {
-	return session.SessionID != "" || session.SessionPath != ""
-}
-
-func sameSessionPath(left string, right string) bool {
-	return filepath.Clean(left) == filepath.Clean(right)
-}
-
-func sameTmuxPane(left TmuxContext, right TmuxContext) bool {
-	if left.PaneID == "" || right.PaneID == "" || left.PaneID != right.PaneID {
-		return false
-	}
-	if left.ServerSocket != "" && right.ServerSocket != "" && left.ServerSocket != right.ServerSocket {
-		return false
-	}
-
-	return true
-}
-
-func tmuxPaneIdentityParts(tmux TmuxContext) []string {
-	var parts []string
-	switch {
-	case tmux.ServerSocket != "":
-		parts = append(parts, "socket", filepath.Clean(tmux.ServerSocket))
-	case tmux.SessionID != "":
-		parts = append(parts, "session-id", tmux.SessionID)
-	case tmux.SessionName != "":
-		parts = append(parts, "session-name", tmux.SessionName)
-	}
-	parts = append(parts, "pane", tmux.PaneID)
-
-	return parts
-}
-
-func mergedExistingSessions(sessions map[string]Session, ids []string, canonicalID string) Session {
+	sort.Strings(ids)
 	if len(ids) == 0 {
-		var empty Session
-
-		return empty
+		return ""
 	}
-
-	existing := make([]Session, 0, len(ids))
-	for _, id := range ids {
-		existing = append(existing, sessions[id])
-	}
-	sort.Slice(existing, func(i int, j int) bool {
-		if !existing[i].UpdatedAt.Equal(existing[j].UpdatedAt) {
-			return existing[i].UpdatedAt.Before(existing[j].UpdatedAt)
-		}
-		if !existing[i].CreatedAt.Equal(existing[j].CreatedAt) {
-			return existing[i].CreatedAt.Before(existing[j].CreatedAt)
-		}
-
-		return existing[i].ID < existing[j].ID
-	})
-
-	var merged Session
-	merged.ID = canonicalID
-	for _, session := range existing {
-		merged = mergeStoredSession(merged, session)
-	}
-	merged.ID = canonicalID
-
-	return merged
+	return ids[0]
 }
 
-func mergeStoredSession(merged Session, session Session) Session {
-	merged = mergeStoredLifecycle(merged, session)
-	merged = mergeStoredIdentity(merged, session)
-	merged = mergeStoredLocation(merged, session)
-	merged = mergeStoredMetadata(merged, session)
-	merged.UpdatedAt = maxTime(merged.UpdatedAt, session.UpdatedAt)
-	merged.LastSeenAt = maxTime(merged.LastSeenAt, session.LastSeenAt)
-	merged.LastObservedAt = maxTime(merged.LastObservedAt, session.LastObservedAt)
-	merged.EndedAt = maxTime(merged.EndedAt, session.EndedAt)
-
-	return merged
+func cloneLifecycle(value *NativeLifecycle) *NativeLifecycle {
+	if value == nil {
+		return nil
+	}
+	clone := *value
+	return &clone
 }
 
-func mergeStoredLifecycle(merged Session, session Session) Session {
-	if merged.CreatedAt.IsZero() || (!session.CreatedAt.IsZero() && session.CreatedAt.Before(merged.CreatedAt)) {
-		merged.CreatedAt = session.CreatedAt
+func clonePresence(value *Presence) *Presence {
+	if value == nil {
+		return nil
 	}
-	if session.Harness != "" {
-		merged.Harness = session.Harness
-	}
-	if session.State != "" && !session.StateChangedAt.Before(merged.StateChangedAt) {
-		merged.State = session.State
-		merged.StateChangedAt = session.StateChangedAt
-	}
-	if session.LastEvent != "" && !session.LastEventAt.Before(merged.LastEventAt) {
-		merged.LastEvent = session.LastEvent
-		merged.LastEventAt = session.LastEventAt
-	}
-
-	return merged
+	clone := *value
+	return &clone
 }
 
-func mergeStoredIdentity(merged Session, session Session) Session {
-	if session.SessionID != "" {
-		merged.SessionID = session.SessionID
+func cloneActivity(value *Activity) *Activity {
+	if value == nil {
+		return nil
 	}
-	if session.SessionPath != "" {
-		merged.SessionPath = session.SessionPath
+	clone := *value
+	return &clone
+}
+func activityPtr(value Activity) *Activity { return &value }
+func cloneAttributes(value map[string]string) map[string]string {
+	if len(value) == 0 {
+		return nil
 	}
-	if len(session.ResumeCommand) > 0 {
-		merged.ResumeCommand = slices.Clone(session.ResumeCommand)
-	}
-
-	return merged
+	cloned := make(map[string]string, len(value))
+	maps.Copy(cloned, value)
+	return cloned
 }
 
-func mergeStoredLocation(merged Session, session Session) Session {
-	if session.CWD != "" {
-		merged.CWD = session.CWD
+func cloneRaw(value json.RawMessage) json.RawMessage {
+	if len(value) == 0 {
+		return nil
 	}
-	if session.ProjectRoot != "" {
-		merged.ProjectRoot = session.ProjectRoot
-	}
-	if session.PID > 0 {
-		merged.PID = session.PID
-	}
-	if session.ProcessStartTime != "" {
-		merged.ProcessStartTime = session.ProcessStartTime
-	}
-	if session.PPID > 0 {
-		merged.PPID = session.PPID
-	}
-	if session.TTY != "" {
-		merged.TTY = session.TTY
-	}
-	if !session.Tmux.Empty() {
-		merged.Tmux = session.Tmux
-	}
-
-	return merged
+	return append(json.RawMessage(nil), value...)
 }
 
-func mergeStoredMetadata(merged Session, session Session) Session {
-	if session.Source != "" {
-		merged.Source = session.Source
+func activityEqual(left, right *Activity) bool {
+	if left == nil || right == nil {
+		return left == right
 	}
-	if session.Confidence != "" {
-		merged.Confidence = session.Confidence
-	}
-	if len(session.Attributes) > 0 {
-		merged.Attributes = mergeAttributes(merged.Attributes, session.Attributes)
-	}
-	if len(session.RawPayload) > 0 {
-		merged.RawPayload = append(json.RawMessage(nil), session.RawPayload...)
-	}
-
-	return merged
+	return *left == *right
 }
 
 func (s *FileStore) List(ctx context.Context, filter Filter) ([]Session, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("checking context: %w", err)
 	}
-
-	sessions, err := s.listAll()
+	snap, err := s.load()
 	if err != nil {
 		return nil, err
 	}
-
+	sessions := make([]Session, 0, len(snap.Sessions))
+	for _, session := range snap.Sessions {
+		session.SchemaVersion = storeSchemaVersion
+		sessions = append(sessions, session)
+	}
 	return filterSessions(sessions, filter), nil
 }
 
@@ -524,104 +524,108 @@ func (s *FileStore) Get(ctx context.Context, id string) (Session, error) {
 	if err := ctx.Err(); err != nil {
 		return Session{}, fmt.Errorf("checking context: %w", err)
 	}
-
 	snap, err := s.load()
 	if err != nil {
 		return Session{}, err
 	}
-
 	session, ok := snap.Sessions[id]
 	if !ok {
 		return Session{}, ErrSessionNotFound
 	}
-
+	session.SchemaVersion = storeSchemaVersion
 	return session, nil
 }
 
 func (s *FileStore) SummaryByTmuxSession(ctx context.Context, filter Filter) ([]Summary, error) {
-	return s.SummaryByTmuxSessionWithOptions(ctx, SummaryOptions{
-		Filter: filter,
-	})
+	return s.SummaryByTmuxSessionWithOptions(ctx, SummaryOptions{Filter: filter})
 }
 
 func (s *FileStore) SummaryByTmuxSessionWithOptions(ctx context.Context, options SummaryOptions) ([]Summary, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("checking context: %w", err)
 	}
-
-	sessions, err := s.listAll()
+	snap, err := s.load()
 	if err != nil {
 		return nil, err
 	}
-
-	sessions = sessionsWithReconciledPaneOccupants(sessions)
-
+	sessions := make([]Session, 0, len(snap.Sessions))
+	for _, session := range snap.Sessions {
+		sessions = append(sessions, session)
+	}
 	return summariesForSessions(filterSessions(sessions, options.Filter)), nil
 }
 
 func summariesForSessions(sessions []Session) []Summary {
-	sessions = sessionsWithReconciledPaneOccupants(sessions)
-
 	byKey := make(map[string]*Summary)
 	order := make([]string, 0)
 	for _, session := range sessions {
 		key := summaryKeyForSession(session)
-
-		summary, ok := byKey[key]
-		if !ok {
-			summary = &Summary{
-				TmuxSessionID:   session.Tmux.SessionID,
-				TmuxSessionName: session.Tmux.SessionName,
-				Total:           0,
-				Active:          0,
-				Running:         0,
-				Waiting:         0,
-				Idle:            0,
-				Unknown:         0,
-				Exited:          0,
-			}
+		summary := byKey[key]
+		if summary == nil {
+			summary = &Summary{TmuxSessionID: session.Tmux.SessionID, TmuxSessionName: session.Tmux.SessionName, Total: 0, Live: 0, Gone: 0, PresenceUnknown: 0, Running: 0, Waiting: 0, Idle: 0, ActivityUnknown: 0}
 			byKey[key] = summary
 			order = append(order, key)
 		}
-		applySummaryState(summary, session.State)
+		summary.Total++
+		switch session.Presence {
+		case PresenceLive:
+			summary.Live++
+		case PresenceGone:
+			summary.Gone++
+		case PresenceUnknown:
+			summary.PresenceUnknown++
+		}
+		if session.Presence == PresenceGone {
+			continue
+		}
+		switch {
+		case session.Activity == nil, *session.Activity == ActivityUnknown:
+			summary.ActivityUnknown++
+		case *session.Activity == ActivityRunning:
+			summary.Running++
+		case *session.Activity == ActivityWaiting:
+			summary.Waiting++
+		case *session.Activity == ActivityIdle:
+			summary.Idle++
+		}
 	}
-
-	summaries := make([]Summary, 0, len(order))
+	result := make([]Summary, 0, len(order))
 	for _, key := range order {
-		summaries = append(summaries, *byKey[key])
+		result = append(result, *byKey[key])
 	}
+	return result
+}
 
-	return summaries
+func summaryKeyForSession(session Session) string {
+	if session.Tmux.SessionID != "" {
+		return "tmux:" + session.Tmux.SessionID
+	}
+	if session.Tmux.SessionName != "" {
+		return "tmux-name:" + session.Tmux.SessionName
+	}
+	return "unknown"
 }
 
 func (s *FileStore) GC(ctx context.Context, deleteAfter time.Duration) (GCResult, error) {
 	if err := ctx.Err(); err != nil {
 		return GCResult{}, fmt.Errorf("checking context: %w", err)
 	}
-
-	now := s.now()
-	result := GCResult{
-		Deleted:   0,
-		Remaining: 0,
-	}
+	now := s.now().UTC()
+	result := GCResult{Deleted: 0, Remaining: 0}
 	err := s.withSnapshot(func(snap *snapshot) error {
 		for id, session := range snap.Sessions {
-			age := now.Sub(session.LastSeenAt)
-			if deleteAfter >= 0 && session.State == StateExited && age >= deleteAfter {
+			if deleteAfter >= 0 && session.Presence == PresenceGone && !session.PresenceChangedAt.IsZero() && now.Sub(session.PresenceChangedAt) >= deleteAfter {
 				delete(snap.Sessions, id)
 				result.Deleted++
 			}
 		}
-
 		result.Remaining = len(snap.Sessions)
 		snap.UpdatedAt = now
-
 		return nil
 	})
 	if err != nil {
 		return GCResult{}, err
 	}
-
 	return result, nil
 }
 
@@ -629,24 +633,38 @@ func (s *FileStore) Reset(ctx context.Context) (ResetResult, error) {
 	if err := ctx.Err(); err != nil {
 		return ResetResult{}, fmt.Errorf("checking context: %w", err)
 	}
-
 	now := s.now().UTC()
-	result := ResetResult{
-		Cleared:   0,
-		Remaining: 0,
+	result := ResetResult{Cleared: 0, Remaining: 0}
+	if err := os.MkdirAll(filepath.Dir(s.path), 0o700); err != nil {
+		return ResetResult{}, fmt.Errorf("creating state directory: %w", err)
 	}
-	err := s.withSnapshot(func(snap *snapshot) error {
-		result.Cleared = len(snap.Sessions)
-		snap.Sessions = make(map[string]Session)
-		snap.UpdatedAt = now
-		result.Remaining = len(snap.Sessions)
-
-		return nil
-	})
+	lock, err := openStoreLock(s.path + ".lock")
 	if err != nil {
 		return ResetResult{}, err
 	}
-
+	defer func() { _ = lock.Close() }()
+	old, err := os.ReadFile(s.path)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return ResetResult{}, fmt.Errorf("reading store: %w", err)
+	}
+	if len(old) > 0 {
+		var envelope map[string]json.RawMessage
+		if err := json.Unmarshal(old, &envelope); err != nil {
+			return ResetResult{}, fmt.Errorf("parsing store %s: %w", s.path, err)
+		}
+		if raw, ok := envelope["sessions"]; ok {
+			var sessions map[string]json.RawMessage
+			if err := json.Unmarshal(raw, &sessions); err == nil {
+				result.Cleared = len(sessions)
+			}
+		}
+	}
+	snap := newSnapshot()
+	snap.UpdatedAt = now
+	result.Remaining = 0
+	if err := writeSnapshotAtomic(s.path, snap); err != nil {
+		return ResetResult{}, err
+	}
 	return result, nil
 }
 
@@ -654,12 +672,10 @@ func (s *FileStore) withSnapshot(mutator func(*snapshot) error) error {
 	if err := os.MkdirAll(filepath.Dir(s.path), 0o700); err != nil {
 		return fmt.Errorf("creating state directory: %w", err)
 	}
-
 	lock, err := openStoreLock(s.path + ".lock")
 	if err != nil {
 		return err
 	}
-
 	snap, err := s.load()
 	if err != nil {
 		return closeStoreLock(lock, err)
@@ -667,7 +683,6 @@ func (s *FileStore) withSnapshot(mutator func(*snapshot) error) error {
 	if err := mutator(&snap); err != nil {
 		return closeStoreLock(lock, err)
 	}
-
 	return closeStoreLock(lock, writeSnapshotAtomic(s.path, snap))
 }
 
@@ -675,7 +690,6 @@ func closeStoreLock(lock *storeLock, err error) error {
 	if closeErr := lock.Close(); closeErr != nil {
 		return errors.Join(err, closeErr)
 	}
-
 	return err
 }
 
@@ -685,10 +699,25 @@ func (s *FileStore) load() (snapshot, error) {
 		if errors.Is(err, os.ErrNotExist) {
 			return newSnapshot(), nil
 		}
-
 		return snapshot{}, fmt.Errorf("reading store: %w", err)
 	}
-
+	var header struct {
+		SchemaVersion *int `json:"schema_version"`
+		Version       *int `json:"version"`
+	}
+	if err := json.Unmarshal(data, &header); err != nil {
+		return snapshot{}, fmt.Errorf("parsing store %s: %w", s.path, err)
+	}
+	if header.SchemaVersion == nil {
+		version := 0
+		if header.Version != nil {
+			version = *header.Version
+		}
+		return snapshot{}, &UnsupportedSchemaError{Path: s.path, Version: version}
+	}
+	if *header.SchemaVersion != storeSchemaVersion {
+		return snapshot{}, &UnsupportedSchemaError{Path: s.path, Version: *header.SchemaVersion}
+	}
 	var snap snapshot
 	if err := json.Unmarshal(data, &snap); err != nil {
 		return snapshot{}, fmt.Errorf("parsing store %s: %w", s.path, err)
@@ -696,33 +725,12 @@ func (s *FileStore) load() (snapshot, error) {
 	if snap.Sessions == nil {
 		snap.Sessions = make(map[string]Session)
 	}
-	if snap.Version == 0 {
-		snap.Version = storeVersion
-	}
-
+	snap.SchemaVersion = storeSchemaVersion
 	return snap, nil
 }
 
-func (s *FileStore) listAll() ([]Session, error) {
-	snap, err := s.load()
-	if err != nil {
-		return nil, err
-	}
-
-	sessions := make([]Session, 0, len(snap.Sessions))
-	for _, session := range snap.Sessions {
-		sessions = append(sessions, session)
-	}
-
-	return sessions, nil
-}
-
 func newSnapshot() snapshot {
-	return snapshot{
-		Version:   storeVersion,
-		UpdatedAt: time.Time{},
-		Sessions:  make(map[string]Session),
-	}
+	return snapshot{SchemaVersion: storeSchemaVersion, Version: 0, UpdatedAt: time.Time{}, Sessions: make(map[string]Session)}
 }
 
 func writeSnapshotAtomic(path string, snap snapshot) error {
@@ -731,12 +739,10 @@ func writeSnapshotAtomic(path string, snap snapshot) error {
 		return fmt.Errorf("encoding store: %w", err)
 	}
 	data = append(data, '\n')
-
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("creating state directory: %w", err)
 	}
-
 	temp, err := os.CreateTemp(dir, filepath.Base(path)+".tmp-*")
 	if err != nil {
 		return fmt.Errorf("creating temp store: %w", err)
@@ -750,7 +756,6 @@ func writeSnapshotAtomic(path string, snap snapshot) error {
 		_ = temp.Close()
 		_ = os.Remove(tempPath)
 	}()
-
 	if err := temp.Chmod(0o600); err != nil {
 		return fmt.Errorf("setting temp store permissions: %w", err)
 	}
@@ -767,115 +772,7 @@ func writeSnapshotAtomic(path string, snap snapshot) error {
 		return fmt.Errorf("renaming temp store: %w", err)
 	}
 	keep = true
-
 	return syncDir(dir)
-}
-
-func observedAtOrReceivedAt(observedAt time.Time, receivedAt time.Time) (time.Time, bool) {
-	if observedAt.IsZero() {
-		return receivedAt, true
-	}
-
-	observedAt = observedAt.UTC()
-	if observedAt.After(receivedAt.Add(maxObservedAtFutureSkew)) {
-		return receivedAt, false
-	}
-
-	return observedAt, true
-}
-
-func sessionsWithReconciledPaneOccupants(sessions []Session) []Session {
-	if len(sessions) < minimumPaneReconcileSessionSize {
-		return sessions
-	}
-
-	winnerByPane := make(map[string]string)
-	winnerTimeByPane := make(map[string]time.Time)
-	for _, session := range sessions {
-		if !sessionOccupiesTmuxPane(session) {
-			continue
-		}
-
-		paneID := tmuxPaneReconcileKey(session.Tmux)
-		observedAt := paneOccupantObservedAt(session)
-		if paneOccupantWins(session.ID, observedAt, "", winnerByPane[paneID], winnerTimeByPane[paneID]) {
-			winnerByPane[paneID] = session.ID
-			winnerTimeByPane[paneID] = observedAt
-		}
-	}
-	if len(winnerByPane) == 0 {
-		return sessions
-	}
-
-	reconciled := slices.Clone(sessions)
-	for index, session := range reconciled {
-		if !sessionOccupiesTmuxPane(session) {
-			continue
-		}
-		if winnerByPane[tmuxPaneReconcileKey(session.Tmux)] == session.ID {
-			continue
-		}
-
-		session.State = StateExited
-		reconciled[index] = session
-	}
-
-	return reconciled
-}
-
-func sessionOccupiesTmuxPane(session Session) bool {
-	return session.State != StateExited && session.Tmux.PaneID != ""
-}
-
-func tmuxPaneReconcileKey(tmux TmuxContext) string {
-	return strings.Join(tmuxPaneIdentityParts(tmux), "\x00")
-}
-
-func enrichReportProcessIdentity(ctx context.Context, report Report) Report {
-	if report.PID <= 0 || report.ProcessStartTime != "" {
-		return report
-	}
-
-	report.ProcessStartTime = processinfo.StartIdentity(ctx, report.PID)
-
-	return report
-}
-
-func summaryKeyForSession(session Session) string {
-	switch {
-	case session.Tmux.SessionID != "" && session.Tmux.SessionName != "":
-		return "tmux:" + session.Tmux.SessionID + "\x00" + session.Tmux.SessionName
-	case session.Tmux.SessionID != "":
-		return "tmux:" + session.Tmux.SessionID
-	case session.Tmux.SessionName != "":
-		return "detached:" + session.Tmux.SessionName
-	default:
-		return "unknown"
-	}
-}
-
-func applySummaryState(summary *Summary, state State) {
-	if state != StateExited {
-		summary.Total++
-	}
-	if IsActive(state) {
-		summary.Active++
-	}
-
-	switch state {
-	case StateRunning:
-		summary.Running++
-	case StateWaiting:
-		summary.Waiting++
-	case StateIdle:
-		summary.Idle++
-	case StateUnknown:
-		summary.Unknown++
-	case StateExited:
-		summary.Exited++
-	default:
-		summary.Unknown++
-	}
 }
 
 func syncDir(dir string) error {
@@ -883,13 +780,9 @@ func syncDir(dir string) error {
 	if err != nil {
 		return fmt.Errorf("opening state directory: %w", err)
 	}
-	defer func() {
-		_ = handle.Close()
-	}()
-
+	defer func() { _ = handle.Close() }()
 	if err := handle.Sync(); err != nil {
 		return fmt.Errorf("syncing state directory: %w", err)
 	}
-
 	return nil
 }

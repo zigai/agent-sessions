@@ -41,27 +41,19 @@ func (cursorHarness) InstallPlan(binary string) InstallPlan {
 			Hooks: []CursorCommandHookInstallSpec{
 				{
 					Event:   "sessionStart",
-					Command: cursorHookCommand(binary, registry.StateIdle, "sessionStart", "{}"),
+					Command: cursorHookCommand(binary, registry.ActivityIdle, "sessionStart", "{}"),
 				},
 				{
 					Event:   "beforeSubmitPrompt",
-					Command: cursorHookCommand(binary, registry.StateRunning, "beforeSubmitPrompt", `{"continue":true}`),
-				},
-				{
-					Event:   "beforeShellExecution",
-					Command: cursorHookCommand(binary, registry.StateWaiting, "beforeShellExecution", `{"permission":"allow"}`),
-				},
-				{
-					Event:   "afterShellExecution",
-					Command: cursorHookCommand(binary, registry.StateRunning, "afterShellExecution", "{}"),
+					Command: cursorHookCommand(binary, registry.ActivityRunning, "beforeSubmitPrompt", `{"continue":true}`),
 				},
 				{
 					Event:   "stop",
-					Command: cursorHookCommand(binary, registry.StateIdle, "stop", "{}"),
+					Command: cursorHookCommand(binary, registry.ActivityIdle, "stop", "{}"),
 				},
 				{
 					Event:   "sessionEnd",
-					Command: cursorHookCommand(binary, registry.StateExited, "sessionEnd", "{}"),
+					Command: cursorHookCommand(binary, registry.PresenceGone, "sessionEnd", "{}"),
 				},
 			},
 		}}},
@@ -84,8 +76,8 @@ func (cursorHarness) PayloadDefaults(payload map[string]any) PayloadDefaults {
 	return cursorPayloadDefaults(payload)
 }
 
-func cursorHookCommand(binary string, state registry.State, event string, hookOutput string) string {
-	report := RawStdinDefaultsReportHookCommand(binary, registry.HarnessCursor, state, event, cursorIntegrationSource)
+func cursorHookCommand(binary string, transition any, event string, hookOutput string) string {
+	report := RawStdinDefaultsReportHookCommand(binary, registry.HarnessCursor, transition, event, cursorIntegrationSource)
 
 	return report + " >/dev/null 2>&1 || true; printf '%s\\n' " + ShellQuote(hookOutput)
 }

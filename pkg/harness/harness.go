@@ -35,11 +35,60 @@ type PayloadDefaults struct {
 	Attributes  map[string]string
 }
 
+type Capabilities struct {
+	SessionStart      bool
+	SessionEnd        bool
+	RunningIdle       bool
+	WaitingPermission bool
+	ProcessIdentity   bool
+	NativeCatalog     bool
+	TTYTmuxContext    bool
+}
+
 type Definition struct {
 	ID           registry.Harness
 	Aliases      []string
 	ProcessNames []string
 	Env          EnvKeys
+	Capabilities Capabilities
+}
+
+const IntegrationVersion = 3
+
+//nolint:cyclop,exhaustruct // capabilities are a documented per-harness matrix
+func capabilitiesFor(id registry.Harness) Capabilities {
+	capabilities := Capabilities{SessionStart: false, SessionEnd: false, RunningIdle: false, WaitingPermission: false, ProcessIdentity: true, NativeCatalog: false, TTYTmuxContext: true}
+	switch id {
+	case registry.HarnessClaude:
+		capabilities.SessionStart, capabilities.SessionEnd, capabilities.RunningIdle, capabilities.WaitingPermission, capabilities.NativeCatalog = true, true, true, true, true
+	case registry.HarnessCodex:
+		capabilities.SessionStart, capabilities.RunningIdle, capabilities.WaitingPermission = true, true, true
+	case registry.HarnessCursor:
+		capabilities.SessionStart, capabilities.SessionEnd, capabilities.RunningIdle = true, true, true
+	case registry.HarnessCopilot:
+		capabilities.SessionStart, capabilities.SessionEnd, capabilities.RunningIdle, capabilities.WaitingPermission = true, true, true, true
+	case registry.HarnessCline:
+		capabilities.RunningIdle = true
+	case registry.HarnessKimiCode:
+		capabilities.SessionStart, capabilities.SessionEnd, capabilities.RunningIdle, capabilities.WaitingPermission, capabilities.NativeCatalog = true, true, true, true, true
+	case registry.HarnessGrok:
+		capabilities.SessionStart, capabilities.SessionEnd, capabilities.RunningIdle = true, true, true
+	case registry.HarnessGoose:
+		capabilities.SessionStart, capabilities.SessionEnd, capabilities.RunningIdle, capabilities.NativeCatalog = true, true, true, true
+	case registry.HarnessPi:
+		capabilities.SessionStart, capabilities.SessionEnd, capabilities.RunningIdle, capabilities.NativeCatalog = true, true, true, true
+	case registry.HarnessOpenCode:
+		capabilities.SessionStart, capabilities.RunningIdle, capabilities.WaitingPermission, capabilities.NativeCatalog = true, true, true, true
+	case registry.HarnessAgy:
+		capabilities.RunningIdle, capabilities.WaitingPermission = true, true
+	case registry.HarnessKilo:
+		capabilities.SessionStart, capabilities.RunningIdle, capabilities.WaitingPermission, capabilities.NativeCatalog = true, true, true, true
+	case registry.HarnessDroid:
+		capabilities.SessionStart, capabilities.SessionEnd, capabilities.RunningIdle = true, true, true
+	default:
+		return Capabilities{}
+	}
+	return capabilities
 }
 
 type Adapter interface {
@@ -82,6 +131,7 @@ func newMetadataAdapter(id registry.Harness, env EnvKeys) baseAdapter {
 		Aliases:      metadata.Aliases,
 		ProcessNames: metadata.ProcessNames,
 		Env:          env,
+		Capabilities: capabilitiesFor(id),
 	})
 }
 
@@ -190,12 +240,23 @@ func ResumeCommandFor(harness registry.Harness, sessionID string, sessionPath st
 	return resumable.ResumeCommand(sessionID, sessionPath)
 }
 
-func WithResumeCommand(report registry.Report) registry.Report {
-	if len(report.ResumeCommand) == 0 {
-		report.ResumeCommand = ResumeCommandFor(report.Harness, report.SessionID, report.SessionPath)
+func WithResumeCommand(observation registry.Observation) registry.Observation {
+	if observation.Catalog != nil && len(observation.Catalog.ResumeCommand) > 0 {
+		return observation
 	}
-
-	return report
+	command := ResumeCommandFor(
+		observation.Harness,
+		observation.Identity.SessionID,
+		observation.Identity.SessionPath,
+	)
+	if len(command) == 0 {
+		return observation
+	}
+	if observation.Catalog == nil {
+		observation.Catalog = &registry.CatalogMetadata{ResumeCommand: nil, CWD: "", ProjectRoot: "", ProcessPID: 0, Current: false}
+	}
+	observation.Catalog.ResumeCommand = command
+	return observation
 }
 
 func cloneDefinition(definition Definition) Definition {
@@ -204,6 +265,7 @@ func cloneDefinition(definition Definition) Definition {
 		Aliases:      cloneStrings(definition.Aliases),
 		ProcessNames: cloneStrings(definition.ProcessNames),
 		Env:          cloneEnvKeys(definition.Env),
+		Capabilities: definition.Capabilities,
 	}
 }
 

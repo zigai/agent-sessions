@@ -14,7 +14,7 @@ type HookInvocation struct {
 }
 
 type HookResult struct {
-	Report   registry.Report
+	Report   registry.Observation
 	ReportOK bool
 	Response map[string]any
 }

@@ -4,9 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -32,231 +32,152 @@ var (
 
 func (app *application) newDrainQueueCommand() *cobra.Command {
 	var maxItems int
-	var leaseTimeout time.Duration
-
-	cmd := &cobra.Command{
-		Use:    drainQueueCommandName,
-		Short:  "Drain queued session reports",
-		Hidden: true,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			result, err := app.drainQueue(cmd.Context(), reportqueue.DrainOptions{
-				MaxItems:     maxItems,
-				LeaseTimeout: leaseTimeout,
-			})
-			if err != nil {
-				return err
-			}
-			if app.outputJSON {
-				return app.writeJSON(result)
-			}
-
-			return nil
-		},
-	}
-	cmd.Flags().IntVar(&maxItems, "max-items", 0, "maximum queue items to process")
-	cmd.Flags().DurationVar(&leaseTimeout, "lease-timeout", defaultQueueLeaseTimeout, "processing lease timeout")
-
-	return cmd
+	var lease time.Duration
+	c := &cobra.Command{Use: drainQueueCommandName, Hidden: true, RunE: func(cmd *cobra.Command, _ []string) error {
+		r, e := app.drainQueue(cmd.Context(), reportqueue.DrainOptions{MaxItems: maxItems, LeaseTimeout: lease})
+		if e != nil {
+			return e
+		}
+		if app.outputJSON {
+			return app.writeJSON(r)
+		}
+		return nil
+	}}
+	c.Flags().IntVar(&maxItems, "max-items", 0, "maximum queue items")
+	c.Flags().DurationVar(&lease, "lease-timeout", defaultQueueLeaseTimeout, "processing lease timeout")
+	return c
 }
 
 func (app *application) newQueueStatusCommand() *cobra.Command {
-	return &cobra.Command{
-		Use:    queueStatusCommandName,
-		Short:  "Show queued report counts",
-		Hidden: true,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			status, err := reportqueue.New(app.store().Path()).Status(cmd.Context())
-			if err != nil {
-				return fmt.Errorf("reading report queue status: %w", err)
-			}
-
-			return app.writeJSON(status)
-		},
-	}
+	return &cobra.Command{Use: queueStatusCommandName, Hidden: true, RunE: func(cmd *cobra.Command, _ []string) error {
+		s, e := reportqueue.New(app.store().Path()).Status(cmd.Context())
+		if e != nil {
+			return fmt.Errorf("queue status: %w", e)
+		}
+		return app.writeJSON(s)
+	}}
 }
 
-func (app *application) drainQueue(ctx context.Context, options reportqueue.DrainOptions) (reportqueue.DrainResult, error) {
-	storePath := app.store().Path()
-	queue := reportqueue.New(storePath)
-	options.Processor = func(ctx context.Context, envelope reportqueue.Envelope) error {
-		return app.processQueuedReport(ctx, queue, envelope)
+func (app *application) drainQueue(ctx context.Context, o reportqueue.DrainOptions) (reportqueue.DrainResult, error) {
+	q := reportqueue.New(app.store().Path())
+	o.Processor = func(c context.Context, e reportqueue.Envelope) error { return app.processQueuedReport(c, q, e) }
+	r, e := q.Drain(ctx, o)
+	if e != nil {
+		return r, fmt.Errorf("drain queue: %w", e)
 	}
-
-	result, err := queue.Drain(ctx, options)
-	if err != nil {
-		return reportqueue.DrainResult{}, fmt.Errorf("draining report queue: %w", err)
-	}
-
-	return result, nil
+	return r, nil
 }
 
-func (app *application) processQueuedReport(
-	ctx context.Context,
-	queue reportqueue.Queue,
-	envelope reportqueue.Envelope,
-) error {
-	report, storePath, err := app.prepareQueuedReport(ctx, queue, envelope)
+func (app *application) processQueuedReport(ctx context.Context, q reportqueue.Queue, e reportqueue.Envelope) error {
+	o, path, err := app.prepareQueuedReport(ctx, q, e)
 	if err != nil {
 		return err
 	}
-
-	return app.storeQueuedReport(ctx, storePath, report)
+	return app.storeQueuedReport(ctx, path, o)
 }
 
-func (app *application) prepareQueuedReport(
-	ctx context.Context,
-	queue reportqueue.Queue,
-	envelope reportqueue.Envelope,
-) (registry.Report, string, error) {
-	if err := validateQueuedEnvelope(envelope); err != nil {
-		return registry.Report{}, "", err
+func (app *application) prepareQueuedReport(ctx context.Context, q reportqueue.Queue, e reportqueue.Envelope) (registry.Observation, string, error) {
+	if err := validateQueuedEnvelope(e); err != nil {
+		return registry.Observation{}, "", err
 	}
-	report := normalizedQueuedReport(envelope)
-	if err := validateQueuedReport(report); err != nil {
-		return registry.Report{}, "", err
+	o := normalizedQueuedObservation(e)
+	if err := validateQueuedObservation(o); err != nil {
+		return registry.Observation{}, "", err
 	}
-	if !envelope.NoTmux && report.Tmux.Empty() {
-		report.Tmux = app.queuedReportTmux(ctx, queue, envelope)
-	}
-
-	return report, app.queuedReportStorePath(envelope), nil
-}
-
-func (app *application) queuedReportStorePath(envelope reportqueue.Envelope) string {
-	storePath := strings.TrimSpace(envelope.StorePath)
-	if storePath == "" {
-		return app.store().Path()
-	}
-
-	return storePath
-}
-
-func validateQueuedEnvelope(envelope reportqueue.Envelope) error {
-	if envelope.Version != reportqueue.EnvelopeVersion {
-		return permanentQueuedReport(
-			fmt.Errorf("%w: %d", errUnsupportedQueueEnvelopeVersion, envelope.Version),
-		)
-	}
-	if envelope.Kind != reportqueue.KindReport {
-		return permanentQueuedReport(
-			fmt.Errorf("%w: %q", errUnsupportedQueueEnvelopeKind, envelope.Kind),
-		)
-	}
-
-	return nil
-}
-
-func normalizedQueuedReport(envelope reportqueue.Envelope) registry.Report {
-	report := envelope.Report.RegistryReport()
-	if !envelope.RawPayloadSet && string(report.RawPayload) == "null" {
-		report.RawPayload = nil
-	}
-	if report.ObservedAt.IsZero() {
-		report.ObservedAt = envelope.CreatedAt
-	}
-
-	return report
-}
-
-func validateQueuedReport(report registry.Report) error {
-	if report.Harness == "" {
-		return permanentQueuedReport(registry.ErrHarnessRequired)
-	}
-	if report.State == "" && report.SessionID == "" && report.SessionPath == "" {
-		return permanentQueuedReport(registry.ErrReportIdentityRequired)
-	}
-
-	return nil
-}
-
-func (app *application) storeQueuedReport(ctx context.Context, storePath string, report registry.Report) error {
-	_, err := registry.NewFileStore(storePath).Report(ctx, report)
-	if err != nil {
-		if errors.Is(err, registry.ErrHarnessRequired) || errors.Is(err, registry.ErrReportIdentityRequired) {
-			return permanentQueuedReport(err)
+	if !e.NoTmux && o.Tmux == nil {
+		t := app.queuedReportTmux(ctx, q, e)
+		if !t.Empty() {
+			o.Tmux = &t
 		}
-
-		return fmt.Errorf("reporting queued session: %w", err)
 	}
+	p := strings.TrimSpace(e.StorePath)
+	if p == "" {
+		p = app.store().Path()
+	}
+	return o, p, nil
+}
 
+func validateQueuedEnvelope(e reportqueue.Envelope) error {
+	if e.Version != reportqueue.EnvelopeVersion {
+		return reportqueue.PermanentError{Err: fmt.Errorf("%w: %d", errUnsupportedQueueEnvelopeVersion, e.Version)}
+	}
+	if e.Kind != reportqueue.KindReport {
+		return reportqueue.PermanentError{Err: fmt.Errorf("%w: %q", errUnsupportedQueueEnvelopeKind, e.Kind)}
+	}
 	return nil
 }
 
-func permanentQueuedReport(err error) error {
-	if err == nil {
+func normalizedQueuedObservation(e reportqueue.Envelope) registry.Observation {
+	o := reportqueue.RegistryObservation(e.Report)
+	if !e.RawPayloadSet && string(o.RawPayload) == "null" {
+		o.RawPayload = nil
+	}
+	if o.ObservedAt.IsZero() {
+		o.ObservedAt = e.CreatedAt
+	}
+	return o
+}
+
+func validateQueuedObservation(o registry.Observation) error {
+	if o.Harness == "" {
+		return reportqueue.PermanentError{Err: registry.ErrHarnessRequired}
+	}
+	if o.Identity.SessionID == "" && o.Identity.SessionPath == "" && o.Process == nil && o.Catalog == nil {
+		return reportqueue.PermanentError{Err: registry.ErrObservationIdentity}
+	}
+	return nil
+}
+
+func (app *application) storeQueuedReport(ctx context.Context, path string, o registry.Observation) error {
+	_, e := registry.NewFileStore(path).Observe(ctx, o)
+	if e != nil {
+		return fmt.Errorf("recording queued observation: %w", e)
+	}
+	return nil
+}
+
+func (app *application) queuedReportTmux(ctx context.Context, q reportqueue.Queue, e reportqueue.Envelope) registry.TmuxContext {
+	env := tmuxctx.Env{TMUX: e.Runtime.Env["TMUX"], TMUXPane: e.Runtime.Env["TMUX_PANE"]}
+	minimal := tmuxctx.ContextFromEnv(env)
+	if c, err := tmuxctx.CurrentWithEnv(ctx, env); err == nil && c != minimal {
+		return c
+	}
+	if c, ok := q.LookupTmuxContext(minimal, time.Now().UTC(), 0); ok {
+		return c
+	}
+	return e.CachedTmux
+}
+func (app *application) kickQueueDrainer(ctx context.Context, p string) { kickQueueDrainer(ctx, p) }
+func (app *application) runQueuedReport(ctx context.Context, stdin io.Reader, o reportOptions) error {
+	p, e := app.prepareReport(stdin, o, reportRuntimeContext{defaultObservedAt: time.Now().UTC()})
+	if e != nil {
+		return e
+	}
+	if p.ignored {
 		return nil
 	}
-
-	return reportqueue.PermanentError{Err: err}
+	now := time.Now().UTC()
+	q := reportqueue.New(app.store().Path())
+	if _, e = q.Enqueue(ctx, reportqueue.Envelope{Version: reportqueue.EnvelopeVersion, CreatedAt: now, StorePath: app.store().Path(), Kind: reportqueue.KindReport, Report: reportqueue.ReportFromRegistry(p.observation), RawPayloadSet: len(p.observation.RawPayload) > 0, Stdin: p.stdin}, reportqueue.EnqueueOptions{Now: func() time.Time { return now }}); e != nil {
+		return fmt.Errorf("queueing report: %w", e)
+	}
+	app.kickQueueDrainer(ctx, app.store().Path())
+	if o.quiet {
+		return nil
+	}
+	return app.writef("queued\n")
 }
 
-func (app *application) queuedReportTmux(
-	ctx context.Context,
-	queue reportqueue.Queue,
-	envelope reportqueue.Envelope,
-) registry.TmuxContext {
-	env := tmuxctx.Env{
-		TMUX:     envelope.Runtime.Env["TMUX"],
-		TMUXPane: envelope.Runtime.Env["TMUX_PANE"],
-	}
-	minimal := tmuxctx.ContextFromEnv(env)
-	if collected, err := tmuxctx.CurrentWithEnv(ctx, env); err == nil && collected != minimal {
-		_ = queue.StoreTmuxContext(ctx, collected, time.Now().UTC())
-
-		return collected
-	}
-	if cached, ok := queue.LookupTmuxContext(minimal, time.Now().UTC(), 0); ok {
-		return cached
-	}
-	if !envelope.CachedTmux.Empty() {
-		return envelope.CachedTmux
-	}
-
-	return minimal
-}
-
-func (app *application) kickQueueDrainer(ctx context.Context, storePath string) {
-	kickQueueDrainer(ctx, storePath)
-}
-
-func kickQueueDrainer(ctx context.Context, storePath string) {
-	binary, err := os.Executable()
-	if err != nil || strings.TrimSpace(binary) == "" || strings.HasSuffix(binary, ".test") {
+func kickQueueDrainer(ctx context.Context, p string) {
+	b, e := os.Executable()
+	if e != nil || strings.HasSuffix(b, ".test") {
 		return
 	}
-	args := []string{}
-	if strings.TrimSpace(storePath) != "" {
-		args = append(args, "--store", storePath)
+	a := []string{}
+	if p != "" {
+		a = append(a, "--store", p)
 	}
-	args = append(args, drainQueueCommandName, "--max-items", strconv.Itoa(drainQueueBatchSize))
-	cmd := exec.CommandContext(ctx, binary, args...)
-	cmd.Stdin = nil
-	devNull, err := os.OpenFile(os.DevNull, os.O_RDWR, 0)
-	if err != nil {
-		return
-	}
-	cmd.Stdout = devNull
-	cmd.Stderr = devNull
-	cmd.Env = os.Environ()
-	if err := cmd.Start(); err != nil {
-		_ = devNull.Close()
-		return
-	}
-	_ = devNull.Close()
-	go func() {
-		// The kick is best-effort and has no caller left to receive a child error.
-		_ = cmd.Wait()
-	}()
-}
-
-func kickQueueDrainerForArgs(args []string) {
-	if len(args) > 0 && (argsContain(args, drainQueueCommandName) || argsContain(args, queueStatusCommandName)) {
-		return
-	}
-
-	kickQueueDrainer(context.Background(), "")
-}
-
-func argsContain(args []string, target string) bool {
-	return slices.Contains(args, target)
+	a = append(a, drainQueueCommandName, "--max-items", strconv.Itoa(drainQueueBatchSize))
+	cmd := exec.CommandContext(ctx, b, a...)
+	_ = cmd.Start()
 }

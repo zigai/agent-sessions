@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/zigai/agent-sessions/pkg/registry"
@@ -19,8 +20,8 @@ type copilotHarness struct {
 }
 
 type copilotHookSpec struct {
-	event string
-	state registry.State
+	event      string
+	transition any
 }
 
 func copilotAdapter() Adapter {
@@ -57,15 +58,15 @@ func (copilotHarness) PayloadDefaults(payload map[string]any) PayloadDefaults {
 
 func copilotHookConfig(binary string) map[string]any {
 	specs := []copilotHookSpec{
-		{event: "sessionStart", state: registry.StateIdle},
-		{event: "userPromptSubmitted", state: registry.StateRunning},
-		{event: "preToolUse", state: registry.StateRunning},
-		{event: "permissionRequest", state: registry.StateWaiting},
-		{event: "notification", state: registry.StateWaiting},
-		{event: "postToolUse", state: registry.StateRunning},
-		{event: "postToolUseFailure", state: registry.StateRunning},
-		{event: "agentStop", state: registry.StateIdle},
-		{event: "sessionEnd", state: registry.StateExited},
+		{event: "sessionStart", transition: registry.ActivityIdle},
+		{event: "userPromptSubmitted", transition: registry.ActivityRunning},
+		{event: "preToolUse", transition: registry.ActivityRunning},
+		{event: "permissionRequest", transition: registry.ActivityWaiting},
+		{event: "notification", transition: registry.ActivityWaiting},
+		{event: "postToolUse", transition: registry.ActivityRunning},
+		{event: "postToolUseFailure", transition: registry.ActivityRunning},
+		{event: "agentStop", transition: registry.ActivityIdle},
+		{event: "sessionEnd", transition: registry.PresenceGone},
 	}
 
 	hooks := make(map[string]any, len(specs))
@@ -82,32 +83,19 @@ func copilotHookConfig(binary string) map[string]any {
 func copilotCommandHook(binary string, spec copilotHookSpec) map[string]any {
 	return map[string]any{
 		"type":       HookTypeCommand,
-		"command":    copilotHookCommand(binary, spec.state, spec.event),
+		"command":    copilotHookCommand(binary, spec.transition, spec.event),
 		"timeoutSec": float64(HookTimeoutSeconds),
 		"env": map[string]any{
-			"AGENT_SESSIONS_MARKER": ManagedMarker,
+			"AGENT_SESSIONS_MARKER":              ManagedMarker,
+			"AGENT_SESSIONS_INTEGRATION_VERSION": strconv.Itoa(IntegrationVersion),
 		},
 	}
 }
 
-func copilotHookCommand(binary string, state registry.State, event string) string {
-	return strings.Join([]string{
-		ShellQuote(binary),
-		"report",
-		"--harness", ShellQuote(string(registry.HarnessCopilot)),
-		"--state", ShellQuote(string(state)),
-		"--event", ShellQuote(event),
-		"--source", ShellQuote(copilotIntegrationSource),
-		"--attribute", ShellQuote("agent_sessions_integration=" + copilotIntegrationSource),
-		"--attribute", ShellQuote("copilot_hook_event=" + event),
-		"--queue",
-		"--raw-stdin-defaults-only",
-		"--quiet",
-		">/dev/null",
-		"2>&1",
-		"||",
-		"true",
-	}, " ")
+func copilotHookCommand(binary string, transition any, event string) string {
+	return reportHookCommand(binary, registry.HarnessCopilot, transition, event, copilotIntegrationSource, "--raw-stdin-defaults-only") +
+		" --attribute " + ShellQuote("copilot_hook_event="+event) +
+		" >/dev/null 2>&1 || true"
 }
 
 func copilotPayloadDefaults(payload map[string]any) PayloadDefaults {

@@ -4,18 +4,18 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/zigai/agent-sessions/pkg/registry"
 )
 
 const (
-	gooseCommand            = "goose"
-	goosePluginName         = "agent-sessions-state"
-	gooseMarkerFileName     = ".agent-sessions-managed"
-	gooseIntegrationID      = "goose"
-	gooseIntegrationVersion = "1"
-	gooseIntegrationSource  = "goose-hook"
+	gooseCommand           = "goose"
+	goosePluginName        = "agent-sessions-state"
+	gooseMarkerFileName    = ".agent-sessions-managed"
+	gooseIntegrationID     = "goose"
+	gooseIntegrationSource = "goose-hook"
 )
 
 type gooseHarness struct {
@@ -23,9 +23,9 @@ type gooseHarness struct {
 }
 
 type gooseHookSpec struct {
-	event   string
-	state   registry.State
-	matcher string
+	event      string
+	transition any
+	matcher    string
 }
 
 func gooseAdapter() Adapter {
@@ -51,14 +51,14 @@ func (gooseHarness) InstallPlan(binary string) InstallPlan {
 					Content: "",
 					JSONContent: map[string]any{
 						"name":        goosePluginName,
-						"version":     gooseIntegrationVersion,
+						"version":     IntegrationVersion,
 						"description": ManagedMarker,
 					},
 				},
 				{
 					Name:        "hooks/hooks.json",
 					Content:     "",
-					JSONContent: gooseHookConfig(binary),
+					JSONContent: gooseHookConfig(),
 				},
 				{
 					Name:        "scripts/report.sh",
@@ -94,37 +94,36 @@ func (gooseHarness) PayloadDefaults(payload map[string]any) PayloadDefaults {
 	return goosePayloadDefaults(payload)
 }
 
-func gooseHookConfig(binary string) map[string]any {
+func gooseHookConfig() map[string]any {
 	hooks := make(map[string]any)
 	for _, spec := range gooseHookSpecs() {
 		hooks[spec.event] = []any{gooseHookRule(spec)}
 	}
-	hooks[HookEventSessionStart] = []any{gooseSessionStartHookRule(binary)}
+	hooks[HookEventSessionStart] = []any{gooseSessionStartHookRule()}
 
 	return map[string]any{"hooks": hooks}
 }
 
 func gooseHookSpecs() []gooseHookSpec {
 	return []gooseHookSpec{
-		{event: HookEventSessionStart, state: registry.StateIdle, matcher: ""},
-		{event: HookEventUserPromptSubmit, state: registry.StateRunning, matcher: ""},
-		{event: HookEventPreToolUse, state: registry.StateRunning, matcher: "*"},
-		{event: "PostToolUse", state: registry.StateRunning, matcher: "*"},
-		{event: "PostToolUseFailure", state: registry.StateRunning, matcher: "*"},
-		{event: "BeforeReadFile", state: registry.StateRunning, matcher: "*"},
-		{event: "AfterFileEdit", state: registry.StateRunning, matcher: "*"},
-		{event: "BeforeShellExecution", state: registry.StateRunning, matcher: "*"},
-		{event: "AfterShellExecution", state: registry.StateRunning, matcher: "*"},
-		{event: HookEventStop, state: registry.StateIdle, matcher: ""},
-		{event: "SessionEnd", state: registry.StateExited, matcher: ""},
+		{event: HookEventSessionStart, transition: registry.ActivityIdle, matcher: ""},
+		{event: HookEventUserPromptSubmit, transition: registry.ActivityRunning, matcher: ""},
+		{event: HookEventPreToolUse, transition: registry.ActivityRunning, matcher: "*"},
+		{event: "PostToolUse", transition: registry.ActivityRunning, matcher: "*"},
+		{event: "PostToolUseFailure", transition: registry.ActivityRunning, matcher: "*"},
+		{event: "BeforeReadFile", transition: registry.ActivityRunning, matcher: "*"},
+		{event: "AfterFileEdit", transition: registry.ActivityRunning, matcher: "*"},
+		{event: "BeforeShellExecution", transition: registry.ActivityRunning, matcher: "*"},
+		{event: "AfterShellExecution", transition: registry.ActivityRunning, matcher: "*"},
+		{event: HookEventStop, transition: registry.ActivityIdle, matcher: ""},
+		{event: "SessionEnd", transition: registry.PresenceGone, matcher: ""},
 	}
 }
 
-func gooseSessionStartHookRule(binary string) map[string]any {
+func gooseSessionStartHookRule() map[string]any {
 	return map[string]any{
 		"hooks": []any{
-			gooseSelfRefreshHook(binary),
-			gooseCommandHook(gooseHookSpec{event: HookEventSessionStart, state: registry.StateIdle, matcher: ""}),
+			gooseCommandHook(gooseHookSpec{event: HookEventSessionStart, transition: registry.ActivityIdle, matcher: ""}),
 		},
 	}
 }
@@ -142,14 +141,6 @@ func gooseHookRule(spec gooseHookSpec) map[string]any {
 	return rule
 }
 
-func gooseSelfRefreshHook(binary string) map[string]any {
-	return map[string]any{
-		"type":    HookTypeCommand,
-		"command": SelfRefreshCommand(binary, registry.HarnessGoose, true),
-		"timeout": float64(HookTimeoutSeconds),
-	}
-}
-
 func gooseCommandHook(spec gooseHookSpec) map[string]any {
 	return map[string]any{
 		"type":    HookTypeCommand,
@@ -162,7 +153,7 @@ func gooseHookCommand(spec gooseHookSpec) string {
 	return strings.Join([]string{
 		"sh",
 		"\"${PLUGIN_ROOT}/scripts/report.sh\"",
-		ShellQuote(string(spec.state)),
+		ShellQuote(stringTransition(spec.transition)),
 		ShellQuote(spec.event),
 	}, " ")
 }
@@ -172,38 +163,27 @@ func gooseReportScript(binary string) string {
 		"#!/bin/sh",
 		"# " + ManagedMarker,
 		"# AGENT_SESSIONS_INTEGRATION_ID=" + gooseIntegrationID,
-		"# AGENT_SESSIONS_INTEGRATION_VERSION=" + gooseIntegrationVersion,
+		"# AGENT_SESSIONS_INTEGRATION_VERSION=" + strconv.Itoa(IntegrationVersion),
 		"# AGENT_SESSIONS_SOURCE=" + gooseIntegrationSource,
-		"state=${1:-}",
+		"transition=${1:-}",
 		"event=${2:-}",
-		`if [ -z "$state" ] || [ -z "$event" ]; then`,
+		`if [ -z "$transition" ] || [ -z "$event" ]; then`,
 		"  exit 0",
 		"fi",
-		gooseReportCommand(binary) + " >/dev/null 2>&1 || true",
+		"if [ \"$transition\" = gone ]; then",
+		"  " + ShellQuote(binary) + " report " + ShellQuote(string(registry.HarnessGoose)) + " --presence \"$transition\" --event \"$event\" --attribute " + ShellQuote("agent_sessions_integration_version="+strconv.Itoa(IntegrationVersion)) + " --attribute " + ShellQuote("agent_sessions_integration="+gooseIntegrationSource) + " --queue --raw-stdin-defaults-only --quiet >/dev/null 2>&1 || true",
+		"else",
+		"  " + ShellQuote(binary) + " report " + ShellQuote(string(registry.HarnessGoose)) + " --activity \"$transition\" --event \"$event\" --attribute " + ShellQuote("agent_sessions_integration_version="+strconv.Itoa(IntegrationVersion)) + " --attribute " + ShellQuote("agent_sessions_integration="+gooseIntegrationSource) + " --queue --raw-stdin-defaults-only --quiet >/dev/null 2>&1 || true",
+		"fi",
 		"",
 	}, "\n")
-}
-
-func gooseReportCommand(binary string) string {
-	return strings.Join([]string{
-		ShellQuote(binary),
-		"report",
-		"--harness", ShellQuote(string(registry.HarnessGoose)),
-		"--state", `"$state"`,
-		"--event", `"$event"`,
-		"--source", ShellQuote(gooseIntegrationSource),
-		"--attribute", ShellQuote("agent_sessions_integration=" + gooseIntegrationSource),
-		"--queue",
-		"--raw-stdin-defaults-only",
-		"--quiet",
-	}, " ")
 }
 
 func gooseMarkerContent() string {
 	return strings.Join([]string{
 		ManagedMarker,
 		"AGENT_SESSIONS_INTEGRATION_ID=" + gooseIntegrationID,
-		"AGENT_SESSIONS_INTEGRATION_VERSION=" + gooseIntegrationVersion,
+		"AGENT_SESSIONS_INTEGRATION_VERSION=" + strconv.Itoa(IntegrationVersion),
 		"AGENT_SESSIONS_SOURCE=" + gooseIntegrationSource,
 		"",
 	}, "\n")

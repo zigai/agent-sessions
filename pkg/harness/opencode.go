@@ -10,11 +10,10 @@ import (
 )
 
 const (
-	openCodePluginName         = "agent-sessions-state.ts"
-	openCodeIntegrationID      = "opencode"
-	openCodeIntegrationVersion = 1
-	openCodeIntegrationSource  = "opencode-plugin"
-	openCodeSessionFlag        = "--session"
+	openCodePluginName        = "agent-sessions-state.ts"
+	openCodeIntegrationID     = "opencode"
+	openCodeIntegrationSource = "opencode-plugin"
+	openCodeSessionFlag       = "--session"
 )
 
 //go:embed assets/opencode/agent-sessions-state.ts.tmpl
@@ -46,7 +45,7 @@ func (openCodeHarness) InstallPlan(binary string) InstallPlan {
 				Content: renderScriptTemplate(
 					openCodePluginTemplate,
 					openCodeIntegrationID,
-					openCodeIntegrationVersion,
+					IntegrationVersion,
 					binary,
 					openCodeIntegrationSource,
 				),

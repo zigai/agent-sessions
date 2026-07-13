@@ -4,16 +4,16 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/zigai/agent-sessions/pkg/registry"
 )
 
 const (
-	clineCommand            = "cline"
-	clineIntegrationID      = "cline"
-	clineIntegrationVersion = "1"
-	clineIntegrationSource  = "cline-hook"
+	clineCommand           = "cline"
+	clineIntegrationID     = "cline"
+	clineIntegrationSource = "cline-hook"
 )
 
 type clineHarness struct {
@@ -21,8 +21,8 @@ type clineHarness struct {
 }
 
 type clineHookSpec struct {
-	name  string
-	state registry.State
+	name       string
+	transition any
 }
 
 func clineAdapter() Adapter {
@@ -80,15 +80,13 @@ func (clineHarness) PayloadDefaults(payload map[string]any) PayloadDefaults {
 
 func clineHookSpecs() []clineHookSpec {
 	return []clineHookSpec{
-		{name: "TaskStart", state: registry.StateIdle},
-		{name: "TaskResume", state: registry.StateIdle},
-		{name: HookEventUserPromptSubmit, state: registry.StateRunning},
-		{name: HookEventPreToolUse, state: registry.StateRunning},
-		{name: "PostToolUse", state: registry.StateRunning},
-		{name: "TaskComplete", state: registry.StateIdle},
-		{name: "TaskError", state: registry.StateIdle},
-		{name: "TaskCancel", state: registry.StateIdle},
-		{name: "SessionShutdown", state: registry.StateExited},
+		{name: "TaskStart", transition: registry.ActivityIdle},
+		{name: "TaskResume", transition: registry.ActivityIdle},
+		{name: HookEventUserPromptSubmit, transition: registry.ActivityRunning},
+		{name: HookEventPreToolUse, transition: registry.ActivityRunning},
+		{name: "PostToolUse", transition: registry.ActivityRunning},
+		{name: "TaskComplete", transition: registry.ActivityIdle},
+		{name: "TaskCancel", transition: registry.ActivityIdle},
 	}
 }
 
@@ -97,28 +95,17 @@ func clineHookScript(binary string, spec clineHookSpec) string {
 		"#!/bin/sh",
 		"# " + ManagedMarker,
 		"# AGENT_SESSIONS_INTEGRATION_ID=" + clineIntegrationID,
-		"# AGENT_SESSIONS_INTEGRATION_VERSION=" + clineIntegrationVersion,
+		"# AGENT_SESSIONS_INTEGRATION_VERSION=" + strconv.Itoa(IntegrationVersion),
 		"# AGENT_SESSIONS_SOURCE=" + clineIntegrationSource,
-		clineHookCommand(binary, spec.state, spec.name) + " >/dev/null 2>&1 || true",
+		clineHookCommand(binary, spec.transition, spec.name) + " >/dev/null 2>&1 || true",
 		"printf '%s\\n' '{}'",
 		"",
 	}, "\n")
 }
 
-func clineHookCommand(binary string, state registry.State, event string) string {
-	return strings.Join([]string{
-		ShellQuote(binary),
-		"report",
-		"--harness", ShellQuote(string(registry.HarnessCline)),
-		"--state", ShellQuote(string(state)),
-		"--event", ShellQuote(event),
-		"--source", ShellQuote(clineIntegrationSource),
-		"--attribute", ShellQuote("agent_sessions_integration=" + clineIntegrationSource),
-		"--attribute", ShellQuote("cline_hook_event=" + event),
-		"--queue",
-		"--raw-stdin-defaults-only",
-		"--quiet",
-	}, " ")
+func clineHookCommand(binary string, transition any, event string) string {
+	return reportHookCommand(binary, registry.HarnessCline, transition, event, clineIntegrationSource, "--raw-stdin-defaults-only") +
+		" --attribute " + ShellQuote("cline_hook_event="+event)
 }
 
 func clinePayloadDefaults(payload map[string]any) PayloadDefaults {

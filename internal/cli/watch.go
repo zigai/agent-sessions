@@ -6,11 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/signal"
 	"path/filepath"
-	"reflect"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -20,7 +17,6 @@ import (
 )
 
 const defaultWatchDebounce = 100 * time.Millisecond
-
 const (
 	watchFormatTable = "table"
 	watchFormatPlain = "plain"
@@ -28,22 +24,23 @@ const (
 )
 
 const (
-	watchActionAdded         = "added"
-	watchActionEventChanged  = "event_changed"
-	watchActionRemoved       = "removed"
-	watchActionSnapshot      = "snapshot"
-	watchActionSnapshotEmpty = "snapshot_empty"
-	watchActionStateChanged  = "state_changed"
-	watchActionUpdated       = "updated"
+	watchActionAdded           = "added"
+	watchActionRemoved         = "removed"
+	watchActionSnapshot        = "snapshot"
+	watchActionSnapshotEmpty   = "snapshot_empty"
+	watchActionPresenceChanged = "presence_changed"
+	watchActionActivityChanged = "activity_changed"
+	watchActionProcessBound    = "process_bound"
+	watchActionProcessGone     = "process_gone"
+	watchActionLocationChanged = "location_changed"
+	watchActionNativeEvent     = "native_event"
 )
 
 const (
-	watchTmuxLabelPartCapacity = 3
-	watchActionColumnWidth     = 14
-	watchHarnessColumnWidth    = 10
-	watchStateColumnWidth      = 8
-	watchLabelColumnWidth      = 24
-	watchCountColumnWidth      = 7
+	watchActivityOrder = 2
+	watchProcessOrder  = watchActivityOrder + 1
+	watchLocationOrder = watchProcessOrder + 1
+	watchNativeOrder   = watchLocationOrder + 1
 )
 
 var (
@@ -54,858 +51,306 @@ var (
 )
 
 type watchOptions struct {
-	filter     registry.Filter
-	summary    bool
-	noSnapshot bool
-	format     string
-	formatSet  bool
-	debounce   time.Duration
-	now        func() time.Time
-	ready      chan struct{}
+	filter              registry.Filter
+	summary, noSnapshot bool
+	format              string
+	formatSet           bool
+	debounce            time.Duration
+	now                 func() time.Time
+	ready               chan struct{}
 }
-
 type watchEvent struct {
-	Time          time.Time        `json:"time"`
-	Action        string           `json:"action"`
-	ID            string           `json:"id,omitempty"`
-	Harness       registry.Harness `json:"harness,omitempty"`
-	State         registry.State   `json:"state,omitempty"`
-	PreviousState registry.State   `json:"previous_state,omitempty"`
-	SessionID     string           `json:"session_id,omitempty"`
-	SessionPath   string           `json:"session_path,omitempty"`
-	Label         string           `json:"label,omitempty"`
-	Event         string           `json:"event,omitempty"`
-	PreviousEvent string           `json:"previous_event,omitempty"`
-	CWD           string           `json:"cwd,omitempty"`
-	Tmux          string           `json:"tmux,omitempty"`
+	Time             time.Time          `json:"time"`
+	Action           string             `json:"action"`
+	ID               string             `json:"id,omitempty"`
+	Harness          registry.Harness   `json:"harness,omitempty"`
+	Presence         registry.Presence  `json:"presence,omitempty"`
+	PreviousPresence registry.Presence  `json:"previous_presence,omitempty"`
+	Activity         *registry.Activity `json:"activity"`
+	PreviousActivity *registry.Activity `json:"previous_activity"`
+	SessionID        string             `json:"session_id,omitempty"`
+	SessionPath      string             `json:"session_path,omitempty"`
+	Label            string             `json:"label,omitempty"`
+	NativeEvent      string             `json:"native_event,omitempty"`
+	CWD              string             `json:"cwd,omitempty"`
+	Tmux             string             `json:"tmux,omitempty"`
 }
 
-type watchSummaryEvent struct {
-	Time            time.Time `json:"time"`
-	Action          string    `json:"action"`
-	TmuxSessionID   string    `json:"tmux_session_id,omitempty"`
-	TmuxSessionName string    `json:"tmux_session_name,omitempty"`
-	Label           string    `json:"label,omitempty"`
-	Active          int       `json:"active"`
-	Total           int       `json:"total"`
-	Running         int       `json:"running"`
-	Waiting         int       `json:"waiting"`
-	Idle            int       `json:"idle"`
-	Unknown         int       `json:"unknown"`
-	Exited          int       `json:"exited"`
-}
-
-func (app *application) runWatch(ctx context.Context, options watchOptions) error {
-	normalizedOptions, err := app.normalizeWatchRunOptions(options)
-	if err != nil {
-		return err
-	}
-	ctx, stop := signal.NotifyContext(ctx, os.Interrupt)
-	defer stop()
-
-	store := app.store()
-	target, dir, err := watchTarget(store)
-	if err != nil {
-		return err
-	}
-
-	watcher, err := fsnotify.NewWatcher()
-	if err != nil {
-		return fmt.Errorf("creating file watcher: %w", err)
-	}
-	defer func() {
-		_ = watcher.Close()
-	}()
-
-	if err := watcher.Add(dir); err != nil {
-		return fmt.Errorf("watching state directory: %w", err)
-	}
-
-	observedAt := normalizedOptions.now()
-	previousSessions, previousSummaries, err := app.loadInitialWatchState(ctx, store, normalizedOptions, observedAt)
-	if err != nil {
-		return err
-	}
-	notifyWatchReady(normalizedOptions.ready)
-
-	return app.watchStore(ctx, watcher, store, target, previousSessions, previousSummaries, normalizedOptions)
-}
-
-func (app *application) loadInitialWatchState(
-	ctx context.Context,
-	store *registry.FileStore,
-	options watchOptions,
-	observedAt time.Time,
-) (map[string]registry.Session, map[string]registry.Summary, error) {
-	if options.summary {
-		summaries, err := watchSummaries(ctx, store, options)
-		if err != nil {
-			return nil, nil, fmt.Errorf("loading initial summary snapshot: %w", err)
+//nolint:gocognit,cyclop // watch orchestration keeps filesystem, registry, and timer transitions together
+func (app *application) runWatch(ctx context.Context, o watchOptions) error {
+	o = normalizeWatchOptions(o)
+	if app.outputJSON {
+		if o.formatSet {
+			return errWatchFormatJSONConflict
 		}
-		if !options.noSnapshot {
-			err := app.writeWatchSummaryEvents(snapshotWatchSummaryEvents(summaries, observedAt), options.format)
-			if err != nil {
-				return nil, nil, err
+		o.format = watchFormatJSON
+	}
+	if !app.outputJSON && o.format != watchFormatTable && o.format != watchFormatPlain {
+		return fmt.Errorf("%w: %q", errInvalidWatchFormat, o.format)
+	}
+	s := app.store()
+	target, dir, e := watchTarget(s)
+	if e != nil {
+		return e
+	}
+	w, e := fsnotify.NewWatcher()
+	if e != nil {
+		return fmt.Errorf("create watcher: %w", e)
+	}
+	defer func() { _ = w.Close() }()
+	if e = w.Add(dir); e != nil {
+		return fmt.Errorf("watch state directory: %w", e)
+	}
+	prev, err := s.List(ctx, o.filter)
+	if err != nil {
+		return fmt.Errorf("list sessions for watch: %w", err)
+	}
+	if !o.noSnapshot {
+		if e = app.writeWatchEvents(snapshotWatchEvents(prev, o.now()), o.format); e != nil {
+			return e
+		}
+	}
+	notifyWatchReady(o.ready)
+	timer := time.NewTimer(time.Hour)
+	if !timer.Stop() {
+		<-timer.C
+	}
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case ev, ok := <-w.Events:
+			if !ok {
+				return nil
+			}
+			if !isRelevantWatchEvent(ev, target) {
+				continue
+			}
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			timer.Reset(o.debounce)
+		case <-timer.C:
+			next, er := s.List(ctx, o.filter)
+			if er != nil {
+				app.warnf("watch warning: %v\n", er)
+				continue
+			}
+			if e = app.writeWatchEvents(diffWatchEvents(watchSessionMap(prev), watchSessionMap(next), o.now()), o.format); e != nil {
+				return e
+			}
+			prev = next
+		case er := <-w.Errors:
+			if er != nil {
+				app.warnf("watch warning: %v\n", er)
 			}
 		}
-
-		return nil, watchSummaryMap(summaries), nil
 	}
+}
 
-	sessions, err := store.List(ctx, options.filter)
-	if err != nil {
-		return nil, nil, fmt.Errorf("loading initial snapshot: %w", err)
+func normalizeWatchOptions(o watchOptions) watchOptions {
+	if strings.TrimSpace(o.format) == "" {
+		o.format = watchFormatTable
 	}
-	if !options.noSnapshot {
-		err := app.writeWatchEvents(snapshotWatchEvents(sessions, observedAt), options.format)
-		if err != nil {
-			return nil, nil, err
+	if o.debounce <= 0 {
+		o.debounce = defaultWatchDebounce
+	}
+	if o.now == nil {
+		o.now = func() time.Time { return time.Now().UTC() }
+	}
+	return o
+}
+
+func watchTarget(s *registry.FileStore) (string, string, error) {
+	p, e := filepath.Abs(s.Path())
+	if e != nil {
+		return "", "", fmt.Errorf("resolve watch target: %w", e)
+	}
+	d := filepath.Dir(p)
+	i, e := os.Stat(d)
+	if e != nil {
+		if os.IsNotExist(e) {
+			return "", "", fmt.Errorf("%w: %s", errWatchStateDirectoryMissing, d)
 		}
+		return "", "", fmt.Errorf("stat watch state directory: %w", e)
 	}
-
-	return watchSessionMap(sessions), nil, nil
+	if !i.IsDir() {
+		return "", "", fmt.Errorf("%w: %s", errWatchStateDirectoryNotDir, d)
+	}
+	return p, d, nil
 }
 
-func (app *application) normalizeWatchRunOptions(options watchOptions) (watchOptions, error) {
-	options = normalizeWatchOptions(options)
-	if app.outputJSON {
-		if options.formatSet {
-			return watchOptions{}, errWatchFormatJSONConflict
-		}
-		options.format = watchFormatJSON
-	} else {
-		if err := validateWatchTextFormat(options.format); err != nil {
-			return watchOptions{}, err
-		}
-	}
-	if err := validateWatchOutputFormat(options.format); err != nil {
-		return watchOptions{}, err
-	}
-
-	return options, nil
-}
-
-func watchTarget(store *registry.FileStore) (string, string, error) {
-	target, err := filepath.Abs(store.Path())
-	if err != nil {
-		return "", "", fmt.Errorf("resolving store path: %w", err)
-	}
-	dir := filepath.Dir(target)
-	info, err := os.Stat(dir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return "", "", fmt.Errorf("%w: %s", errWatchStateDirectoryMissing, dir)
-		}
-
-		return "", "", fmt.Errorf("checking state directory: %w", err)
-	}
-	if !info.IsDir() {
-		return "", "", fmt.Errorf("%w: %s", errWatchStateDirectoryNotDir, dir)
-	}
-
-	return target, dir, nil
-}
-
-func normalizeWatchOptions(options watchOptions) watchOptions {
-	if strings.TrimSpace(options.format) == "" {
-		options.format = watchFormatTable
-	}
-	options.format = strings.ToLower(strings.TrimSpace(options.format))
-	if options.debounce <= 0 {
-		options.debounce = defaultWatchDebounce
-	}
-	if options.now == nil {
-		options.now = func() time.Time {
-			return time.Now().UTC()
-		}
-	}
-
-	return options
-}
-
-func validateWatchTextFormat(format string) error {
-	switch format {
-	case watchFormatTable, watchFormatPlain:
-		return nil
-	default:
-		return fmt.Errorf("%w: %q; use table or plain, or pass global --json for JSON", errInvalidWatchFormat, format)
+func notifyWatchReady(c chan struct{}) {
+	if c != nil {
+		close(c)
 	}
 }
 
-func validateWatchOutputFormat(format string) error {
-	switch format {
-	case watchFormatTable, watchFormatPlain, watchFormatJSON:
-		return nil
-	default:
-		return validateWatchTextFormat(format)
-	}
-}
-
-func notifyWatchReady(ready chan struct{}) {
-	if ready != nil {
-		close(ready)
-	}
-}
-
-func (app *application) watchStore(
-	ctx context.Context,
-	watcher *fsnotify.Watcher,
-	store *registry.FileStore,
-	target string,
-	previousSessions map[string]registry.Session,
-	previousSummaries map[string]registry.Summary,
-	options watchOptions,
-) error {
-	loop := watchLoop{
-		app:               app,
-		watcher:           watcher,
-		store:             store,
-		target:            target,
-		previousSessions:  previousSessions,
-		previousSummaries: previousSummaries,
-		options:           options,
-	}
-	defer loop.stopTimer()
-
-	return loop.run(ctx)
-}
-
-type watchLoop struct {
-	app               *application
-	watcher           *fsnotify.Watcher
-	store             *registry.FileStore
-	target            string
-	previousSessions  map[string]registry.Session
-	previousSummaries map[string]registry.Summary
-	options           watchOptions
-	timer             *time.Timer
-	timerC            <-chan time.Time
-	pending           bool
-}
-
-func (loop *watchLoop) run(ctx context.Context) error {
-	for {
-		done, err := loop.next(ctx)
-		if err != nil {
-			return err
-		}
-		if done {
-			return nil
-		}
-	}
-}
-
-func (loop *watchLoop) next(ctx context.Context) (bool, error) {
-	select {
-	case <-ctx.Done():
-		return true, nil
-	case event, ok := <-loop.watcher.Events:
-		if !ok {
-			return true, nil
-		}
-		loop.handleEvent(event)
-
-		return false, nil
-	case watchErr, ok := <-loop.watcher.Errors:
-		if !ok {
-			return true, nil
-		}
-		loop.handleError(watchErr)
-
-		return false, nil
-	case <-loop.timerC:
-		if err := loop.reload(ctx); err != nil {
-			return false, err
-		}
-
-		return false, nil
-	}
-}
-
-func (loop *watchLoop) handleEvent(event fsnotify.Event) {
-	if isRelevantWatchEvent(event, loop.target) {
-		loop.scheduleReload()
-	}
-}
-
-func (loop *watchLoop) handleError(err error) {
-	if err != nil {
-		loop.app.warnf("watch warning: %v\n", err)
-	}
-}
-
-func (loop *watchLoop) scheduleReload() {
-	if loop.timer == nil {
-		loop.timer = time.NewTimer(loop.options.debounce)
-		loop.timerC = loop.timer.C
-		loop.pending = true
-
-		return
-	}
-
-	if !loop.timer.Stop() && loop.pending {
-		select {
-		case <-loop.timer.C:
-		default:
-		}
-	}
-	loop.timer.Reset(loop.options.debounce)
-	loop.timerC = loop.timer.C
-	loop.pending = true
-}
-
-func (loop *watchLoop) reload(ctx context.Context) error {
-	loop.pending = false
-	loop.timerC = nil
-	loop.stopTimer()
-
-	if loop.options.summary {
-		return loop.reloadSummaries(ctx)
-	}
-
-	return loop.reloadSessions(ctx)
-}
-
-func (loop *watchLoop) reloadSessions(ctx context.Context) error {
-	observedAt := loop.options.now()
-	nextSessions, err := loop.store.List(ctx, loop.options.filter)
-	if err != nil {
-		loop.app.warnf("watch warning: %v\n", err)
-
-		return nil
-	}
-	next := watchSessionMap(nextSessions)
-	events := diffWatchEvents(loop.previousSessions, next, observedAt)
-	if err := loop.app.writeWatchEvents(events, loop.options.format); err != nil {
-		return err
-	}
-	loop.previousSessions = next
-
-	return nil
-}
-
-func (loop *watchLoop) reloadSummaries(ctx context.Context) error {
-	observedAt := loop.options.now()
-	nextSummaries, err := watchSummaries(ctx, loop.store, loop.options)
-	if err != nil {
-		loop.app.warnf("watch warning: %v\n", err)
-
-		return nil
-	}
-	next := watchSummaryMap(nextSummaries)
-	events := diffWatchSummaryEvents(loop.previousSummaries, next, observedAt)
-	if err := loop.app.writeWatchSummaryEvents(events, loop.options.format); err != nil {
-		return err
-	}
-	loop.previousSummaries = next
-
-	return nil
-}
-
-func (loop *watchLoop) stopTimer() {
-	if loop.timer != nil {
-		loop.timer.Stop()
-	}
-}
-
-func isRelevantWatchEvent(event fsnotify.Event, target string) bool {
-	if event.Op&(fsnotify.Create|fsnotify.Write|fsnotify.Rename|fsnotify.Remove) == 0 {
+func isRelevantWatchEvent(e fsnotify.Event, target string) bool {
+	if e.Op&(fsnotify.Create|fsnotify.Write|fsnotify.Rename|fsnotify.Remove) == 0 {
 		return false
 	}
-
-	eventPath, err := filepath.Abs(event.Name)
-	if err != nil {
-		eventPath = filepath.Clean(event.Name)
-	}
-
-	return filepath.Clean(eventPath) == filepath.Clean(target)
+	p, _ := filepath.Abs(e.Name)
+	return filepath.Clean(p) == filepath.Clean(target)
 }
 
-func watchSessionMap(sessions []registry.Session) map[string]registry.Session {
-	mapped := make(map[string]registry.Session, len(sessions))
-	for _, session := range sessions {
-		mapped[session.ID] = session
+func watchSessionMap(s []registry.Session) map[string]registry.Session {
+	m := map[string]registry.Session{}
+	for _, v := range s {
+		m[v.ID] = v
 	}
-
-	return mapped
+	return m
 }
 
-func watchSummaries(
-	ctx context.Context,
-	store *registry.FileStore,
-	options watchOptions,
-) ([]registry.Summary, error) {
-	summaries, err := store.SummaryByTmuxSessionWithOptions(ctx, registry.SummaryOptions{
-		Filter: options.filter,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("summarizing watch sessions: %w", err)
+func snapshotWatchEvents(s []registry.Session, at time.Time) []watchEvent {
+	if len(s) == 0 {
+		return []watchEvent{{Time: at.UTC(), Action: watchActionSnapshotEmpty}}
 	}
-
-	return summaries, nil
+	o := []watchEvent{}
+	for _, v := range s {
+		o = append(o, watchEventFromSession(watchActionSnapshot, v, registry.Session{}, at))
+	}
+	sortWatchEvents(o)
+	return o
 }
 
-func watchSummaryMap(summaries []registry.Summary) map[string]registry.Summary {
-	mapped := make(map[string]registry.Summary, len(summaries))
-	for _, summary := range summaries {
-		mapped[watchSummaryKey(summary)] = summary
-	}
-
-	return mapped
-}
-
-func watchSummaryKey(summary registry.Summary) string {
-	switch {
-	case summary.TmuxSessionID != "" && summary.TmuxSessionName != "":
-		return "tmux:" + summary.TmuxSessionID + "\x00" + summary.TmuxSessionName
-	case summary.TmuxSessionID != "":
-		return "tmux:" + summary.TmuxSessionID
-	case summary.TmuxSessionName != "":
-		return "detached:" + summary.TmuxSessionName
-	default:
-		return "unknown"
-	}
-}
-
-func snapshotWatchEvents(sessions []registry.Session, observedAt time.Time) []watchEvent {
-	if len(sessions) == 0 {
-		return []watchEvent{{
-			Time:   observedAt.UTC(),
-			Action: watchActionSnapshotEmpty,
-		}}
-	}
-
-	events := make([]watchEvent, 0, len(sessions))
-	for _, session := range sessions {
-		events = append(events, watchEventFromSession(watchActionSnapshot, session, registry.Session{}, observedAt))
-	}
-	sortWatchEvents(events)
-
-	return events
-}
-
-func snapshotWatchSummaryEvents(summaries []registry.Summary, observedAt time.Time) []watchSummaryEvent {
-	if len(summaries) == 0 {
-		return []watchSummaryEvent{{
-			Time:   observedAt.UTC(),
-			Action: watchActionSnapshotEmpty,
-		}}
-	}
-
-	events := make([]watchSummaryEvent, 0, len(summaries))
-	for _, summary := range summaries {
-		events = append(events, watchSummaryEventFromSummary(watchActionSnapshot, summary, observedAt))
-	}
-	sortWatchSummaryEvents(events)
-
-	return events
-}
-
-func diffWatchEvents(
-	previous map[string]registry.Session,
-	next map[string]registry.Session,
-	observedAt time.Time,
-) []watchEvent {
-	events := make([]watchEvent, 0)
-	for id, nextSession := range next {
-		previousSession, ok := previous[id]
+//nolint:gocognit,cyclop // event diffing compares each independent v2 dimension
+func diffWatchEvents(p, n map[string]registry.Session, at time.Time) []watchEvent {
+	o := []watchEvent{}
+	for id, v := range n {
+		old, ok := p[id]
 		if !ok {
-			events = append(events, watchEventFromSession(watchActionAdded, nextSession, registry.Session{}, observedAt))
-
+			o = append(o, watchEventFromSession(watchActionAdded, v, registry.Session{}, at))
 			continue
 		}
-
-		switch {
-		case nextSession.State != previousSession.State:
-			events = append(events, watchEventFromSession(watchActionStateChanged, nextSession, previousSession, observedAt))
-		case nextSession.LastEvent != previousSession.LastEvent || !nextSession.LastEventAt.Equal(previousSession.LastEventAt):
-			events = append(events, watchEventFromSession(watchActionEventChanged, nextSession, previousSession, observedAt))
-		case !reflect.DeepEqual(nextSession, previousSession):
-			events = append(events, watchEventFromSession(watchActionUpdated, nextSession, previousSession, observedAt))
+		if v.Presence != old.Presence {
+			o = append(o, watchEventFromSession(watchActionPresenceChanged, v, old, at))
+			if v.Presence == registry.PresenceLive && v.Process != nil && old.Process == nil {
+				o = append(o, watchEventFromSession(watchActionProcessBound, v, old, at))
+			}
+			if v.Presence == registry.PresenceGone {
+				o = append(o, watchEventFromSession(watchActionProcessGone, v, old, at))
+			}
+		}
+		if !activityEqual(v.Activity, old.Activity) {
+			o = append(o, watchEventFromSession(watchActionActivityChanged, v, old, at))
+		}
+		if v.Tmux != old.Tmux {
+			o = append(o, watchEventFromSession(watchActionLocationChanged, v, old, at))
+		}
+		if nativeEvent(v) != nativeEvent(old) {
+			o = append(o, watchEventFromSession(watchActionNativeEvent, v, old, at))
 		}
 	}
-
-	for id, previousSession := range previous {
-		if _, ok := next[id]; ok {
-			continue
+	for id, v := range p {
+		if _, ok := n[id]; !ok {
+			o = append(o, watchEventFromSession(watchActionRemoved, v, registry.Session{}, at))
 		}
-		events = append(events, watchEventFromSession(watchActionRemoved, previousSession, registry.Session{}, observedAt))
 	}
-
-	sortWatchEvents(events)
-
-	return events
+	sortWatchEvents(o)
+	return o
 }
 
-func diffWatchSummaryEvents(
-	previous map[string]registry.Summary,
-	next map[string]registry.Summary,
-	observedAt time.Time,
-) []watchSummaryEvent {
-	events := make([]watchSummaryEvent, 0)
-	for key, nextSummary := range next {
-		previousSummary, ok := previous[key]
-		if !ok {
-			events = append(events, watchSummaryEventFromSummary(watchActionAdded, nextSummary, observedAt))
-
-			continue
-		}
-
-		if !reflect.DeepEqual(nextSummary, previousSummary) {
-			events = append(events, watchSummaryEventFromSummary(watchActionUpdated, nextSummary, observedAt))
-		}
+func activityEqual(a, b *registry.Activity) bool {
+	if a == nil || b == nil {
+		return a == b
 	}
-
-	for key, previousSummary := range previous {
-		if _, ok := next[key]; ok {
-			continue
-		}
-		events = append(events, watchSummaryEventFromSummary(watchActionRemoved, previousSummary, observedAt))
-	}
-
-	sortWatchSummaryEvents(events)
-
-	return events
+	return *a == *b
 }
 
-func watchEventFromSession(
-	action string,
-	session registry.Session,
-	previous registry.Session,
-	observedAt time.Time,
-) watchEvent {
-	event := watchEvent{
-		Time:        watchEventTime(action, session, observedAt),
-		Action:      action,
-		ID:          session.ID,
-		Harness:     session.Harness,
-		State:       session.State,
-		SessionID:   session.SessionID,
-		SessionPath: session.SessionPath,
-		Label:       watchSessionLabel(session),
-		Event:       session.LastEvent,
-		CWD:         session.CWD,
-		Tmux:        watchTmuxLabel(session.Tmux),
+func nativeEvent(s registry.Session) string {
+	if s.Observations.Native == nil {
+		return ""
 	}
-	if action == watchActionStateChanged {
-		event.PreviousState = previous.State
-	}
-	if action == watchActionEventChanged {
-		event.PreviousEvent = previous.LastEvent
-	}
-
-	return event
+	return s.Observations.Native.Event
 }
 
-func watchSummaryEventFromSummary(
-	action string,
-	summary registry.Summary,
-	observedAt time.Time,
-) watchSummaryEvent {
-	return watchSummaryEvent{
-		Time:            observedAt.UTC(),
-		Action:          action,
-		TmuxSessionID:   summary.TmuxSessionID,
-		TmuxSessionName: summary.TmuxSessionName,
-		Label:           summaryLabel(summary),
-		Active:          summary.Active,
-		Total:           summary.Total,
-		Running:         summary.Running,
-		Waiting:         summary.Waiting,
-		Idle:            summary.Idle,
-		Unknown:         summary.Unknown,
-		Exited:          summary.Exited,
+func watchEventFromSession(a string, s, p registry.Session, at time.Time) watchEvent {
+	e := watchEvent{Time: at.UTC(), Action: a, ID: s.ID, Harness: s.Harness, Presence: s.Presence, Activity: s.Activity, SessionID: s.SessionID, SessionPath: s.SessionPath, Label: watchSessionLabel(s), NativeEvent: nativeEvent(s), CWD: s.CWD, Tmux: watchTmuxLabel(s.Tmux)}
+	if !s.UpdatedAt.IsZero() {
+		e.Time = s.UpdatedAt
 	}
+	if a == watchActionPresenceChanged {
+		e.Time = s.PresenceChangedAt
+		e.PreviousPresence = p.Presence
+	}
+	if a == watchActionActivityChanged {
+		e.Time = s.ActivityChangedAt
+		e.PreviousActivity = p.Activity
+	}
+	if e.Time.IsZero() {
+		e.Time = at.UTC()
+	}
+	return e
 }
 
-func watchEventTime(action string, session registry.Session, observedAt time.Time) time.Time {
-	switch action {
-	case watchActionRemoved, watchActionSnapshotEmpty:
-		return observedAt.UTC()
-	case watchActionStateChanged:
-		if !session.StateChangedAt.IsZero() {
-			return session.StateChangedAt.UTC()
+func sortWatchEvents(e []watchEvent) {
+	order := map[string]int{watchActionPresenceChanged: watchActivityOrder - 1, watchActionActivityChanged: watchActivityOrder, watchActionProcessBound: watchProcessOrder, watchActionProcessGone: watchProcessOrder, watchActionLocationChanged: watchLocationOrder, watchActionNativeEvent: watchNativeOrder}
+	sort.SliceStable(e, func(i, j int) bool {
+		if !e[i].Time.Equal(e[j].Time) {
+			return e[i].Time.Before(e[j].Time)
 		}
-	case watchActionEventChanged:
-		if !session.LastEventAt.IsZero() {
-			return session.LastEventAt.UTC()
+		if e[i].ID != e[j].ID {
+			return e[i].ID < e[j].ID
 		}
-	case watchActionAdded, watchActionSnapshot, watchActionUpdated:
-		if !session.UpdatedAt.IsZero() {
-			return session.UpdatedAt.UTC()
-		}
-	}
-	if !session.LastSeenAt.IsZero() {
-		return session.LastSeenAt.UTC()
-	}
-	if !session.CreatedAt.IsZero() {
-		return session.CreatedAt.UTC()
-	}
-
-	return observedAt.UTC()
-}
-
-func sortWatchEvents(events []watchEvent) {
-	sort.SliceStable(events, func(i int, j int) bool {
-		if !events[i].Time.Equal(events[j].Time) {
-			return events[i].Time.Before(events[j].Time)
-		}
-		if events[i].ID != events[j].ID {
-			return events[i].ID < events[j].ID
-		}
-
-		return events[i].Action < events[j].Action
+		return order[e[i].Action] < order[e[j].Action]
 	})
 }
 
-func sortWatchSummaryEvents(events []watchSummaryEvent) {
-	sort.SliceStable(events, func(i int, j int) bool {
-		if !events[i].Time.Equal(events[j].Time) {
-			return events[i].Time.Before(events[j].Time)
-		}
-		if events[i].Label != events[j].Label {
-			return events[i].Label < events[j].Label
-		}
-
-		return events[i].Action < events[j].Action
-	})
+func watchSessionLabel(s registry.Session) string {
+	if s.SessionID != "" {
+		return s.SessionID
+	}
+	if s.SessionPath != "" {
+		return s.SessionPath
+	}
+	if s.Tmux.PaneID != "" {
+		return s.Tmux.PaneID
+	}
+	return s.ID
 }
 
-func watchSessionLabel(session registry.Session) string {
-	switch {
-	case session.SessionID != "":
-		return session.SessionID
-	case session.SessionPath != "":
-		return session.SessionPath
-	case session.Tmux.PaneID != "":
-		return session.Tmux.PaneID
-	default:
-		return session.ID
+func watchTmuxLabel(c registry.TmuxContext) string {
+	p := []string{}
+	if x := tmuxSessionLabel(c); x != "-" {
+		p = append(p, x)
 	}
+	if x := tmuxWindowLabel(c); x != "-" {
+		p = append(p, x)
+	}
+	if c.PaneID != "" {
+		p = append(p, c.PaneID)
+	}
+	return strings.Join(p, ":")
 }
 
-func watchTmuxLabel(ctx registry.TmuxContext) string {
-	parts := make([]string, 0, watchTmuxLabelPartCapacity)
-	if session := tmuxSessionLabel(ctx); session != "-" {
-		parts = append(parts, session)
-	}
-	if window := tmuxWindowLabel(ctx); window != "-" {
-		parts = append(parts, window)
-	}
-	if ctx.PaneID != "" {
-		parts = append(parts, ctx.PaneID)
-	}
-
-	return strings.Join(parts, ":")
-}
-
-func (app *application) writeWatchEvents(events []watchEvent, format string) error {
-	for _, event := range events {
-		switch format {
+func (app *application) writeWatchEvents(e []watchEvent, f string) error {
+	for _, v := range e {
+		switch f {
 		case watchFormatJSON:
-			if err := app.writeWatchEventJSON(event); err != nil {
-				return err
+			if er := json.NewEncoder(app.stdout).Encode(v); er != nil {
+				return fmt.Errorf("encode watch event: %w", er)
 			}
 		case watchFormatPlain:
-			if err := app.writeln(formatWatchPlainEvent(event)); err != nil {
-				return err
-			}
-		case watchFormatTable:
-			if err := app.writeln(formatWatchTableEvent(event)); err != nil {
-				return err
+			if er := app.writeln(formatWatchPlainEvent(v)); er != nil {
+				return er
 			}
 		default:
-			return validateWatchOutputFormat(format)
-		}
-	}
-
-	return nil
-}
-
-func (app *application) writeWatchSummaryEvents(events []watchSummaryEvent, format string) error {
-	for _, event := range events {
-		switch format {
-		case watchFormatJSON:
-			if err := app.writeWatchSummaryEventJSON(event); err != nil {
-				return err
+			if er := app.writeln(formatWatchTableEvent(v)); er != nil {
+				return er
 			}
-		case watchFormatPlain:
-			if err := app.writeln(formatWatchSummaryPlainEvent(event)); err != nil {
-				return err
-			}
-		case watchFormatTable:
-			if err := app.writeln(formatWatchSummaryTableEvent(event)); err != nil {
-				return err
-			}
-		default:
-			return validateWatchOutputFormat(format)
 		}
 	}
-
 	return nil
 }
 
-func (app *application) writeWatchEventJSON(event watchEvent) error {
-	encoder := json.NewEncoder(app.stdout)
-	if err := encoder.Encode(event); err != nil {
-		return fmt.Errorf("writing JSON: %w", err)
-	}
-
-	return nil
+func formatWatchPlainEvent(e watchEvent) string {
+	return strings.Join([]string{e.Time.UTC().Format(time.RFC3339), e.Action, string(e.Harness), string(e.Presence), appReportActivity(registry.Session{Activity: e.Activity}), "session=" + e.Label}, " ")
 }
 
-func (app *application) writeWatchSummaryEventJSON(event watchSummaryEvent) error {
-	encoder := json.NewEncoder(app.stdout)
-	if err := encoder.Encode(event); err != nil {
-		return fmt.Errorf("writing JSON: %w", err)
-	}
-
-	return nil
-}
-
-func formatWatchPlainEvent(event watchEvent) string {
-	parts := []string{
-		event.Time.UTC().Format(time.RFC3339),
-		event.Action,
-	}
-	if event.Harness != "" {
-		parts = append(parts, string(event.Harness))
-	}
-	if event.State != "" {
-		parts = append(parts, string(event.State))
-	}
-
-	fields := []struct {
-		key   string
-		value string
-	}{
-		{key: "session", value: event.Label},
-		{key: "prev", value: string(event.PreviousState)},
-		{key: "event", value: event.Event},
-		{key: "prev_event", value: event.PreviousEvent},
-		{key: "cwd", value: formatHumanPath(event.CWD)},
-		{key: "tmux", value: event.Tmux},
-	}
-	for _, field := range fields {
-		if field.value == "" {
-			continue
-		}
-		parts = append(parts, formatWatchTextField(field.key, field.value))
-	}
-
-	return strings.Join(parts, " ")
-}
-
-func formatWatchTableEvent(event watchEvent) string {
-	details := formatWatchDetails(event)
-	columns := []string{
-		event.Time.UTC().Format(time.RFC3339),
-		padWatchColumn(event.Action, watchActionColumnWidth),
-		padWatchColumn(string(event.Harness), watchHarnessColumnWidth),
-		padWatchColumn(string(event.State), watchStateColumnWidth),
-		padWatchColumn(event.Label, watchLabelColumnWidth),
-		details,
-	}
-
-	return strings.TrimRight(strings.Join(columns, "  "), " ")
-}
-
-func formatWatchSummaryPlainEvent(event watchSummaryEvent) string {
-	parts := []string{
-		event.Time.UTC().Format(time.RFC3339),
-		event.Action,
-	}
-	if event.Label == "" {
-		return strings.Join(parts, " ")
-	}
-
-	fields := []struct {
-		key   string
-		value string
-	}{
-		{key: "tmux", value: event.Label},
-		{key: "active", value: strconv.Itoa(event.Active)},
-		{key: "total", value: strconv.Itoa(event.Total)},
-		{key: string(registry.StateRunning), value: strconv.Itoa(event.Running)},
-		{key: "waiting", value: strconv.Itoa(event.Waiting)},
-		{key: "idle", value: strconv.Itoa(event.Idle)},
-		{key: "unknown", value: strconv.Itoa(event.Unknown)},
-		{key: "exited", value: strconv.Itoa(event.Exited)},
-	}
-	for _, field := range fields {
-		parts = append(parts, formatWatchTextField(field.key, field.value))
-	}
-
-	return strings.Join(parts, " ")
-}
-
-func formatWatchSummaryTableEvent(event watchSummaryEvent) string {
-	label := event.Label
-	if label == "" {
-		label = "-"
-	}
-
-	columns := []string{
-		event.Time.UTC().Format(time.RFC3339),
-		padWatchColumn(event.Action, watchActionColumnWidth),
-		padWatchColumn(label, watchLabelColumnWidth),
-		padWatchColumn(fmt.Sprintf("%d/%d", event.Active, event.Total), watchCountColumnWidth),
-		padWatchColumn(strconv.Itoa(event.Running), watchCountColumnWidth),
-		padWatchColumn(strconv.Itoa(event.Waiting), watchCountColumnWidth),
-		padWatchColumn(strconv.Itoa(event.Idle), watchCountColumnWidth),
-		padWatchColumn(strconv.Itoa(event.Unknown), watchCountColumnWidth),
-		strconv.Itoa(event.Exited),
-	}
-
-	return strings.TrimRight(strings.Join(columns, "  "), " ")
-}
-
-func padWatchColumn(value string, width int) string {
-	if value == "" {
-		value = "-"
-	}
-	if len(value) >= width {
-		return value
-	}
-
-	return value + strings.Repeat(" ", width-len(value))
-}
-
-func formatWatchDetails(event watchEvent) string {
-	fields := []struct {
-		key   string
-		value string
-	}{
-		{key: "prev", value: string(event.PreviousState)},
-		{key: "event", value: event.Event},
-		{key: "prev_event", value: event.PreviousEvent},
-		{key: "cwd", value: formatHumanPath(event.CWD)},
-		{key: "tmux", value: event.Tmux},
-	}
-	parts := make([]string, 0, len(fields))
-	for _, field := range fields {
-		if field.value == "" {
-			continue
-		}
-		parts = append(parts, formatWatchTextField(field.key, field.value))
-	}
-
-	return strings.Join(parts, " ")
-}
-
-func formatWatchTextField(key string, value string) string {
-	if strings.ContainsAny(value, " \t\r\n") {
-		return key + "=" + strconv.Quote(value)
-	}
-
-	return key + "=" + value
-}
-
-func (app *application) warnf(format string, args ...any) {
-	if app.stderr == nil {
-		return
-	}
-	if _, err := fmt.Fprintf(app.stderr, format, args...); err != nil {
-		return
-	}
+func formatWatchTableEvent(e watchEvent) string {
+	return fmt.Sprintf("%s  %-18s  %-10s  %-8s  %-8s  %s", e.Time.UTC().Format(time.RFC3339), e.Action, e.Harness, e.Presence, appReportActivity(registry.Session{Activity: e.Activity}), e.Label)
 }

@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"maps"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -35,20 +34,55 @@ const (
 )
 
 var (
-	// ErrUnknownHarness is returned when a harness name is not supported.
-	ErrUnknownHarness = errors.New("unknown harness")
-	// ErrUnknownState is returned when a lifecycle state is not supported.
-	ErrUnknownState = errors.New("unknown state")
+	ErrUnknownHarness     = errors.New("unknown harness")
+	ErrUnknownPresence    = errors.New("unknown presence")
+	ErrUnknownActivity    = errors.New("unknown activity")
+	ErrUnknownSource      = errors.New("unknown observation source")
+	ErrUnknownEvidence    = errors.New("unknown observation evidence")
+	ErrInvalidObservation = errors.New("invalid observation")
 )
 
-type State string
+type Presence string
 
 const (
-	StateIdle    State = "idle"
-	StateRunning State = "running"
-	StateWaiting State = "waiting"
-	StateUnknown State = "unknown"
-	StateExited  State = "exited"
+	PresenceLive    Presence = "live"
+	PresenceGone    Presence = "gone"
+	PresenceUnknown Presence = "unknown"
+)
+
+type Activity string
+
+const (
+	ActivityRunning Activity = "running"
+	ActivityWaiting Activity = "waiting"
+	ActivityIdle    Activity = "idle"
+	ActivityUnknown Activity = "unknown"
+)
+
+type ObservationSource string
+
+const (
+	ObservationSourceNative  ObservationSource = "native"
+	ObservationSourceProcess ObservationSource = "process"
+	ObservationSourceTmux    ObservationSource = "tmux"
+	ObservationSourceCatalog ObservationSource = "catalog"
+)
+
+type ObservationEvidence string
+
+const (
+	ObservationEvidenceNativeEvent     ObservationEvidence = "native_event"
+	ObservationEvidenceProcessPresence ObservationEvidence = "process_presence"
+	ObservationEvidenceTmuxLocation    ObservationEvidence = "tmux_location"
+	ObservationEvidenceCatalogMetadata ObservationEvidence = "catalog_metadata"
+)
+
+type NativeLifecycle string
+
+const (
+	NativeLifecycleStart  NativeLifecycle = "start"
+	NativeLifecycleResume NativeLifecycle = "resume"
+	NativeLifecycleEnd    NativeLifecycle = "end"
 )
 
 type TmuxContext struct {
@@ -67,363 +101,316 @@ type TmuxContext struct {
 	ClientTTY       string `json:"client_tty,omitempty"`
 }
 
-func (c TmuxContext) Empty() bool {
-	var empty TmuxContext
+func (c TmuxContext) Empty() bool { return c == (TmuxContext{}) } //nolint:exhaustruct // comparing against the zero value is intentional
 
-	return c == empty
+type ProcessIdentity struct {
+	PID            int    `json:"pid"`
+	PPID           int    `json:"ppid"`
+	ProcessGroupID int    `json:"process_group_id"`
+	StartIdentity  string `json:"start_identity"`
+	Executable     string `json:"executable"`
+	CWD            string `json:"cwd"`
+	TTY            string `json:"tty"`
+}
+
+func (p ProcessIdentity) Complete() bool { return p.PID > 0 && p.StartIdentity != "" }
+
+func (p ProcessIdentity) Equal(other ProcessIdentity) bool {
+	return p.PID == other.PID && p.StartIdentity != "" && p.StartIdentity == other.StartIdentity
+}
+
+type NativeObservation struct {
+	Event       string            `json:"event,omitempty"`
+	Lifecycle   *NativeLifecycle  `json:"lifecycle,omitempty"`
+	Presence    *Presence         `json:"presence,omitempty"`
+	Activity    *Activity         `json:"activity,omitempty"`
+	SessionID   string            `json:"session_id,omitempty"`
+	SessionPath string            `json:"session_path,omitempty"`
+	ObservedAt  time.Time         `json:"observed_at"`
+	Attributes  map[string]string `json:"attributes,omitempty"`
+	RawPayload  json.RawMessage   `json:"raw_payload,omitempty"`
+}
+
+type ProcessObservation struct {
+	Present    bool            `json:"present"`
+	Process    ProcessIdentity `json:"process"`
+	ObservedAt time.Time       `json:"observed_at"`
+}
+
+type TmuxObservation struct {
+	Process    ProcessIdentity `json:"process"`
+	Context    TmuxContext     `json:"context"`
+	ObservedAt time.Time       `json:"observed_at"`
+}
+
+type CatalogObservation struct {
+	SessionID     string    `json:"session_id,omitempty"`
+	SessionPath   string    `json:"session_path,omitempty"`
+	ResumeCommand []string  `json:"resume_command,omitempty"`
+	CWD           string    `json:"cwd,omitempty"`
+	ProjectRoot   string    `json:"project_root,omitempty"`
+	ProcessPID    int       `json:"process_pid,omitempty"`
+	ObservedAt    time.Time `json:"observed_at"`
+}
+
+type Observations struct {
+	Native  *NativeObservation  `json:"native,omitempty"`
+	Process *ProcessObservation `json:"process,omitempty"`
+	Tmux    *TmuxObservation    `json:"tmux,omitempty"`
+	Catalog *CatalogObservation `json:"catalog,omitempty"`
 }
 
 type Session struct {
-	ID               string            `json:"id"`
-	Harness          Harness           `json:"harness"`
-	State            State             `json:"state"`
-	SessionID        string            `json:"session_id,omitempty"`
-	SessionPath      string            `json:"session_path,omitempty"`
-	ResumeCommand    []string          `json:"resume_command,omitempty"`
-	CWD              string            `json:"cwd,omitempty"`
-	ProjectRoot      string            `json:"project_root,omitempty"`
-	PID              int               `json:"pid,omitempty"`
-	ProcessStartTime string            `json:"process_start_time,omitempty"`
-	PPID             int               `json:"ppid,omitempty"`
-	TTY              string            `json:"tty,omitempty"`
-	Tmux             TmuxContext       `json:"tmux,omitzero"`
-	Source           string            `json:"source,omitempty"`
-	Confidence       string            `json:"confidence,omitempty"`
-	LastEvent        string            `json:"last_event,omitempty"`
-	Attributes       map[string]string `json:"attributes,omitempty"`
-	RawPayload       json.RawMessage   `json:"raw_payload,omitempty"`
-	CreatedAt        time.Time         `json:"created_at"`
-	UpdatedAt        time.Time         `json:"updated_at"`
-	LastSeenAt       time.Time         `json:"last_seen_at"`
-	LastObservedAt   time.Time         `json:"last_observed_at,omitzero"`
-	StateChangedAt   time.Time         `json:"state_changed_at,omitzero"`
-	LastEventAt      time.Time         `json:"last_event_at,omitzero"`
-	EndedAt          time.Time         `json:"ended_at,omitzero"`
+	SchemaVersion     int              `json:"schema_version"`
+	ID                string           `json:"id"`
+	Harness           Harness          `json:"harness"`
+	Presence          Presence         `json:"presence"`
+	Activity          *Activity        `json:"activity"`
+	SessionID         string           `json:"session_id,omitempty"`
+	SessionPath       string           `json:"session_path,omitempty"`
+	ResumeCommand     []string         `json:"resume_command,omitempty"`
+	CWD               string           `json:"cwd,omitempty"`
+	ProjectRoot       string           `json:"project_root,omitempty"`
+	Process           *ProcessIdentity `json:"process,omitempty"`
+	Tmux              TmuxContext      `json:"tmux,omitzero"`
+	Observations      Observations     `json:"observations"`
+	CreatedAt         time.Time        `json:"created_at"`
+	UpdatedAt         time.Time        `json:"updated_at"`
+	PresenceChangedAt time.Time        `json:"presence_changed_at"`
+	ActivityChangedAt time.Time        `json:"activity_changed_at"`
 }
 
-type Report struct {
-	Harness          Harness
-	State            State
-	SessionID        string
-	SessionPath      string
-	ResumeCommand    []string
-	CWD              string
-	ProjectRoot      string
-	PID              int
-	ProcessStartTime string
-	PPID             int
-	TTY              string
-	Tmux             TmuxContext
-	Source           string
-	Confidence       string
-	Event            string
-	Attributes       map[string]string
-	RawPayload       json.RawMessage
-	ObservedAt       time.Time
+type ObservationIdentity struct {
+	SessionID   string `json:"session_id,omitempty"`
+	SessionPath string `json:"session_path,omitempty"`
+}
+
+type CatalogMetadata struct {
+	ResumeCommand []string `json:"resume_command,omitempty"`
+	CWD           string   `json:"cwd,omitempty"`
+	ProjectRoot   string   `json:"project_root,omitempty"`
+	ProcessPID    int      `json:"process_pid,omitempty"`
+	Current       bool     `json:"-"`
+}
+
+type Observation struct {
+	Source         ObservationSource   `json:"source"`
+	Evidence       ObservationEvidence `json:"evidence"`
+	Harness        Harness             `json:"harness"`
+	Identity       ObservationIdentity `json:"identity"`
+	Lifecycle      *NativeLifecycle    `json:"lifecycle,omitempty"`
+	Presence       *Presence           `json:"presence,omitempty"`
+	Activity       *Activity           `json:"activity,omitempty"`
+	NativeEvent    string              `json:"native_event,omitempty"`
+	ProcessPresent *bool               `json:"process_present,omitempty"`
+	Process        *ProcessIdentity    `json:"process,omitempty"`
+	Tmux           *TmuxContext        `json:"tmux,omitempty"`
+	Catalog        *CatalogMetadata    `json:"catalog,omitempty"`
+	Attributes     map[string]string   `json:"attributes,omitempty"`
+	RawPayload     json.RawMessage     `json:"raw_payload,omitempty"`
+	ObservedAt     time.Time           `json:"observed_at"`
 }
 
 type Filter struct {
 	Harness     Harness
-	State       State
+	Presence    Presence
+	Activity    Activity
 	TmuxSession string
-	ActiveOnly  bool
-	LiveOnly    bool
 }
 
 type Summary struct {
 	TmuxSessionID   string `json:"tmux_session_id,omitempty"`
 	TmuxSessionName string `json:"tmux_session_name,omitempty"`
-	// Total counts non-exited sessions; exited records are tracked separately.
-	Total   int `json:"total"`
-	Active  int `json:"active"`
-	Running int `json:"running"`
-	Waiting int `json:"waiting"`
-	Idle    int `json:"idle"`
-	Unknown int `json:"unknown"`
-	Exited  int `json:"exited"`
+	Total           int    `json:"total"`
+	Live            int    `json:"live"`
+	Gone            int    `json:"gone"`
+	PresenceUnknown int    `json:"presence_unknown"`
+	Running         int    `json:"running"`
+	Waiting         int    `json:"waiting"`
+	Idle            int    `json:"idle"`
+	ActivityUnknown int    `json:"activity_unknown"`
 }
 
-type SummaryOptions struct {
-	Filter Filter
-}
+type SummaryOptions struct{ Filter Filter }
 
 func NormalizeHarness(value string) (Harness, error) {
 	if id, ok := harnessmeta.Normalize(value); ok {
 		return Harness(id), nil
 	}
-
 	return "", fmt.Errorf("%w: %q", ErrUnknownHarness, value)
 }
 
-func NormalizeState(value string) (State, error) {
+func NormalizePresence(value string) (Presence, error) {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "":
 		return "", nil
-	case string(StateIdle), "done":
-		return StateIdle, nil
-	case string(StateRunning), "working", "active", "busy":
-		return StateRunning, nil
-	case string(StateWaiting), "blocked", "needs_input", "needs-input":
-		return StateWaiting, nil
-	case string(StateUnknown):
-		return StateUnknown, nil
-	case string(StateExited), "released", "ended":
-		return StateExited, nil
+	case string(PresenceLive):
+		return PresenceLive, nil
+	case string(PresenceGone):
+		return PresenceGone, nil
+	case string(PresenceUnknown):
+		return PresenceUnknown, nil
 	default:
-		return "", fmt.Errorf("%w: %q", ErrUnknownState, value)
+		return "", fmt.Errorf("%w: %q", ErrUnknownPresence, value)
 	}
 }
 
-func IsActive(state State) bool {
-	return state == StateRunning || state == StateWaiting
+func NormalizeActivity(value string) (Activity, error) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "":
+		return "", nil
+	case string(ActivityRunning):
+		return ActivityRunning, nil
+	case string(ActivityWaiting):
+		return ActivityWaiting, nil
+	case string(ActivityIdle):
+		return ActivityIdle, nil
+	case string(ActivityUnknown):
+		return ActivityUnknown, nil
+	default:
+		return "", fmt.Errorf("%w: %q", ErrUnknownActivity, value)
+	}
 }
 
-func HasOwner(session Session) bool {
-	return session.Tmux.PaneID != "" || session.PID > 0
+func NormalizeSource(value string) (ObservationSource, error) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case string(ObservationSourceNative):
+		return ObservationSourceNative, nil
+	case string(ObservationSourceProcess):
+		return ObservationSourceProcess, nil
+	case string(ObservationSourceTmux):
+		return ObservationSourceTmux, nil
+	case string(ObservationSourceCatalog):
+		return ObservationSourceCatalog, nil
+	default:
+		return "", fmt.Errorf("%w: %q", ErrUnknownSource, value)
+	}
 }
 
-func IsLive(session Session) bool {
-	return session.State != StateExited && HasOwner(session)
+func NormalizeEvidence(value string) (ObservationEvidence, error) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case string(ObservationEvidenceNativeEvent):
+		return ObservationEvidenceNativeEvent, nil
+	case string(ObservationEvidenceProcessPresence):
+		return ObservationEvidenceProcessPresence, nil
+	case string(ObservationEvidenceTmuxLocation):
+		return ObservationEvidenceTmuxLocation, nil
+	case string(ObservationEvidenceCatalogMetadata):
+		return ObservationEvidenceCatalogMetadata, nil
+	default:
+		return "", fmt.Errorf("%w: %q", ErrUnknownEvidence, value)
+	}
 }
 
-func sessionIDForReport(report Report) string {
-	parts := []string{string(report.Harness)}
+func NormalizeLifecycle(value string) (NativeLifecycle, error) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case string(NativeLifecycleStart):
+		return NativeLifecycleStart, nil
+	case string(NativeLifecycleResume):
+		return NativeLifecycleResume, nil
+	case string(NativeLifecycleEnd):
+		return NativeLifecycleEnd, nil
+	default:
+		return "", fmt.Errorf("%w: %q", ErrInvalidObservation, value)
+	}
+}
+
+//nolint:gocognit,cyclop // validation enforces source-specific evidence invariants in one place
+func ValidateObservation(observation Observation) error {
+	if observation.Harness == "" {
+		return fmt.Errorf("%w: harness is required", ErrInvalidObservation)
+	}
+	if observation.Source == "" || observation.Evidence == "" {
+		return fmt.Errorf("%w: source and evidence are required", ErrInvalidObservation)
+	}
+	if observation.ObservedAt.IsZero() {
+		return fmt.Errorf("%w: observed_at is required", ErrInvalidObservation)
+	}
+	if observation.Source != ObservationSourceNative && observation.Activity != nil {
+		return fmt.Errorf("%w: non-native activity is not accepted", ErrInvalidObservation)
+	}
+	pairOK := (observation.Source == ObservationSourceNative && observation.Evidence == ObservationEvidenceNativeEvent) ||
+		(observation.Source == ObservationSourceProcess && observation.Evidence == ObservationEvidenceProcessPresence) ||
+		(observation.Source == ObservationSourceTmux && observation.Evidence == ObservationEvidenceTmuxLocation) ||
+		(observation.Source == ObservationSourceCatalog && observation.Evidence == ObservationEvidenceCatalogMetadata)
+	if !pairOK {
+		return fmt.Errorf("%w: source %q does not accept evidence %q", ErrInvalidObservation, observation.Source, observation.Evidence)
+	}
+	if observation.Source == ObservationSourceNative {
+		if observation.Lifecycle != nil && *observation.Lifecycle == NativeLifecycleEnd && observation.Activity != nil {
+			return fmt.Errorf("%w: end cannot include activity", ErrInvalidObservation)
+		}
+		if observation.Lifecycle == nil && observation.Presence == nil && observation.Activity == nil && observation.NativeEvent == "" {
+			return fmt.Errorf("%w: native event or transition is required", ErrInvalidObservation)
+		}
+	}
+	if observation.Source == ObservationSourceProcess {
+		if observation.ProcessPresent == nil {
+			return fmt.Errorf("%w: process_present is required", ErrInvalidObservation)
+		}
+		if *observation.ProcessPresent {
+			if observation.Process == nil || !observation.Process.Complete() {
+				return fmt.Errorf("%w: complete process identity is required", ErrInvalidObservation)
+			}
+		}
+	}
+	if observation.Source == ObservationSourceTmux {
+		if observation.Tmux == nil {
+			return fmt.Errorf("%w: tmux context is required", ErrInvalidObservation)
+		}
+		if observation.Process == nil || !observation.Process.Complete() {
+			return fmt.Errorf("%w: complete process identity is required", ErrInvalidObservation)
+		}
+	}
+	if observation.Source == ObservationSourceCatalog && observation.Catalog == nil {
+		return fmt.Errorf("%w: catalog metadata is required", ErrInvalidObservation)
+	}
+	if observation.Identity.SessionID == "" && observation.Identity.SessionPath == "" && (observation.Process == nil || !observation.Process.Complete()) {
+		return fmt.Errorf("%w: identity is required", ErrInvalidObservation)
+	}
+	return nil
+}
+
+func sessionIDForObservation(observation Observation) string {
+	parts := []string{string(observation.Harness)}
 	switch {
-	case report.SessionID != "":
-		parts = append(parts, "id", report.SessionID)
-	case report.SessionPath != "":
-		parts = append(parts, "path", filepath.Clean(report.SessionPath))
-	case report.Tmux.PaneID != "":
-		parts = append(parts, "tmux-pane")
-		parts = append(parts, tmuxPaneIdentityParts(report.Tmux)...)
-	case report.PID > 0:
-		parts = append(parts, "pid", strconv.Itoa(report.PID))
+	case observation.Identity.SessionID != "":
+		parts = append(parts, "id", observation.Identity.SessionID)
+	case observation.Identity.SessionPath != "":
+		parts = append(parts, "path", filepath.Clean(observation.Identity.SessionPath))
+	case observation.Process != nil && observation.Process.Complete():
+		parts = append(parts, "process", strconv.Itoa(observation.Process.PID), observation.Process.StartIdentity)
 	default:
-		parts = append(parts, "fallback", report.CWD, report.ProjectRoot, report.TTY)
+		parts = append(parts, "event", observation.NativeEvent)
 	}
-
 	sum := sha256.Sum256([]byte(strings.Join(parts, "\x00")))
-	return string(report.Harness) + "-" + hex.EncodeToString(sum[:8])
-}
-
-func mergeReport(existing Session, report Report, observedAt time.Time, receivedAt time.Time, observedAtReliable bool) Session {
-	session := mergeBase(existing, report, receivedAt)
-	previousState := session.State
-	session.Harness = report.Harness
-	applyMutation := shouldApplyReportMutation(session, observedAt, observedAtReliable)
-
-	if shouldApplyReportState(session, report, applyMutation) {
-		session.State = report.State
-	}
-	if applyMutation {
-		session = mergeLifecycle(session, previousState, report, observedAt)
-		session = mergeIdentity(session, report)
-		session = mergeLocation(session, report)
-		session = mergeMetadata(session, report)
-		if observedAtReliable {
-			session.LastObservedAt = maxTime(session.LastObservedAt, observedAt)
-		}
-	}
-	session.UpdatedAt = maxTime(session.UpdatedAt, receivedAt)
-	session.LastSeenAt = maxTime(session.LastSeenAt, receivedAt)
-
-	return session
-}
-
-func mergeBase(existing Session, report Report, receivedAt time.Time) Session {
-	if existing.ID != "" {
-		return existing
-	}
-
-	existing.ID = sessionIDForReport(report)
-	existing.CreatedAt = receivedAt
-	existing.State = StateUnknown
-
-	return existing
-}
-
-func shouldApplyReportMutation(session Session, observedAt time.Time, observedAtReliable bool) bool {
-	if !observedAtReliable {
-		return false
-	}
-
-	lastObservedAt := session.LastObservedAt
-	if lastObservedAt.IsZero() && session.ID == "" {
-		return true
-	}
-	if lastObservedAt.IsZero() {
-		lastObservedAt = legacyLastObservedAt(session)
-	}
-	if lastObservedAt.IsZero() {
-		return true
-	}
-
-	return !observedAt.Before(lastObservedAt)
-}
-
-func shouldApplyReportState(session Session, report Report, applyMutation bool) bool {
-	if !applyMutation {
-		return false
-	}
-	if report.State == "" {
-		return false
-	}
-
-	return report.State != StateUnknown || session.State == "" || session.State == StateUnknown
-}
-
-func mergeLifecycle(session Session, previousState State, report Report, now time.Time) Session {
-	if session.StateChangedAt.IsZero() {
-		session.StateChangedAt = legacyStateChangedAt(session, now)
-	}
-	if session.State != previousState {
-		session.StateChangedAt = now
-	}
-
-	if report.Event != "" && !now.Before(session.LastEventAt) {
-		session.LastEvent = report.Event
-		session.LastEventAt = now
-	}
-
-	if session.State == StateExited {
-		if previousState != StateExited || session.EndedAt.IsZero() {
-			session.EndedAt = now
-		}
-	} else if previousState == StateExited {
-		session.EndedAt = time.Time{}
-	}
-
-	return session
-}
-
-func legacyStateChangedAt(session Session, now time.Time) time.Time {
-	switch {
-	case !session.UpdatedAt.IsZero():
-		return session.UpdatedAt
-	case !session.CreatedAt.IsZero():
-		return session.CreatedAt
-	default:
-		return now
-	}
-}
-
-func legacyLastObservedAt(session Session) time.Time {
-	return maxTime(session.LastEventAt, session.StateChangedAt)
-}
-
-func mergeIdentity(session Session, report Report) Session {
-	if report.SessionID != "" {
-		session.SessionID = report.SessionID
-	}
-	if report.SessionPath != "" {
-		session.SessionPath = report.SessionPath
-	}
-	if len(report.ResumeCommand) > 0 {
-		session.ResumeCommand = append([]string(nil), report.ResumeCommand...)
-	}
-
-	return session
-}
-
-func mergeLocation(session Session, report Report) Session {
-	if report.CWD != "" {
-		session.CWD = report.CWD
-	}
-	if report.ProjectRoot != "" {
-		session.ProjectRoot = report.ProjectRoot
-	}
-	if report.PID > 0 {
-		session.PID = report.PID
-	}
-	if report.ProcessStartTime != "" {
-		session.ProcessStartTime = report.ProcessStartTime
-	}
-	if report.PPID > 0 {
-		session.PPID = report.PPID
-	}
-	if report.TTY != "" {
-		session.TTY = report.TTY
-	}
-	if !report.Tmux.Empty() {
-		session.Tmux = report.Tmux
-	}
-
-	return session
-}
-
-func mergeMetadata(session Session, report Report) Session {
-	if report.Source != "" {
-		session.Source = report.Source
-	}
-	if report.Confidence != "" {
-		session.Confidence = report.Confidence
-	}
-	if len(report.Attributes) > 0 {
-		session.Attributes = mergeAttributes(session.Attributes, report.Attributes)
-	}
-	if len(report.RawPayload) > 0 {
-		session.RawPayload = append(json.RawMessage(nil), report.RawPayload...)
-	}
-
-	return session
-}
-
-func mergeAttributes(existing map[string]string, incoming map[string]string) map[string]string {
-	merged := make(map[string]string, len(existing)+len(incoming))
-	maps.Copy(merged, existing)
-	maps.Copy(merged, incoming)
-
-	return merged
+	return string(observation.Harness) + "-" + hex.EncodeToString(sum[:8])
 }
 
 func filterSessions(sessions []Session, filter Filter) []Session {
 	filtered := make([]Session, 0, len(sessions))
 	for _, session := range sessions {
-		if sessionMatchesFilter(session, filter) {
-			filtered = append(filtered, session)
+		if filter.Harness != "" && session.Harness != filter.Harness {
+			continue
 		}
+		if filter.Presence != "" && session.Presence != filter.Presence {
+			continue
+		}
+		if filter.Activity != "" && (session.Activity == nil || *session.Activity != filter.Activity) {
+			continue
+		}
+		if filter.TmuxSession != "" && session.Tmux.SessionName != filter.TmuxSession && session.Tmux.SessionID != filter.TmuxSession {
+			continue
+		}
+		filtered = append(filtered, session)
 	}
-
 	sortSessions(filtered)
-
 	return filtered
 }
 
-func sessionMatchesFilter(session Session, filter Filter) bool {
-	return matchesHarnessFilter(session, filter) &&
-		matchesStateFilter(session, filter) &&
-		matchesActiveFilter(session, filter) &&
-		matchesLiveFilter(session, filter) &&
-		matchesTmuxSessionFilter(session, filter)
-}
-
-func matchesHarnessFilter(session Session, filter Filter) bool {
-	return filter.Harness == "" || session.Harness == filter.Harness
-}
-
-func matchesStateFilter(session Session, filter Filter) bool {
-	return filter.State == "" || session.State == filter.State
-}
-
-func matchesActiveFilter(session Session, filter Filter) bool {
-	return !filter.ActiveOnly || IsActive(session.State)
-}
-
-func matchesLiveFilter(session Session, filter Filter) bool {
-	return !filter.LiveOnly || IsLive(session)
-}
-
-func matchesTmuxSessionFilter(session Session, filter Filter) bool {
-	return filter.TmuxSession == "" ||
-		session.Tmux.SessionName == filter.TmuxSession ||
-		session.Tmux.SessionID == filter.TmuxSession
-}
-
 func sortSessions(sessions []Session) {
-	sort.Slice(sessions, func(i int, j int) bool {
-		left := sessions[i]
-		right := sessions[j]
-
+	sort.Slice(sessions, func(i, j int) bool {
+		left, right := sessions[i], sessions[j]
 		if left.Tmux.SessionName != right.Tmux.SessionName {
 			return left.Tmux.SessionName < right.Tmux.SessionName
 		}
@@ -439,25 +426,22 @@ func sortSessions(sessions []Session) {
 		if left.ID != right.ID {
 			return left.ID < right.ID
 		}
-
 		return left.UpdatedAt.Before(right.UpdatedAt)
 	})
 }
 
-func compareNumericStrings(left string, right string) int {
+func compareNumericStrings(left, right string) int {
 	leftNumber, leftErr := strconv.Atoi(left)
 	rightNumber, rightErr := strconv.Atoi(right)
 	if leftErr == nil && rightErr == nil {
-		switch {
-		case leftNumber < rightNumber:
+		if leftNumber < rightNumber {
 			return -1
-		case leftNumber > rightNumber:
-			return 1
-		default:
-			return 0
 		}
+		if leftNumber > rightNumber {
+			return 1
+		}
+		return 0
 	}
-
 	return strings.Compare(left, right)
 }
 
@@ -468,6 +452,5 @@ func maxTime(values ...time.Time) time.Time {
 			latest = value
 		}
 	}
-
 	return latest
 }

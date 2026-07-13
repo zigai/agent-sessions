@@ -113,9 +113,9 @@ func (app *application) queueManagedHook(
 		return
 	}
 	now := time.Now().UTC()
-	report := result.Report
-	if report.ObservedAt.IsZero() {
-		report.ObservedAt = now
+	observation := result.Report
+	if observation.ObservedAt.IsZero() {
+		observation.ObservedAt = now
 	}
 	storePath := app.store().Path()
 	queue := reportqueue.New(storePath)
@@ -130,8 +130,8 @@ func (app *application) queueManagedHook(
 		CreatedAt:     now,
 		StorePath:     storePath,
 		Kind:          reportqueue.KindReport,
-		Report:        reportqueue.ReportFromRegistry(report),
-		RawPayloadSet: len(report.RawPayload) > 0,
+		Report:        reportqueue.ReportFromRegistry(observation),
+		RawPayloadSet: len(observation.RawPayload) > 0,
 		Stdin:         []byte(strings.TrimSpace(string(stdin))),
 		Runtime: reportqueue.RuntimeContext{
 			CWD:        defaultCWD(),
@@ -155,23 +155,17 @@ func (app *application) queueManagedHook(
 	app.kickQueueDrainer(ctx, storePath)
 }
 
-func reportManagedHook(
-	ctx context.Context,
-	store registry.Store,
-	result harnesspkg.HookResult,
-) error {
+func reportManagedHook(ctx context.Context, store registry.Store, result harnesspkg.HookResult) error {
 	if !result.ReportOK {
 		return nil
 	}
-
-	report := result.Report
+	observation := result.Report
 	if collected, err := tmuxctx.Current(ctx); err == nil {
-		report.Tmux = collected
+		observation.Tmux = &collected
 	}
-	if _, err := store.Report(ctx, report); err != nil {
-		return fmt.Errorf("reporting managed hook session: %w", err)
+	if _, err := store.Observe(ctx, observation); err != nil {
+		return fmt.Errorf("recording managed hook observation: %w", err)
 	}
-
 	return nil
 }
 

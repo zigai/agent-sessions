@@ -1,35 +1,17 @@
 "{{MANAGED_MARKER}}";
 "AGENT_SESSIONS_INTEGRATION_ID={{INTEGRATION_ID}}";
 "AGENT_SESSIONS_INTEGRATION_VERSION={{INTEGRATION_VERSION}}";
+"agent_sessions_integration_version={{INTEGRATION_VERSION}}";
 
 import { spawn } from "node:child_process";
 
 const agentSessionsBin = {{BINARY}};
 const source = {{SOURCE}};
-const disableSelfRefreshEnv = "AGENT_SESSIONS_DISABLE_KILO_SELF_REFRESH";
 
 let currentSessionId: string | undefined;
 let currentSessionPath: string | undefined;
 let currentCwd: string | undefined;
 let currentProjectRoot: string | undefined;
-let selfRefreshStarted = false;
-
-function selfRefresh(): void {
-  if (selfRefreshStarted || process.env[disableSelfRefreshEnv] === "1") {
-    return;
-  }
-  selfRefreshStarted = true;
-
-  try {
-    const child = spawn(agentSessionsBin, ["install-hooks", "kilo", "--binary", agentSessionsBin], {
-      detached: true,
-      stdio: "ignore",
-    });
-    child.unref();
-  } catch {
-    // Refresh is best-effort. Reporting still works with the loaded plugin.
-  }
-}
 
 function firstString(...values: unknown[]): string | undefined {
   for (const value of values) {
@@ -59,21 +41,13 @@ function normalizeStatus(value: unknown): string | undefined {
   if (typeof value !== "string") {
     return undefined;
   }
-
   const status = value.toLowerCase();
-  if (["running", "busy", "streaming", "working", "active"].includes(status)) {
+  if (["running", "busy", "retry"].includes(status)) {
     return "running";
   }
-  if (["waiting", "blocked", "permission", "prompt"].includes(status)) {
-    return "waiting";
-  }
-  if (["idle", "ready", "done", "complete", "completed"].includes(status)) {
+  if (status === "idle") {
     return "idle";
   }
-  if (["deleted", "exited", "closed"].includes(status)) {
-    return "exited";
-  }
-
   return undefined;
 }
 
@@ -81,26 +55,16 @@ function stateForEvent(event: any): string | undefined {
   switch (event?.type) {
     case "session.created":
       return "idle";
-    case "session.idle":
-      return "idle";
-    case "session.deleted":
-      return "exited";
-    case "session.error":
-      return "idle";
     case "permission.asked":
       return "waiting";
     case "permission.replied":
       return "running";
-    case "tool.execute.before":
-    case "tool.execute.after":
-      return "running";
     case "session.status":
-    case "session.updated":
       return normalizeStatus(firstPathString(event, [
         ["status"],
         ["properties", "status"],
         ["session", "status"],
-      ])) ?? "unknown";
+      ]));
     default:
       return undefined;
   }
@@ -154,8 +118,9 @@ function report(state: string, ctx: any, event: any): void {
   const observedAt = new Date().toISOString();
   refreshSessionRef(ctx, event);
 
-  const args = ["report", "--harness", "kilo", "--state", state, "--source", source, "--observed-at", observedAt, "--queue", "--quiet"];
+  const args = ["report", "kilo", "--activity", state, "--observed-at", observedAt, "--queue", "--quiet"];
   addEvent(args, event?.type);
+  args.push("--attribute", `agent_sessions_integration_version={{INTEGRATION_VERSION}}`);
   if (currentSessionId) {
     args.push("--session-id", currentSessionId);
   }
@@ -188,8 +153,6 @@ function report(state: string, ctx: any, event: any): void {
   }
 }
 
-const AgentSessionsPlugin = async (ctx: any) => {
-  selfRefresh();
 
   return {
     event: async ({ event }: any) => {
@@ -199,18 +162,6 @@ const AgentSessionsPlugin = async (ctx: any) => {
       }
 
       report(state, ctx, event);
-    },
-    "permission.asked": async (input: any) => {
-      report("waiting", ctx, { ...input, type: "permission.asked" });
-    },
-    "permission.replied": async (input: any) => {
-      report("running", ctx, { ...input, type: "permission.replied" });
-    },
-    "tool.execute.before": async (input: any) => {
-      report("running", ctx, { ...input, type: "tool.execute.before" });
-    },
-    "tool.execute.after": async (input: any) => {
-      report("running", ctx, { ...input, type: "tool.execute.after" });
     },
   };
 };

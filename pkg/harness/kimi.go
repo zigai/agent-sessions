@@ -75,55 +75,49 @@ func kimiCodeHookBlock(binary string) string {
 		{
 			event:   HookEventSessionStart,
 			matcher: "startup|resume",
-			command: SelfRefreshCommand(binary, registry.HarnessKimiCode, true),
-			timeout: HookTimeoutSeconds,
-		},
-		{
-			event:   HookEventSessionStart,
-			matcher: "startup|resume",
-			command: kimiCodeHookCommand(binary, registry.StateIdle, HookEventSessionStart),
+			command: kimiCodeHookCommand(binary, registry.ActivityIdle, HookEventSessionStart),
 			timeout: HookTimeoutSeconds,
 		},
 		{
 			event:   HookEventUserPromptSubmit,
 			matcher: "",
-			command: kimiCodeHookCommand(binary, registry.StateRunning, HookEventUserPromptSubmit),
+			command: kimiCodeHookCommand(binary, registry.ActivityRunning, HookEventUserPromptSubmit),
 			timeout: HookTimeoutSeconds,
 		},
 		{
 			event:   "PermissionRequest",
 			matcher: "",
-			command: kimiCodeHookCommand(binary, registry.StateWaiting, "PermissionRequest"),
+			command: kimiCodeHookCommand(binary, registry.ActivityWaiting, "PermissionRequest"),
 			timeout: HookTimeoutSeconds,
 		},
 		{
 			event:   "PermissionResult",
 			matcher: "",
-			command: kimiCodeHookCommand(binary, registry.StateRunning, "PermissionResult"),
+			command: kimiCodeHookCommand(binary, registry.ActivityRunning, "PermissionResult"),
 			timeout: HookTimeoutSeconds,
 		},
 		{
 			event:   HookEventStop,
 			matcher: "",
-			command: kimiCodeHookCommand(binary, registry.StateIdle, HookEventStop),
+			command: kimiCodeHookCommand(binary, registry.ActivityIdle, HookEventStop),
 			timeout: HookTimeoutSeconds,
 		},
 		{
 			event:   "StopFailure",
 			matcher: "",
-			command: kimiCodeHookCommand(binary, registry.StateIdle, "StopFailure"),
+			command: kimiCodeHookCommand(binary, registry.ActivityIdle, "StopFailure"),
 			timeout: HookTimeoutSeconds,
 		},
 		{
 			event:   "Interrupt",
 			matcher: "",
-			command: kimiCodeHookCommand(binary, registry.StateIdle, "Interrupt"),
+			command: kimiCodeHookCommand(binary, registry.ActivityIdle, "Interrupt"),
 			timeout: HookTimeoutSeconds,
 		},
 		{
 			event:   "SessionEnd",
 			matcher: "",
-			command: kimiCodeHookCommand(binary, registry.StateExited, "SessionEnd"),
+			command: kimiCodeHookCommand(binary, registry.PresenceGone, "SessionEnd"),
 			timeout: HookTimeoutSeconds,
 		},
 	}
@@ -159,8 +153,8 @@ func kimiCodeHookBlock(binary string) string {
 	return builder.String()
 }
 
-func kimiCodeHookCommand(binary string, state registry.State, event string) string {
-	return ReportHookCommand(binary, registry.HarnessKimiCode, state, event, kimiCodeIntegrationSource)
+func kimiCodeHookCommand(binary string, transition any, event string) string {
+	return ReportHookCommand(binary, registry.HarnessKimiCode, transition, event, kimiCodeIntegrationSource)
 }
 
 func kimiCodePayloadDefaults(payload map[string]any) PayloadDefaults {

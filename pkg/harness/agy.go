@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/zigai/agent-sessions/pkg/registry"
 )
@@ -21,9 +20,8 @@ const (
 	agyImportSource                = "antigravity"
 	agyImportComponent             = "hooks"
 	agyIntegrationID               = "agy"
-	agyIntegrationVersion          = 2
 	agyHookSource                  = "agy-hook"
-	agyHookAdditionalAttributeKeys = 4
+	agyHookAdditionalAttributeKeys = 3
 )
 
 type agyHarness struct {
@@ -139,9 +137,8 @@ func agyMarkerContent() string {
 	return strings.Join([]string{
 		ManagedMarker,
 		"AGENT_SESSIONS_INTEGRATION_ID=" + agyIntegrationID,
-		"AGENT_SESSIONS_INTEGRATION_VERSION=" + strconv.Itoa(agyIntegrationVersion),
+		"AGENT_SESSIONS_INTEGRATION_VERSION=" + strconv.Itoa(IntegrationVersion),
 		"AGENT_SESSIONS_SOURCE=" + agyHookSource,
-		"",
 	}, "\n")
 }
 
@@ -150,10 +147,10 @@ func agyConfigDir() string {
 		return value
 	}
 	if home := strings.TrimSpace(os.Getenv("HOME")); home != "" {
-		return filepath.Join(home, ".gemini", "config")
+		return filepath.Join(home, ".gemini", "antigravity-cli")
 	}
 
-	return filepath.Join(".gemini", "config")
+	return filepath.Join(".gemini", "antigravity-cli")
 }
 
 func agyPayloadDefaults(payload map[string]any) PayloadDefaults {
@@ -192,43 +189,38 @@ func agyHandleHook(invocation HookInvocation) HookResult {
 	}
 }
 
-func agyHookReport(invocation HookInvocation) (registry.Report, bool) {
-	state := agyStateForHook(invocation.Event, invocation.Payload, invocation.ParentArgs)
-	if state == "" {
-		var report registry.Report
-
-		return report, false
+func agyHookReport(invocation HookInvocation) (registry.Observation, bool) {
+	activity := agyActivityForHook(invocation.Event, invocation.Payload)
+	if activity == nil {
+		var observation registry.Observation
+		return observation, false
 	}
 
 	defaults := agyPayloadDefaults(invocation.Payload)
 	if defaults.SessionID == "" && defaults.SessionPath == "" {
-		var report registry.Report
-
-		return report, false
+		var observation registry.Observation
+		return observation, false
 	}
 
-	var tmux registry.TmuxContext
-	var observedAt time.Time
-
-	return registry.Report{
-		Harness:          registry.HarnessAgy,
-		State:            state,
-		SessionID:        defaults.SessionID,
-		SessionPath:      defaults.SessionPath,
-		ResumeCommand:    agyResumeCommand(defaults.SessionID),
-		CWD:              defaults.CWD,
-		ProjectRoot:      defaults.ProjectRoot,
-		PID:              0,
-		ProcessStartTime: "",
-		PPID:             0,
-		TTY:              "",
-		Tmux:             tmux,
-		Source:           agyHookSource,
-		Confidence:       "hook",
-		Event:            invocation.Event,
-		Attributes:       agyHookAttributes(defaults.Attributes, invocation.Event, state, invocation.ParentArgs),
-		RawPayload:       invocation.RawPayload,
-		ObservedAt:       observedAt,
+	return registry.Observation{ //nolint:exhaustruct // hook reports only native activity and catalog resume metadata
+		Source:   registry.ObservationSourceNative,
+		Evidence: registry.ObservationEvidenceNativeEvent,
+		Harness:  registry.HarnessAgy,
+		Identity: registry.ObservationIdentity{
+			SessionID:   defaults.SessionID,
+			SessionPath: defaults.SessionPath,
+		},
+		Activity:    activity,
+		NativeEvent: invocation.Event,
+		Catalog: &registry.CatalogMetadata{
+			ResumeCommand: agyResumeCommand(defaults.SessionID),
+			CWD:           defaults.CWD,
+			ProjectRoot:   defaults.ProjectRoot,
+			ProcessPID:    0,
+			Current:       false,
+		},
+		Attributes: agyHookAttributes(defaults.Attributes, invocation.Event),
+		RawPayload: invocation.RawPayload,
 	}, true
 }
 
@@ -236,39 +228,35 @@ func agyResumeCommand(sessionID string) []string {
 	if sessionID == "" {
 		return nil
 	}
-
 	return []string{agyCommand, "--conversation", sessionID}
 }
 
-func agyStateForHook(event string, payload map[string]any, parentArgs []string) registry.State {
+func agyActivityForHook(event string, payload map[string]any) *registry.Activity {
+	var activity registry.Activity
 	switch event {
 	case "PreInvocation", "PostInvocation":
-		return registry.StateRunning
+		activity = registry.ActivityRunning
 	case HookEventPreToolUse:
 		if isAgyInputWaitingTool(payload) {
-			return registry.StateWaiting
+			activity = registry.ActivityWaiting
+		} else {
+			activity = registry.ActivityRunning
 		}
-
-		return registry.StateRunning
 	case "PostToolUse":
 		if _, ok := payload["toolCall"].(map[string]any); !ok {
-			return ""
+			return nil
 		}
-
-		return registry.StateRunning
+		activity = registry.ActivityRunning
 	case "Stop":
 		if payloadBool(payload, "fullyIdle", "fully_idle") {
-			if agyArgsIndicateHeadless(parentArgs) {
-				return registry.StateExited
-			}
-
-			return registry.StateIdle
+			activity = registry.ActivityIdle
+		} else {
+			activity = registry.ActivityRunning
 		}
-
-		return registry.StateRunning
 	default:
-		return ""
+		return nil
 	}
+	return &activity
 }
 
 func agyHookResponse(event string) map[string]any {
@@ -282,23 +270,14 @@ func agyHookResponse(event string) map[string]any {
 	}
 }
 
-func agyHookAttributes(
-	defaultAttributes map[string]string,
-	event string,
-	state registry.State,
-	parentArgs []string,
-) map[string]string {
+func agyHookAttributes(defaultAttributes map[string]string, event string) map[string]string {
 	attributes := make(map[string]string, len(defaultAttributes)+agyHookAdditionalAttributeKeys)
 	maps.Copy(attributes, defaultAttributes)
 	if event != "" {
 		attributes["agy_hook_event"] = event
 	}
-	if state == registry.StateExited && agyArgsIndicateHeadless(parentArgs) {
-		attributes["agy_headless"] = "true"
-		attributes["agy_stop_state_override"] = "headless-parent"
-	}
 	attributes["agent_sessions_integration"] = agyHookSource
-
+	attributes["agent_sessions_integration_version"] = strconv.Itoa(IntegrationVersion)
 	return attributes
 }
 
@@ -323,10 +302,6 @@ func agyToolName(payload map[string]any) string {
 	}
 
 	return strings.TrimSpace(name)
-}
-
-func agyArgsIndicateHeadless(args []string) bool {
-	return argsContainHeadlessPromptFlag(args, "--print", "--prompt")
 }
 
 func nestedString(payload map[string]any, path ...string) string {

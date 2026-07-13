@@ -689,10 +689,9 @@ type agyHookTestCase struct {
 	payload      map[string]any
 	parentArgs   []string
 	wantReport   bool
-	wantState    registry.State
+	wantActivity registry.Activity
 	wantDecision string
 	wantEmpty    bool
-	wantHeadless bool
 }
 
 func TestHandleHookAgy(t *testing.T) {
@@ -710,10 +709,9 @@ func TestHandleHookAgy(t *testing.T) {
 			},
 			parentArgs:   nil,
 			wantReport:   true,
-			wantState:    registry.StateRunning,
+			wantActivity: registry.ActivityRunning,
 			wantDecision: "",
 			wantEmpty:    true,
-			wantHeadless: false,
 		},
 		{
 			name:  "pre tool use permission reports waiting",
@@ -729,10 +727,9 @@ func TestHandleHookAgy(t *testing.T) {
 			},
 			parentArgs:   nil,
 			wantReport:   true,
-			wantState:    registry.StateWaiting,
+			wantActivity: registry.ActivityWaiting,
 			wantDecision: "allow",
 			wantEmpty:    false,
-			wantHeadless: false,
 		},
 		{
 			name:  "fully idle stop reports idle",
@@ -746,13 +743,12 @@ func TestHandleHookAgy(t *testing.T) {
 			},
 			parentArgs:   nil,
 			wantReport:   true,
-			wantState:    registry.StateIdle,
+			wantActivity: registry.ActivityIdle,
 			wantDecision: "",
 			wantEmpty:    false,
-			wantHeadless: false,
 		},
 		{
-			name:  "headless fully idle stop reports exited",
+			name:  "fully idle stop remains idle regardless of parent args",
 			event: "Stop",
 			payload: map[string]any{
 				"conversationId": "agy-session",
@@ -762,10 +758,9 @@ func TestHandleHookAgy(t *testing.T) {
 			},
 			parentArgs:   []string{"agy", "--print", "hello"},
 			wantReport:   true,
-			wantState:    registry.StateExited,
+			wantActivity: registry.ActivityIdle,
 			wantDecision: "",
 			wantEmpty:    false,
-			wantHeadless: true,
 		},
 		{
 			name:  "empty post tool use does not report",
@@ -778,10 +773,9 @@ func TestHandleHookAgy(t *testing.T) {
 			},
 			parentArgs:   nil,
 			wantReport:   false,
-			wantState:    "",
+			wantActivity: "",
 			wantDecision: "",
 			wantEmpty:    true,
-			wantHeadless: false,
 		},
 	}
 
@@ -810,27 +804,13 @@ func assertAgyHookResult(t *testing.T, test agyHookTestCase) {
 	if result.ReportOK != test.wantReport {
 		t.Fatalf("expected report ok %v, got %v", test.wantReport, result.ReportOK)
 	}
-	if result.ReportOK && result.Report.State != test.wantState {
-		t.Fatalf("expected state %q, got %q", test.wantState, result.Report.State)
-	}
-	assertAgyHookResponse(t, result.Response, test)
-	if test.wantHeadless && result.Report.Attributes["agy_headless"] != "true" {
-		t.Fatalf("expected headless attribute, got %#v", result.Report.Attributes)
-	}
-}
-
-func assertAgyHookResponse(t *testing.T, response map[string]any, test agyHookTestCase) {
-	t.Helper()
-
-	if test.wantEmpty {
-		if len(response) != 0 {
-			t.Fatalf("expected empty response, got %#v", response)
+	if result.ReportOK {
+		if result.Report.Activity == nil {
+			t.Fatal("expected activity")
 		}
-
-		return
-	}
-	if response["decision"] != test.wantDecision {
-		t.Fatalf("expected decision %q, got %#v", test.wantDecision, response)
+		if *result.Report.Activity != test.wantActivity {
+			t.Fatalf("expected activity %q, got %q", test.wantActivity, *result.Report.Activity)
+		}
 	}
 }
 

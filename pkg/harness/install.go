@@ -148,54 +148,72 @@ type ImportManifestInstallPlan struct {
 	Components []string
 }
 
-func ReportHookCommand(binary string, harness registry.Harness, state registry.State, event string, source string) string {
-	return reportHookCommand(binary, harness, state, event, source, "--raw-stdin")
+func ReportHookCommand(binary string, harness registry.Harness, transition any, event string, source string) string {
+	return reportHookCommand(binary, harness, transition, event, source, "--raw-stdin")
 }
 
 func RawStdinDefaultsReportHookCommand(
 	binary string,
 	harness registry.Harness,
-	state registry.State,
+	transition any,
 	event string,
 	source string,
 ) string {
-	return reportHookCommand(binary, harness, state, event, source, "--raw-stdin-defaults-only")
+	return reportHookCommand(binary, harness, transition, event, source, "--raw-stdin-defaults-only")
 }
 
 func reportHookCommand(
 	binary string,
 	harness registry.Harness,
-	state registry.State,
+	transition any,
 	event string,
 	source string,
 	stdinFlag string,
 ) string {
-	return strings.Join([]string{
+	parts := []string{
 		ShellQuote(binary),
 		"report",
-		"--harness", ShellQuote(string(harness)),
-		"--state", ShellQuote(string(state)),
-		"--event", ShellQuote(event),
-		"--source", ShellQuote(source),
-		"--attribute", ShellQuote("agent_sessions_integration=" + source),
+		ShellQuote(string(harness)),
+	}
+	switch value := transition.(type) {
+	case registry.Presence:
+		if value != "" {
+			parts = append(parts, "--presence", ShellQuote(string(value)))
+		}
+	case registry.Activity:
+		if value != "" {
+			parts = append(parts, "--activity", ShellQuote(string(value)))
+		}
+	case string:
+		if value != "" {
+			parts = append(parts, "--activity", ShellQuote(value))
+		}
+	}
+	if event != "" {
+		parts = append(parts, "--event", ShellQuote(event))
+	}
+	parts = append(
+		parts,
+		"--attribute", ShellQuote("agent_sessions_integration_version="+strconv.Itoa(IntegrationVersion)),
+		"--attribute", ShellQuote("agent_sessions_integration="+source),
 		"--queue",
 		stdinFlag,
 		"--quiet",
-	}, " ")
+	)
+	return strings.Join(parts, " ")
 }
 
-func SelfRefreshCommand(binary string, harness registry.Harness, stdinNull bool) string {
-	parts := []string{
-		ShellQuote(binary),
-		"install-hooks", ShellQuote(string(harness)),
-		"--binary", ShellQuote(binary),
+func stringTransition(value any) string {
+	switch transition := value.(type) {
+	case registry.Activity:
+		return string(transition)
+	case registry.Presence:
+		return string(transition)
+	case string:
+		return transition
+	default:
+		return ""
 	}
-	if stdinNull {
-		parts = append(parts, "</dev/null")
-	}
-	parts = append(parts, ">/dev/null", "2>&1", "&")
-
-	return strings.Join(parts, " ")
 }
 
 func ShellQuote(value string) string {

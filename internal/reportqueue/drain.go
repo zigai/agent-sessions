@@ -124,11 +124,12 @@ func newDrainResult() DrainResult {
 
 func (q Queue) drainLocked(ctx context.Context, config drainConfig) (DrainResult, error) {
 	result := newDrainResult()
-	recovered, err := q.recoverStaleProcessing(config.now, config.leaseTimeout)
+	recovered, dead, err := q.recoverStaleProcessing(config.now, config.leaseTimeout)
 	if err != nil {
 		return result, err
 	}
 	result.Recovered = recovered
+	result.Dead = dead
 
 	for !config.maxReached(result.Processed) {
 		workDone, err := q.drainPendingPass(ctx, config, &result)
@@ -221,18 +222,20 @@ func (c drainConfig) maxReached(processed int) bool {
 	return c.maxItems > 0 && processed >= c.maxItems
 }
 
-func (q Queue) recoverStaleProcessing(now time.Time, leaseTimeout time.Duration) (int, error) {
+func (q Queue) recoverStaleProcessing(now time.Time, leaseTimeout time.Duration) (int, int, error) {
 	entries, err := filepath.Glob(filepath.Join(q.processingDir(), "*.json"))
 	if err != nil {
-		return 0, fmt.Errorf("listing processing queue: %w", err)
+		return 0, 0, fmt.Errorf("listing processing queue: %w", err)
 	}
 	recovered := 0
+	dead := 0
 	for _, path := range entries {
 		envelope, err := readEnvelope(path)
 		if err != nil {
 			if moveErr := q.moveUnreadableToDead(path, err); moveErr != nil {
-				return recovered, moveErr
+				return recovered, dead, moveErr
 			}
+			dead++
 			continue
 		}
 		if !processingLeaseExpired(envelope, now, leaseTimeout) {
@@ -242,15 +245,15 @@ func (q Queue) recoverStaleProcessing(now time.Time, leaseTimeout time.Duration)
 		envelope.WorkerPID = 0
 		dest := filepath.Join(q.pendingDir(), filepath.Base(path))
 		if err := writeJSONAtomic(path, envelope); err != nil {
-			return recovered, err
+			return recovered, dead, err
 		}
 		if err := renameDurable(path, dest); err != nil {
-			return recovered, err
+			return recovered, dead, err
 		}
 		recovered++
 	}
 
-	return recovered, nil
+	return recovered, dead, nil
 }
 
 func processingLeaseExpired(envelope Envelope, now time.Time, leaseTimeout time.Duration) bool {

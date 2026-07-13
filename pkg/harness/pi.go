@@ -12,7 +12,6 @@ import (
 const (
 	piExtensionName       = "agent-sessions-state.ts"
 	piIntegrationID       = "pi"
-	piIntegrationVersion  = 1
 	piIntegrationSourceID = "pi-extension"
 	piSessionFlag         = "--session"
 )
@@ -45,7 +44,7 @@ func (piHarness) InstallPlan(binary string) InstallPlan {
 			Content: renderScriptTemplate(
 				piExtensionTemplate,
 				piIntegrationID,
-				piIntegrationVersion,
+				IntegrationVersion,
 				binary,
 				piIntegrationSourceID,
 			),

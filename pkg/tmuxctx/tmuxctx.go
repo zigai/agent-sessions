@@ -15,7 +15,7 @@ import (
 const (
 	fieldSeparator            = "\t"
 	escapedFieldPrefix        = "tmuxctx:"
-	listPaneFieldCount        = 11
+	listPaneFieldCount        = 10
 	singleQuoteDelimiterWidth = 2
 )
 
@@ -31,12 +31,36 @@ var (
 
 type Pane struct {
 	Tmux           registry.TmuxContext
-	CurrentCommand string
+	ServerIdentity string
+	PanePID        int
+	PaneTTY        string
 }
 
 type Env struct {
 	TMUX     string
 	TMUXPane string
+}
+
+// CommandRunner executes tmux with an explicit argv. Implementations must not
+// invoke a shell.
+type CommandRunner func(context.Context, Env, ...string) (string, error)
+
+// ServerProcess is the current-user process snapshot used to discover custom
+// tmux servers.
+type ServerProcess struct {
+	PID  int
+	Args []string
+}
+
+// ServerProcessLister supplies current-user tmux server processes.
+type ServerProcessLister func(context.Context) ([]ServerProcess, error)
+
+// ListOptions controls pane discovery and is primarily useful for observer
+// injection and deterministic tests.
+type ListOptions struct {
+	Env             Env
+	Run             CommandRunner
+	ServerProcesses ServerProcessLister
 }
 
 func Current(ctx context.Context) (registry.TmuxContext, error) {
@@ -101,19 +125,57 @@ func currentDisplayMessageArgs(format string, paneID string) []string {
 }
 
 func ListPanes(ctx context.Context) ([]Pane, error) {
-	format := listPanesFormat()
-	output, err := runTmux(ctx, "list-panes", "-a", "-F", format)
-	if err != nil {
-		return nil, err
+	env := Env{TMUX: os.Getenv("TMUX"), TMUXPane: os.Getenv("TMUX_PANE")}
+	return ListPanesWithEnv(ctx, env)
+}
+
+func ListPanesWithEnv(ctx context.Context, env Env) ([]Pane, error) {
+	return ListPanesWithOptions(ctx, ListOptions{Env: env, Run: nil, ServerProcesses: nil})
+}
+
+func ListPanesWithOptions(ctx context.Context, options ListOptions) ([]Pane, error) {
+	env := options.Env
+	if options.Run == nil {
+		options.Run = runTmuxWithEnv
+	}
+	if options.ServerProcesses == nil {
+		options.ServerProcesses = listCurrentUserTmuxServers
 	}
 
-	panes, err := ParseListPanes(output)
+	servers, err := discoverServers(ctx, env, options.ServerProcesses)
 	if err != nil {
 		return nil, err
 	}
-	serverSocket := tmuxServerSocketFromEnv()
-	for index := range panes {
-		panes[index].Tmux.ServerSocket = serverSocket
+	if len(servers) == 0 {
+		servers = []serverSpec{{Identity: "default", Args: nil}}
+	}
+
+	var panes []Pane
+	var firstErr error
+	for _, server := range servers {
+		args := append([]string{}, server.Args...)
+		args = append(args, "list-panes", "-a", "-F", listPanesFormat())
+		output, runErr := options.Run(ctx, env, args...)
+		if runErr != nil {
+			if firstErr == nil {
+				firstErr = runErr
+			}
+			continue
+		}
+		serverPanes, parseErr := ParseListPanes(output)
+		if parseErr != nil {
+			return nil, parseErr
+		}
+		for index := range serverPanes {
+			serverPanes[index].ServerIdentity = server.Identity
+			serverPanes[index].Tmux.ServerSocket = server.Identity
+			serverPanes[index].PanePID = serverPanes[index].Tmux.PanePID
+			serverPanes[index].PaneTTY = serverPanes[index].Tmux.PaneTTY
+		}
+		panes = append(panes, serverPanes...)
+	}
+	if len(panes) == 0 && firstErr != nil {
+		return nil, firstErr
 	}
 
 	return panes, nil
@@ -147,7 +209,6 @@ func listPanesFormat() string {
 		"pane_current_path",
 		"pane_pid",
 		"pane_tty",
-		"pane_current_command",
 	})
 }
 
@@ -164,7 +225,7 @@ func SendInterrupt(ctx context.Context, paneID string) error {
 }
 
 func ParseCurrent(output string) (registry.TmuxContext, error) {
-	const expectedFields = listPaneFieldCount
+	const expectedFields = 11
 	fields, err := parseTmuxFields(output, expectedFields)
 	if err != nil {
 		return registry.TmuxContext{}, err
@@ -208,16 +269,19 @@ func ParseListPanes(output string) ([]Pane, error) {
 }
 
 func panesFromFields(fields []string) ([]Pane, error) {
-	const expectedFields = listPaneFieldCount
-	if len(fields)%expectedFields != 0 {
-		return nil, invalidFieldCountError(expectedFields, len(fields))
+	fieldCount := listPaneFieldCount
+	if len(fields)%fieldCount != 0 {
+		if len(fields)%11 != 0 {
+			return nil, invalidFieldCountError(fieldCount, len(fields))
+		}
+		fieldCount = 11
 	}
 
-	panes := make([]Pane, 0, len(fields)/expectedFields)
-	for offset := 0; offset < len(fields); offset += expectedFields {
-		paneFields := fields[offset : offset+expectedFields]
-
-		panes = append(panes, Pane{
+	panes := make([]Pane, 0, len(fields)/fieldCount)
+	for row := range len(fields) / fieldCount {
+		offset := row * fieldCount
+		paneFields := fields[offset : offset+fieldCount]
+		pane := Pane{
 			Tmux: registry.TmuxContext{
 				Inside:          true,
 				ServerSocket:    "",
@@ -233,8 +297,13 @@ func panesFromFields(fields []string) ([]Pane, error) {
 				PaneTTY:         paneFields[9],
 				ClientTTY:       "",
 			},
-			CurrentCommand: paneFields[10],
-		})
+			ServerIdentity: "",
+			PanePID:        0,
+			PaneTTY:        "",
+		}
+		pane.PanePID = pane.Tmux.PanePID
+		pane.PaneTTY = pane.Tmux.PaneTTY
+		panes = append(panes, pane)
 	}
 
 	return panes, nil
@@ -247,11 +316,20 @@ func parseLegacyListPanes(output string) ([]Pane, error) {
 	}
 
 	fields := make([]string, 0, len(lines)*listPaneFieldCount)
-	const expectedFields = listPaneFieldCount
 	for _, line := range lines {
-		lineFields := splitLegacyFields(line, expectedFields)
-		if len(lineFields) != expectedFields {
-			return nil, invalidFieldCountError(expectedFields, len(lineFields))
+		raw := strings.Split(line, fieldSeparator)
+		lineFields := raw
+		if len(raw) == 11 && parsePositiveInt(raw[9]) > 0 {
+			lineFields = splitLegacyFields(line, listPaneFieldCount)
+		}
+		if len(raw) != listPaneFieldCount && len(raw) != 11 {
+			lineFields = splitLegacyFields(line, listPaneFieldCount)
+		}
+		if len(lineFields) == 11 && parsePositiveInt(lineFields[9]) == 0 {
+			lineFields = lineFields[:10]
+		}
+		if len(lineFields) != listPaneFieldCount {
+			return nil, invalidFieldCountError(listPaneFieldCount, len(lineFields))
 		}
 		fields = append(fields, lineFields...)
 	}
@@ -266,10 +344,6 @@ func tmuxFormat(fields []string) string {
 	}
 
 	return strings.Join(parts, " ")
-}
-
-func tmuxServerSocketFromEnv() string {
-	return tmuxServerSocket(os.Getenv("TMUX"))
 }
 
 func tmuxServerSocket(tmuxEnv string) string {

@@ -317,30 +317,32 @@ func upsertManagedTextBlock(current string, startMarker string, endMarker string
 }
 
 func removeManagedTextBlock(current string, startMarker string, endMarker string) string {
-	start := strings.Index(current, startMarker)
-	if start < 0 {
-		return current
-	}
+	for {
+		start := strings.Index(current, startMarker)
+		if start < 0 {
+			return current
+		}
 
-	endOffset := strings.Index(current[start:], endMarker)
-	if endOffset < 0 {
-		return current
-	}
+		endOffset := strings.Index(current[start:], endMarker)
+		if endOffset < 0 {
+			return current
+		}
 
-	end := start + endOffset + len(endMarker)
-	for end < len(current) && (current[end] == '\r' || current[end] == '\n') {
-		end++
-	}
+		end := start + endOffset + len(endMarker)
+		for end < len(current) && (current[end] == '\r' || current[end] == '\n') {
+			end++
+		}
 
-	before := strings.TrimRight(current[:start], " \t\r\n")
-	after := strings.TrimLeft(current[end:], "\r\n")
-	switch {
-	case before == "":
-		return after
-	case after == "":
-		return before
-	default:
-		return before + "\n\n" + after
+		before := strings.TrimRight(current[:start], " \t\r\n")
+		after := strings.TrimLeft(current[end:], "\r\n")
+		switch {
+		case before == "":
+			current = after
+		case after == "":
+			current = before
+		default:
+			current = before + "\n\n" + after
+		}
 	}
 }
 
@@ -390,24 +392,32 @@ func installRenderedFilesPlan(
 
 	label := installLabel(plan.Label, harness, "artifacts")
 	configLabel := installLabel(plan.ConfigLabel, harness, "artifacts")
-
 	changed, needsUpdate, err := renderedFilesNeedUpdate(plan.Dir, files, options.Force)
 	if err != nil {
 		return Result{}, err
 	}
+	stale, err := staleManagedRenderedFiles(plan.Dir, files)
+	if err != nil {
+		return Result{}, err
+	}
+	changed = changed || len(stale) > 0
 	if changed && !options.DryRun {
 		for name, content := range files {
 			path := filepath.Join(plan.Dir, name)
-			err := writeInstallFile(
+			if err := writeInstallFile(
 				path,
 				[]byte(content),
 				needsUpdate[name],
 				false,
 				"creating "+configLabel+" directory",
 				"writing "+label,
-			)
-			if err != nil {
+			); err != nil {
 				return Result{}, err
+			}
+		}
+		for _, path := range stale {
+			if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+				return Result{}, fmt.Errorf("removing stale managed artifact %s: %w", path, err)
 			}
 		}
 	}
@@ -492,6 +502,7 @@ func renderedFilesSnippet(files map[string]string, snippetOrder []string) string
 	return strings.Join(parts, "\n")
 }
 
+//nolint:cyclop // plugin installation coordinates staged files, manifests, rollback, and ownership
 func installPluginDirectory(
 	options Options,
 	harness registry.Harness,
@@ -516,11 +527,24 @@ func installPluginDirectory(
 	if err != nil {
 		return Result{}, err
 	}
-	changed := pluginChanged || manifestChanged
+
+	legacyCleanup := false
+	if harness == registry.HarnessAgy {
+		legacyCleanup, err = legacyAgyNeedsCleanup(plan.Dir)
+		if err != nil {
+			return Result{}, err
+		}
+	}
+	changed := pluginChanged || manifestChanged || legacyCleanup
 
 	if changed && !options.DryRun {
-		err := writePluginDirectoryChanges(plugin, plan.ImportManifest, manifest, pluginChanged, manifestChanged)
-		if err != nil {
+		var postStage func() error
+		if harness == registry.HarnessAgy && legacyCleanup {
+			postStage = func() error {
+				return cleanupLegacyAgy(plan.Dir)
+			}
+		}
+		if err := writePluginDirectoryChanges(plugin, plan.ImportManifest, manifest, pluginChanged, manifestChanged, postStage); err != nil {
 			return Result{}, err
 		}
 	}
@@ -543,6 +567,7 @@ func writePluginDirectoryChanges(
 	manifest importManifest,
 	pluginChanged bool,
 	manifestChanged bool,
+	postStages ...func() error,
 ) error {
 	var rollback func() error
 	var commit func() error
@@ -556,6 +581,11 @@ func writePluginDirectoryChanges(
 
 	if importPlan != nil && manifestChanged {
 		if err := writeImportManifest(importPlan.Path, manifest); err != nil {
+			return rollbackPluginDirectory(rollback, err)
+		}
+	}
+	if len(postStages) > 0 && postStages[0] != nil {
+		if err := postStages[0](); err != nil {
 			return rollbackPluginDirectory(rollback, err)
 		}
 	}

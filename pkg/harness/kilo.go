@@ -15,10 +15,9 @@ const (
 )
 
 const (
-	kiloPluginName         = "agent-sessions-state.ts"
-	kiloIntegrationID      = "kilo"
-	kiloIntegrationVersion = 1
-	kiloIntegrationSource  = "kilo-plugin"
+	kiloPluginName        = "agent-sessions-state.ts"
+	kiloIntegrationID     = "kilo"
+	kiloIntegrationSource = "kilo-plugin"
 )
 
 //go:embed assets/kilo/agent-sessions-state.ts.tmpl
@@ -49,7 +48,7 @@ func (kiloHarness) InstallPlan(binary string) InstallPlan {
 			Content: renderScriptTemplate(
 				kiloPluginTemplate,
 				kiloIntegrationID,
-				kiloIntegrationVersion,
+				IntegrationVersion,
 				binary,
 				kiloIntegrationSource,
 			),

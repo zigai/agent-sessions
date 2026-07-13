@@ -13,6 +13,11 @@ const (
 	fileMode = 0o600
 )
 
+var (
+	errEnvelopeVersion = errors.New("unsupported envelope version")
+	errEnvelopeKind    = errors.New("unsupported queue item kind")
+)
+
 func ensureQueueDirs(q Queue) error {
 	for _, dir := range []string{q.root, q.pendingDir(), q.processingDir(), q.deadDir()} {
 		if err := os.MkdirAll(dir, dirMode); err != nil {
@@ -75,6 +80,13 @@ func readEnvelope(path string) (Envelope, error) {
 	var envelope Envelope
 	if err := json.Unmarshal(data, &envelope); err != nil {
 		return Envelope{}, fmt.Errorf("parsing queue item %s: %w", path, err)
+	}
+
+	if envelope.Version != EnvelopeVersion {
+		return Envelope{}, fmt.Errorf("%w: got %d, expected %d", errEnvelopeVersion, envelope.Version, EnvelopeVersion)
+	}
+	if envelope.Kind != KindReport {
+		return Envelope{}, fmt.Errorf("%w: %q", errEnvelopeKind, envelope.Kind)
 	}
 
 	return envelope, nil

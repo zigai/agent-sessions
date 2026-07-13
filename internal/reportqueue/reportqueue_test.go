@@ -2,10 +2,12 @@ package reportqueue
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -21,13 +23,14 @@ func TestQueueEnqueueDrainSuccess(t *testing.T) {
 	storePath := filepath.Join(t.TempDir(), "state.json")
 	queue := New(storePath)
 	now := time.Date(2026, 6, 27, 16, 30, 0, 0, time.UTC)
-	envelope := testEnvelope(storePath, "abc", registry.StateRunning, now)
+	envelope := testEnvelope(storePath, "abc", registry.ActivityRunning, now)
 
 	result := enqueueTestEnvelope(t, queue, envelope, now)
 	requireQueueItemMode(t, result.Path)
 
 	var processed []Envelope
-	drain, err := queue.Drain(context.Background(), testDrainOptions(now.Add(time.Second),
+	drain, err := queue.Drain(context.Background(), testDrainOptions(
+		now.Add(time.Second),
 		func(_ context.Context, got Envelope) error {
 			processed = append(processed, got)
 
@@ -40,7 +43,7 @@ func TestQueueEnqueueDrainSuccess(t *testing.T) {
 	if drain.Succeeded != 1 || len(processed) != 1 {
 		t.Fatalf("expected one successful drain, got result=%#v processed=%d", drain, len(processed))
 	}
-	if processed[0].Report.SessionID != "abc" || !processed[0].Report.ObservedAt.Equal(now) {
+	if processed[0].Report.Identity.SessionID != "abc" || !processed[0].Report.ObservedAt.Equal(now) {
 		t.Fatalf("processed envelope mismatch: %#v", processed[0])
 	}
 	requireNoQueueFiles(t, queue.pendingDir(), "pending")
@@ -51,20 +54,21 @@ func TestQueueDrainRescansPendingBeforeUnlock(t *testing.T) {
 	storePath := filepath.Join(t.TempDir(), "state.json")
 	queue := New(storePath)
 	now := time.Date(2026, 6, 27, 16, 30, 0, 0, time.UTC)
-	enqueueTestEnvelope(t, queue, testEnvelope(storePath, "first", registry.StateRunning, now), now)
+	enqueueTestEnvelope(t, queue, testEnvelope(storePath, "first", registry.ActivityRunning, now), now)
 
 	var processed []string
 	enqueuedSecond := false
-	drain, err := queue.Drain(context.Background(), testDrainOptions(now.Add(time.Second),
+	drain, err := queue.Drain(context.Background(), testDrainOptions(
+		now.Add(time.Second),
 		func(ctx context.Context, got Envelope) error {
-			processed = append(processed, got.Report.SessionID)
-			if got.Report.SessionID != "first" || enqueuedSecond {
+			processed = append(processed, got.Report.Identity.SessionID)
+			if got.Report.Identity.SessionID != "first" || enqueuedSecond {
 				return nil
 			}
 			enqueuedSecond = true
 			_, err := queue.Enqueue(
 				ctx,
-				testEnvelope(storePath, "second", registry.StateWaiting, now.Add(time.Nanosecond)),
+				testEnvelope(storePath, "second", registry.ActivityWaiting, now.Add(time.Nanosecond)),
 				EnqueueOptions{Now: func() time.Time { return now.Add(time.Nanosecond) }},
 			)
 
@@ -84,9 +88,10 @@ func TestQueueDrainRetriesTransientError(t *testing.T) {
 	storePath := filepath.Join(t.TempDir(), "state.json")
 	queue := New(storePath)
 	now := time.Date(2026, 6, 27, 16, 30, 0, 0, time.UTC)
-	enqueueTestEnvelope(t, queue, testEnvelope(storePath, "abc", registry.StateRunning, now), now)
+	enqueueTestEnvelope(t, queue, testEnvelope(storePath, "abc", registry.ActivityRunning, now), now)
 
-	drain, err := queue.Drain(context.Background(), testDrainOptions(now.Add(time.Second),
+	drain, err := queue.Drain(context.Background(), testDrainOptions(
+		now.Add(time.Second),
 		func(context.Context, Envelope) error {
 			return errTemporaryStoreFailure
 		},
@@ -109,9 +114,10 @@ func TestQueueDrainPermanentErrorMovesDead(t *testing.T) {
 	storePath := filepath.Join(t.TempDir(), "state.json")
 	queue := New(storePath)
 	now := time.Date(2026, 6, 27, 16, 30, 0, 0, time.UTC)
-	enqueueTestEnvelope(t, queue, testEnvelope(storePath, "abc", registry.StateRunning, now), now)
+	enqueueTestEnvelope(t, queue, testEnvelope(storePath, "abc", registry.ActivityRunning, now), now)
 
-	drain, err := queue.Drain(context.Background(), testDrainOptions(now.Add(time.Second),
+	drain, err := queue.Drain(context.Background(), testDrainOptions(
+		now.Add(time.Second),
 		func(context.Context, Envelope) error {
 			return Permanent(errInvalidEnvelope)
 		},
@@ -134,7 +140,7 @@ func TestQueueRecoversStaleProcessingLease(t *testing.T) {
 		t.Fatalf("ensureQueueDirs() error = %v", err)
 	}
 	now := time.Date(2026, 6, 27, 16, 30, 0, 0, time.UTC)
-	envelope := testEnvelope(storePath, "abc", registry.StateRunning, now)
+	envelope := testEnvelope(storePath, "abc", registry.ActivityRunning, now)
 	envelope.ID = "stale"
 	envelope.ProcessingStartedAt = now.Add(-time.Hour)
 	envelope.WorkerPID = 99999999
@@ -143,7 +149,8 @@ func TestQueueRecoversStaleProcessingLease(t *testing.T) {
 		t.Fatalf("writing processing envelope: %v", err)
 	}
 
-	options := testDrainOptions(now,
+	options := testDrainOptions(
+		now,
 		func(context.Context, Envelope) error {
 			return nil
 		},
@@ -310,14 +317,14 @@ func requireNoQueueFiles(t *testing.T, dir string, label string) {
 	}
 }
 
-func testEnvelope(storePath string, sessionID string, state registry.State, observedAt time.Time) Envelope {
+func testEnvelope(storePath string, sessionID string, activity registry.Activity, observedAt time.Time) Envelope {
 	return Envelope{
 		Version:             EnvelopeVersion,
 		ID:                  NewEnvelopeID(observedAt),
 		CreatedAt:           observedAt,
 		StorePath:           storePath,
 		Kind:                KindReport,
-		Report:              ReportFromRegistry(testRegistryReport(sessionID, state, observedAt)),
+		Report:              ReportFromRegistry(testRegistryObservation(sessionID, activity, observedAt)),
 		RawPayloadSet:       false,
 		NoTmux:              false,
 		Stdin:               nil,
@@ -331,26 +338,17 @@ func testEnvelope(storePath string, sessionID string, state registry.State, obse
 	}
 }
 
-func testRegistryReport(sessionID string, state registry.State, observedAt time.Time) registry.Report {
-	return registry.Report{
-		Harness:          registry.HarnessClaude,
-		State:            state,
-		SessionID:        sessionID,
-		SessionPath:      "",
-		ResumeCommand:    nil,
-		CWD:              "/repo",
-		ProjectRoot:      "",
-		PID:              0,
-		ProcessStartTime: "",
-		PPID:             0,
-		TTY:              "",
-		Tmux:             emptyTmuxContext(),
-		Source:           "test",
-		Confidence:       "hook",
-		Event:            "",
-		Attributes:       nil,
-		RawPayload:       nil,
-		ObservedAt:       observedAt,
+func testRegistryObservation(sessionID string, activity registry.Activity, observedAt time.Time) registry.Observation {
+	return registry.Observation{
+		Source:      registry.ObservationSourceNative,
+		Evidence:    registry.ObservationEvidenceNativeEvent,
+		Harness:     registry.HarnessClaude,
+		Identity:    registry.ObservationIdentity{SessionID: sessionID},
+		Activity:    &activity,
+		NativeEvent: "test",
+		Attributes:  nil,
+		RawPayload:  nil,
+		ObservedAt:  observedAt,
 	}
 }
 
@@ -380,6 +378,120 @@ func globQueueFiles(t *testing.T, dir string) []string {
 	}
 
 	return matches
+}
+
+func TestEnvelopeV2ObservationRoundTrip(t *testing.T) {
+	now := time.Date(2026, 6, 27, 16, 30, 0, 0, time.UTC)
+	observation := testRegistryObservation("session", registry.ActivityWaiting, now)
+	observation.RawPayload = json.RawMessage("null")
+	envelope := Envelope{
+		Version:       EnvelopeVersion,
+		ID:            "v2",
+		CreatedAt:     now,
+		StorePath:     "/tmp/store.json",
+		Kind:          KindReport,
+		Report:        ReportFromRegistry(observation),
+		RawPayloadSet: true,
+	}
+	encoded, err := json.Marshal(envelope)
+	if err != nil {
+		t.Fatalf("marshal envelope: %v", err)
+	}
+	var decoded Envelope
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		t.Fatalf("unmarshal envelope: %v", err)
+	}
+	if decoded.Version != EnvelopeVersion {
+		t.Fatalf("version = %d, want %d", decoded.Version, EnvelopeVersion)
+	}
+	if decoded.Report.Source != registry.ObservationSourceNative ||
+		decoded.Report.Evidence != registry.ObservationEvidenceNativeEvent ||
+		decoded.Report.Identity.SessionID != "session" ||
+		string(decoded.Report.RawPayload) != "null" {
+		t.Fatalf("decoded v2 observation = %#v", decoded.Report)
+	}
+	if decoded.Report.Activity == nil || *decoded.Report.Activity != registry.ActivityWaiting {
+		t.Fatalf("decoded activity = %#v", decoded.Report.Activity)
+	}
+	if strings.Contains(string(encoded), `"state"`) {
+		t.Fatalf("v2 envelope contains removed state field: %s", encoded)
+	}
+}
+
+func TestQueueV1EnvelopeDeadLettersInvalid(t *testing.T) {
+	queue := New(filepath.Join(t.TempDir(), "state.json"))
+	if err := ensureQueueDirs(queue); err != nil {
+		t.Fatalf("ensureQueueDirs() error: %v", err)
+	}
+	path := filepath.Join(queue.pendingDir(), "v1.json")
+	v1 := []byte(`{"version":1,"id":"v1","kind":"report","report":{"state":"running","session_id":"legacy"}}`)
+	if err := os.WriteFile(path, v1, fileMode); err != nil {
+		t.Fatalf("write v1 envelope: %v", err)
+	}
+	called := false
+	result, err := queue.Drain(context.Background(), testDrainOptions(time.Now().UTC(), func(context.Context, Envelope) error {
+		called = true
+		return nil
+	}))
+	if err != nil {
+		t.Fatalf("Drain() error: %v", err)
+	}
+	if called || result.Dead != 1 {
+		t.Fatalf("v1 envelope result = %#v, processor called=%v", result, called)
+	}
+	if len(globQueueFiles(t, queue.pendingDir())) != 0 {
+		t.Fatal("v1 envelope remained pending")
+	}
+	invalid, err := filepath.Glob(filepath.Join(queue.deadDir(), "*.invalid"))
+	if err != nil {
+		t.Fatalf("glob invalid dead letters: %v", err)
+	}
+	if len(invalid) != 1 {
+		t.Fatalf("invalid dead letters = %d, want 1", len(invalid))
+	}
+	status, err := queue.Status(context.Background())
+	if err != nil {
+		t.Fatalf("Status() error: %v", err)
+	}
+	if status.Dead != 1 || status.Invalid != 1 {
+		t.Fatalf("status = %#v, want dead=1 invalid=1", status)
+	}
+}
+
+//nolint:cyclop // status test builds all queue categories and asserts their aggregate contract
+func TestQueueStatusReportsBacklog(t *testing.T) {
+	queue := New(filepath.Join(t.TempDir(), "state.json"))
+	if err := ensureQueueDirs(queue); err != nil {
+		t.Fatalf("ensureQueueDirs() error: %v", err)
+	}
+	now := time.Now().UTC()
+	deferred := testEnvelope("", "deferred", registry.ActivityRunning, now)
+	deferred.NextAttemptAt = now.Add(time.Minute)
+	if err := writeJSONAtomic(filepath.Join(queue.pendingDir(), "deferred.json"), deferred); err != nil {
+		t.Fatalf("write deferred envelope: %v", err)
+	}
+	stale := testEnvelope("", "stale", registry.ActivityRunning, now.Add(time.Second))
+	stale.Attempt = 2
+	stale.ProcessingStartedAt = now.Add(-defaultLeaseTimeout - time.Second)
+	stale.WorkerPID = 99999999
+	if err := writeJSONAtomic(filepath.Join(queue.processingDir(), "stale.json"), stale); err != nil {
+		t.Fatalf("write stale envelope: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(queue.deadDir(), "legacy.invalid"), []byte("invalid\n"), fileMode); err != nil {
+		t.Fatalf("write invalid dead letter: %v", err)
+	}
+	status, err := queue.Status(context.Background())
+	if err != nil {
+		t.Fatalf("Status() error: %v", err)
+	}
+	if status.Pending != 1 || status.Ready != 0 || status.Deferred != 1 ||
+		status.Processing != 1 || status.StaleLeases != 1 || status.Retries != 1 ||
+		status.Dead != 1 || status.Invalid != 1 {
+		t.Fatalf("status = %#v", status)
+	}
+	if !status.NextRetryAt.Equal(now.Add(time.Minute)) || status.OldestBacklogAt.IsZero() {
+		t.Fatalf("status timestamps = %#v", status)
+	}
 }
 
 func TestMain(m *testing.M) {

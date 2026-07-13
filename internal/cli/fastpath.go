@@ -7,42 +7,16 @@ import (
 	"io"
 	"strconv"
 	"strings"
-
-	"github.com/zigai/agent-sessions/pkg/registry"
 )
 
 type fastPathGlobals struct {
 	storePath  string
 	outputJSON bool
 }
-
 type fastPathFlag struct {
-	name           string
-	inlineValue    string
-	hasInlineValue bool
+	name, inlineValue string
+	hasInlineValue    bool
 }
-
-type fastReportParseState struct {
-	options            reportOptions
-	positionals        []string
-	cwdChanged         bool
-	projectRootChanged bool
-}
-
-type (
-	fastReportStringSetter func(*fastReportParseState, string)
-	fastReportIntSetter    func(*fastReportParseState, int)
-	fastReportSliceSetter  func(*fastReportParseState, string)
-	fastReportBoolSetter   func(*fastReportParseState)
-)
-
-const (
-	agyHookCommandName  = "agy-hook"
-	fastPathEventFlag   = "--event"
-	fastPathHarnessFlag = "--harness"
-	fastPathQueueFlag   = "--queue"
-	fastPathStateFlag   = "--state"
-)
 
 var (
 	errFastPathMissingValue      = errors.New("missing value")
@@ -50,391 +24,254 @@ var (
 	errFastPathRequiresHarness   = errors.New("requires a harness")
 )
 
-var fastReportStringFlags = map[string]fastReportStringSetter{
-	fastPathHarnessFlag: func(state *fastReportParseState, value string) {
-		state.options.harness = value
-	},
-	fastPathStateFlag: func(state *fastReportParseState, value string) {
-		state.options.state = value
-	},
-	"--session-id": func(state *fastReportParseState, value string) {
-		state.options.sessionID = value
-	},
-	"--session-path": func(state *fastReportParseState, value string) {
-		state.options.sessionPath = value
-	},
-	"--cwd": func(state *fastReportParseState, value string) {
-		state.options.cwd = value
-		state.cwdChanged = true
-	},
-	"--project-root": func(state *fastReportParseState, value string) {
-		state.options.projectRoot = value
-		state.projectRootChanged = true
-	},
-	"--tty": func(state *fastReportParseState, value string) {
-		state.options.tty = value
-	},
-	"--source": func(state *fastReportParseState, value string) {
-		state.options.source = value
-	},
-	"--confidence": func(state *fastReportParseState, value string) {
-		state.options.confidence = value
-	},
-	fastPathEventFlag: func(state *fastReportParseState, value string) {
-		state.options.event = value
-	},
-	"--observed-at": func(state *fastReportParseState, value string) {
-		state.options.observedAt = value
-	},
-}
-
-var fastReportIntFlags = map[string]fastReportIntSetter{
-	"--pid": func(state *fastReportParseState, value int) {
-		state.options.pid = value
-	},
-	"--ppid": func(state *fastReportParseState, value int) {
-		state.options.ppid = value
-	},
-}
-
-var fastReportSliceFlags = map[string]fastReportSliceSetter{
-	"--attribute": func(state *fastReportParseState, value string) {
-		state.options.attributes = append(state.options.attributes, value)
-	},
-	"--resume-command": func(state *fastReportParseState, value string) {
-		state.options.resumeCommand = append(state.options.resumeCommand, value)
-	},
-}
-
-var fastReportBoolFlags = map[string]fastReportBoolSetter{
-	"--raw-stdin": func(state *fastReportParseState) {
-		state.options.rawStdin = true
-	},
-	"--raw-stdin-defaults-only": func(state *fastReportParseState) {
-		state.options.rawDefaultsOnly = true
-	},
-	"--no-tmux": func(state *fastReportParseState) {
-		state.options.noTmux = true
-	},
-	fastPathQueueFlag: func(state *fastReportParseState) {
-		state.options.queue = true
-	},
-	"--quiet": func(state *fastReportParseState) {
-		state.options.quiet = true
-	},
-}
-
-func tryExecuteFastPath(
-	ctx context.Context,
-	args []string,
-	stdin io.Reader,
-	stdout io.Writer,
-	stderr io.Writer,
-) (bool, error) {
-	globals, command, commandArgs, ok := splitFastPathArgs(args)
+func tryExecuteFastPath(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) (bool, error) {
+	g, c, a, ok := splitFastPathArgs(args)
 	if !ok {
 		return false, nil
 	}
-
-	app := &application{
-		storePath:  globals.storePath,
-		outputJSON: globals.outputJSON,
-		stdout:     stdout,
-		stderr:     stderr,
-	}
-
-	switch command {
+	app := &application{storePath: g.storePath, outputJSON: g.outputJSON, stdout: stdout, stderr: stderr}
+	switch c {
 	case reportCommandName:
-		return executeFastReport(ctx, app, stdin, commandArgs)
+		o, ok, e := parseFastReportOptions(a)
+		if !ok || e != nil {
+			return ok, e
+		}
+		return true, app.runReport(ctx, stdin, o)
 	case hookCommandName, agyHookCommandName:
-		return executeFastManagedHook(ctx, app, stdin, command, commandArgs)
-	default:
-		return false, nil
+		h, o, ok, e := parseFastManagedHookOptions(c, a)
+		if !ok || e != nil {
+			return ok, e
+		}
+		return true, app.runManagedHook(ctx, stdin, h, o)
 	}
+	return false, nil
 }
 
 func splitFastPathArgs(args []string) (fastPathGlobals, string, []string, bool) {
-	var globals fastPathGlobals
-	for index := 0; index < len(args); index++ {
-		arg := args[index]
+	var g fastPathGlobals
+	for i := 0; i < len(args); i++ {
+		a := args[i]
 		switch {
-		case arg == "--store":
-			if index+1 >= len(args) {
-				return globals, "", nil, false
+		case a == "--store":
+			if i+1 >= len(args) {
+				return g, "", nil, false
 			}
-			index++
-			globals.storePath = args[index]
-		case strings.HasPrefix(arg, "--store="):
-			globals.storePath = strings.TrimPrefix(arg, "--store=")
-		case arg == "--json":
-			globals.outputJSON = true
-		case strings.HasPrefix(arg, "-"):
-			return globals, "", nil, false
-		case arg == reportCommandName || arg == hookCommandName || arg == agyHookCommandName:
-			return globals, arg, args[index+1:], true
+			i++
+			g.storePath = args[i]
+		case strings.HasPrefix(a, "--store="):
+			g.storePath = strings.TrimPrefix(a, "--store=")
+		case a == "--json":
+			g.outputJSON = true
+		case strings.HasPrefix(a, "-"):
+			return g, "", nil, false
+		case a == reportCommandName || a == hookCommandName || a == agyHookCommandName:
+			return g, a, args[i+1:], true
 		default:
-			return globals, "", nil, false
+			return g, "", nil, false
 		}
 	}
-
-	return globals, "", nil, false
+	return g, "", nil, false
 }
 
-func executeFastReport(ctx context.Context, app *application, stdin io.Reader, args []string) (bool, error) {
-	options, ok, err := parseFastReportOptions(args)
-	if !ok || err != nil {
-		return ok, err
-	}
-
-	return true, app.runReport(ctx, stdin, options)
+type fastReportParseState struct {
+	o                              reportOptions
+	positionals                    []string
+	cwdChanged, projectRootChanged bool
 }
 
+//nolint:gocognit,cyclop // fast-path parsing mirrors the public command grammar
 func parseFastReportOptions(args []string) (reportOptions, bool, error) {
-	state := fastReportParseState{
-		options: defaultReportOptionsFromEnv(),
-	}
-
-	for index := 0; index < len(args); index++ {
-		arg := args[index]
-		switch {
-		case arg == "--":
-			state.positionals = append(state.positionals, args[index+1:]...)
-			index = len(args)
-		case !strings.HasPrefix(arg, "--"):
-			state.positionals = append(state.positionals, arg)
-		default:
-			nextIndex, ok, err := applyFastReportFlag(args, index, &state)
-			if err != nil || !ok {
-				return state.options, ok, err
+	s := fastReportParseState{o: defaultReportOptionsFromEnv()}
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if a == "--" {
+			s.positionals = append(s.positionals, args[i+1:]...)
+			break
+		}
+		if !strings.HasPrefix(a, "--") {
+			s.positionals = append(s.positionals, a)
+			continue
+		}
+		f := newFastPathFlag(a)
+		var v string
+		var e error
+		need := func() (string, error) {
+			if f.hasInlineValue {
+				return f.inlineValue, nil
 			}
-			index = nextIndex
+			if i+1 >= len(args) {
+				return "", fmt.Errorf("%w for %s", errFastPathMissingValue, f.name)
+			}
+			i++
+			return args[i], nil
+		}
+		switch f.name {
+		case "--harness":
+			v, e = need()
+			s.o.harness = v
+		case "--presence":
+			v, e = need()
+			s.o.presence = v
+		case "--activity":
+			v, e = need()
+			s.o.activity = v
+		case "--session-id":
+			v, e = need()
+			s.o.sessionID = v
+		case "--session-path":
+			v, e = need()
+			s.o.sessionPath = v
+		case "--cwd":
+			v, e = need()
+			s.o.cwd = v
+			s.cwdChanged = true
+		case "--project-root":
+			v, e = need()
+			s.o.projectRoot = v
+			s.projectRootChanged = true
+		case "--tty":
+			v, e = need()
+			s.o.tty = v
+		case "--start-identity":
+			v, e = need()
+			s.o.startIdentity = v
+		case "--executable":
+			v, e = need()
+			s.o.executable = v
+		case "--event":
+			v, e = need()
+			s.o.event = v
+		case "--observed-at":
+			v, e = need()
+			s.o.observedAt = v
+		case "--attribute":
+			v, e = need()
+			s.o.attributes = append(s.o.attributes, v)
+		case "--resume-command":
+			v, e = need()
+			s.o.resumeCommand = append(s.o.resumeCommand, v)
+		case "--pid":
+			v, e = need()
+			if e == nil {
+				s.o.pid, e = strconv.Atoi(v)
+			}
+		case "--ppid":
+			v, e = need()
+			if e == nil {
+				s.o.ppid, e = strconv.Atoi(v)
+			}
+		case "--process-group-id":
+			v, e = need()
+			if e == nil {
+				s.o.processGroupID, e = strconv.Atoi(v)
+			}
+		case "--raw-stdin":
+			if f.hasInlineValue {
+				return s.o, false, nil
+			}
+			s.o.rawStdin = true
+		case "--raw-stdin-defaults-only":
+			if f.hasInlineValue {
+				return s.o, false, nil
+			}
+			s.o.rawDefaultsOnly = true
+		case "--no-tmux":
+			if f.hasInlineValue {
+				return s.o, false, nil
+			}
+			s.o.noTmux = true
+		case "--queue":
+			if f.hasInlineValue {
+				return s.o, false, nil
+			}
+			s.o.queue = true
+		case "--quiet":
+			if f.hasInlineValue {
+				return s.o, false, nil
+			}
+			s.o.quiet = true
+		default:
+			return s.o, false, nil
+		}
+		if e != nil {
+			return s.o, true, fmt.Errorf("parsing %s: %w", f.name, e)
 		}
 	}
-
-	options, err := finishFastReportOptions(&state)
-	return options, true, err
+	if len(s.positionals) > 1 {
+		return s.o, true, fmt.Errorf("%w: accepts one harness", errFastPathTooManyReportArgs)
+	}
+	if len(s.positionals) == 1 {
+		s.o.harness = s.positionals[0]
+	}
+	if s.cwdChanged {
+		s.o.cwdAuto = false
+	}
+	if s.projectRootChanged {
+		s.o.projectRootAuto = false
+	}
+	return s.o, true, nil
 }
 
 func newFastPathFlag(arg string) fastPathFlag {
-	name, inlineValue, hasInlineValue := strings.Cut(arg, "=")
-
-	return fastPathFlag{
-		name:           name,
-		inlineValue:    inlineValue,
-		hasInlineValue: hasInlineValue,
-	}
+	n, v, h := strings.Cut(arg, "=")
+	return fastPathFlag{name: n, inlineValue: v, hasInlineValue: h}
 }
 
-func applyFastReportFlag(args []string, index int, state *fastReportParseState) (int, bool, error) {
-	flag := newFastPathFlag(args[index])
-	if setter, ok := fastReportStringFlags[flag.name]; ok {
-		return applyFastReportStringFlag(args, index, flag, state, setter)
-	}
-	if setter, ok := fastReportIntFlags[flag.name]; ok {
-		return applyFastReportIntFlag(args, index, flag, state, setter)
-	}
-	if setter, ok := fastReportSliceFlags[flag.name]; ok {
-		return applyFastReportSliceFlag(args, index, flag, state, setter)
-	}
-	if setter, ok := fastReportBoolFlags[flag.name]; ok {
-		if flag.hasInlineValue {
-			return index, false, nil
-		}
-		setter(state)
-
-		return index, true, nil
-	}
-
-	return index, false, nil
-}
-
-func applyFastReportStringFlag(
-	args []string,
-	index int,
-	flag fastPathFlag,
-	state *fastReportParseState,
-	setter fastReportStringSetter,
-) (int, bool, error) {
-	value, nextIndex, err := fastPathFlagValue(args, index, flag)
-	if err != nil {
-		return index, true, err
-	}
-	setter(state, value)
-
-	return nextIndex, true, nil
-}
-
-func applyFastReportIntFlag(
-	args []string,
-	index int,
-	flag fastPathFlag,
-	state *fastReportParseState,
-	setter fastReportIntSetter,
-) (int, bool, error) {
-	value, nextIndex, err := fastPathFlagIntValue(args, index, flag)
-	if err != nil {
-		return index, true, err
-	}
-	setter(state, value)
-
-	return nextIndex, true, nil
-}
-
-func applyFastReportSliceFlag(
-	args []string,
-	index int,
-	flag fastPathFlag,
-	state *fastReportParseState,
-	setter fastReportSliceSetter,
-) (int, bool, error) {
-	value, nextIndex, err := fastPathFlagValue(args, index, flag)
-	if err != nil {
-		return index, true, err
-	}
-	setter(state, value)
-
-	return nextIndex, true, nil
-}
-
-func fastPathFlagValue(args []string, index int, flag fastPathFlag) (string, int, error) {
-	if flag.hasInlineValue {
-		return flag.inlineValue, index, nil
-	}
-	if index+1 >= len(args) {
-		return "", index, fmt.Errorf("%w for %s", errFastPathMissingValue, flag.name)
-	}
-
-	return args[index+1], index + 1, nil
-}
-
-func fastPathFlagIntValue(args []string, index int, flag fastPathFlag) (int, int, error) {
-	value, nextIndex, err := fastPathFlagValue(args, index, flag)
-	if err != nil {
-		return 0, index, err
-	}
-	parsed, err := strconv.Atoi(value)
-	if err != nil {
-		return 0, index, fmt.Errorf("parsing %s: %w", flag.name, err)
-	}
-
-	return parsed, nextIndex, nil
-}
-
-func finishFastReportOptions(state *fastReportParseState) (reportOptions, error) {
-	if len(state.positionals) > maxReportArgs {
-		return state.options, fmt.Errorf(
-			"accepts at most %d arg(s), received %d: %w",
-			maxReportArgs,
-			len(state.positionals),
-			errFastPathTooManyReportArgs,
-		)
-	}
-	if err := applyReportArgs(state.positionals, &state.options); err != nil {
-		return state.options, err
-	}
-	if state.cwdChanged {
-		state.options.cwdAuto = false
-	}
-	if state.projectRootChanged {
-		state.options.projectRootAuto = false
-	}
-
-	return state.options, nil
-}
-
-func executeFastManagedHook(
-	ctx context.Context,
-	app *application,
-	stdin io.Reader,
-	command string,
-	args []string,
-) (bool, error) {
-	harnessName, options, ok, err := parseFastManagedHookOptions(command, args)
-	if !ok || err != nil {
-		return ok, err
-	}
-
-	return true, app.runManagedHook(ctx, stdin, harnessName, options)
-}
-
+//nolint:cyclop // fast-path parsing validates each flag form explicitly
 func parseFastManagedHookOptions(command string, args []string) (string, managedHookOptions, bool, error) {
-	var options managedHookOptions
-	harnessName := defaultFastManagedHookHarness(command)
-
-	for index := 0; index < len(args); index++ {
-		arg := args[index]
-		switch {
-		case arg == "--":
-			if trailingHarness, ok := fastManagedHookTerminatorHarness(command, harnessName, args[index+1:]); ok {
-				harnessName = trailingHarness
-				index = len(args)
-
-				continue
-			}
-			return "", options, false, nil
-		case !strings.HasPrefix(arg, "--"):
-			if nextHarness, ok := fastManagedHookPositionalHarness(command, harnessName, arg); ok {
-				harnessName = nextHarness
-				continue
-			}
-			return "", options, false, nil
-		default:
-			nextIndex, ok, err := applyFastManagedHookFlag(args, index, &options)
-			if err != nil || !ok {
-				return "", options, ok, err
-			}
-			index = nextIndex
-		}
-	}
-	if command == hookCommandName && harnessName == "" {
-		return "", options, true, errFastPathRequiresHarness
-	}
-
-	return harnessName, options, true, nil
-}
-
-func defaultFastManagedHookHarness(command string) string {
+	var o managedHookOptions
+	h := ""
 	if command == agyHookCommandName {
-		return string(registry.HarnessAgy)
+		h = "agy"
 	}
-
-	return ""
-}
-
-func fastManagedHookTerminatorHarness(command string, harnessName string, trailing []string) (string, bool) {
-	if command == hookCommandName && harnessName == "" && len(trailing) == 1 {
-		return trailing[0], true
-	}
-
-	return "", false
-}
-
-func fastManagedHookPositionalHarness(command string, harnessName string, arg string) (string, bool) {
-	if command == hookCommandName && harnessName == "" {
-		return arg, true
-	}
-
-	return "", false
-}
-
-func applyFastManagedHookFlag(args []string, index int, options *managedHookOptions) (int, bool, error) {
-	flag := newFastPathFlag(args[index])
-	if flag.name == fastPathQueueFlag {
-		if flag.hasInlineValue {
-			return index, false, nil
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if !strings.HasPrefix(a, "--") {
+			if command == hookCommandName && h == "" {
+				h = a
+				continue
+			}
+			return "", o, false, nil
 		}
-		options.queue = true
+		f := newFastPathFlag(a)
+		switch f.name {
+		case "--event":
+			v, n, e := fastValue(args, i, f)
+			if e != nil {
+				return "", o, true, e
+			}
+			o.event = v
+			i = n
+		case "--queue":
+			if f.hasInlineValue {
+				return "", o, false, nil
+			}
+			o.queue = true
+		default:
+			return "", o, false, nil
+		}
+	}
+	if command == hookCommandName && h == "" {
+		return "", o, true, errFastPathRequiresHarness
+	}
+	return h, o, true, nil
+}
 
-		return index, true, nil
+func fastValue(args []string, i int, f fastPathFlag) (string, int, error) {
+	if f.hasInlineValue {
+		return f.inlineValue, i, nil
 	}
-	if flag.name != fastPathEventFlag {
-		return index, false, nil
+	if i+1 >= len(args) {
+		return "", i, fmt.Errorf("%w for %s", errFastPathMissingValue, f.name)
 	}
-	value, nextIndex, err := fastPathFlagValue(args, index, flag)
-	if err != nil {
-		return index, true, err
-	}
-	options.event = value
+	return args[i+1], i + 1, nil
+}
 
-	return nextIndex, true, nil
+func kickQueueDrainerForArgs(args []string) {
+	for _, arg := range args {
+		if arg == drainQueueCommandName || arg == queueStatusCommandName {
+			return
+		}
+	}
+	kickQueueDrainer(context.Background(), "")
 }

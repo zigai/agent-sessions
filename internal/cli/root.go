@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -19,109 +18,60 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/zigai/agent-sessions/internal/reportqueue"
 	harnesspkg "github.com/zigai/agent-sessions/pkg/harness"
 	"github.com/zigai/agent-sessions/pkg/registry"
 	"github.com/zigai/agent-sessions/pkg/tmuxctx"
 )
 
 var (
-	version = "dev"
-	commit  = "none"
-	date    = "unknown"
-
-	errInvalidAttribute = errors.New("invalid attribute")
-	errInvalidListSort  = errors.New("invalid list sort")
-	errInvalidListFlags = errors.New("invalid list flags")
-
-	errInvalidReportArguments = errors.New("invalid report arguments")
-	errUnexpectedReportArg    = errors.New("unexpected report argument")
-	errMissingReportHarness   = errors.New("missing harness")
-	errMissingReportIdentity  = errors.New("missing report state or identity")
+	version                      = "dev"
+	commit                       = "none"
+	date                         = "unknown"
+	errInvalidAttribute          = errors.New("invalid attribute")
+	errInvalidListSort           = errors.New("invalid list sort")
+	errUnexpectedReportArg       = errors.New("unexpected report argument")
+	errMissingReportHarness      = errors.New("missing harness")
+	errMissingReportIdentity     = errors.New("missing report identity or transition")
+	errDoctorFailed              = errors.New("doctor found errors")
+	errInvalidObserveInterval    = errors.New("interval must be positive")
+	errInvalidObserveGracePeriod = errors.New("grace period must be nonnegative")
+	errGonePresenceActivity      = errors.New("gone presence cannot include activity")
+	errProcessEvidenceIdentity   = errors.New("process evidence requires pid and start identity")
+	errProcessEvidenceActivity   = errors.New("process evidence cannot include activity")
 )
 
 const (
-	tabPadding    = 2
-	maxReportArgs = 2
-)
-
-const (
-	reportStatesLabel        = "idle, running, waiting, unknown, exited"
-	reportExampleHarness     = "agent-sessions report pi running"
-	reportExampleStateFirst  = "agent-sessions report running --harness pi"
-	reportExampleWithSession = "agent-sessions report --harness codex --state waiting --session-id abc"
-)
-
-const (
-	secondsPerMinute = 60
-	minutesPerHour   = 60
-	hoursPerDay      = 24
-	daysPerWeek      = 7
-	daysPerYear      = 365
-)
-
-const (
-	listCommandName            = "list"
-	reportCommandName          = "report"
-	listSortUpdated            = "updated"
-	defaultStaleOwnerlessAfter = 5 * time.Minute
-)
-
-const (
-	hookCommandName = "hook"
-	hookConfidence  = "hook"
+	tabPadding         = 2
+	reportCommandName  = "report"
+	listCommandName    = "list"
+	hookCommandName    = "hook"
+	agyHookCommandName = "agy-hook"
+	listSortUpdated    = "updated"
+	hoursPerDay        = 24
 )
 
 type application struct {
-	storePath     string
-	outputJSON    bool
-	stdout        io.Writer
-	stderr        io.Writer
-	listTmuxPanes func(context.Context) ([]tmuxctx.Pane, error)
+	storePath  string
+	outputJSON bool
+	stdout     io.Writer
+	stderr     io.Writer
 }
 
 func NewRootCommand(stdout io.Writer, stderr io.Writer) *cobra.Command {
-	app := &application{
-		stdout: stdout,
-		stderr: stderr,
-	}
-
+	app := &application{stdout: stdout, stderr: stderr}
 	var showVersion bool
-	root := &cobra.Command{
-		Use:   "agent-sessions",
-		Short: "Track local coding-agent sessions across harnesses and tmux panes",
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			if showVersion {
-				return app.writef("agent-sessions %s (commit: %s, built: %s)\n", version, commit, date)
-			}
-
-			return cmd.Help()
-		},
-		CompletionOptions: cobra.CompletionOptions{
-			HiddenDefaultCmd: true,
-		},
-	}
+	root := &cobra.Command{Use: "agent-sessions", Short: "Track local coding-agent sessions across harnesses and tmux panes", RunE: func(cmd *cobra.Command, _ []string) error {
+		if showVersion {
+			return app.writef("agent-sessions %s (commit: %s, built: %s)\n", version, commit, date)
+		}
+		return cmd.Help()
+	}, CompletionOptions: cobra.CompletionOptions{HiddenDefaultCmd: true}}
 	root.SetOut(stdout)
 	root.SetErr(stderr)
 	root.PersistentFlags().StringVar(&app.storePath, "store", "", "registry state file path")
 	root.PersistentFlags().BoolVar(&app.outputJSON, "json", false, "emit JSON")
 	root.Flags().BoolVarP(&showVersion, "version", "v", false, "print version")
-
-	root.AddCommand(
-		app.newReportCommand(),
-		app.newListCommand(),
-		app.newGetCommand(),
-		app.newScanCommand(),
-		app.newGCCommand(),
-		app.newManageCommand(),
-		app.newPathCommand(),
-		app.newInstallHooksCommand(),
-		app.newHookCommand(),
-		app.newAgyHookCommand(),
-		app.newDrainQueueCommand(),
-		app.newQueueStatusCommand(),
-	)
-
+	root.AddCommand(app.newReportCommand(), app.newListCommand(), app.newGetCommand(), app.newGCCommand(), app.newManageCommand(), app.newPathCommand(), app.newInstallHooksCommand(), app.newHookCommand(), app.newAgyHookCommand(), app.newDrainQueueCommand(), app.newQueueStatusCommand(), app.newObserveCommand(), app.newServiceCommand(), app.newDoctorCommand())
 	return root
 }
 
@@ -132,70 +82,57 @@ func Execute() {
 			_, _ = fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
-
 		return
 	}
-
-	cmd := NewRootCommand(os.Stdout, os.Stderr)
-	if err := cmd.Execute(); err != nil {
+	if err := NewRootCommand(os.Stdout, os.Stderr).Execute(); err != nil {
 		os.Exit(1)
 	}
 }
 
-func (app *application) store() *registry.FileStore {
-	return registry.NewFileStore(app.storePath)
-}
-
-func (app *application) registryStore() registry.Store {
-	return app.store()
-}
-
+func (app *application) store() *registry.FileStore    { return registry.NewFileStore(app.storePath) }
+func (app *application) registryStore() registry.Store { return app.store() }
 func (app *application) writeJSON(value any) error {
-	encoder := json.NewEncoder(app.stdout)
-	encoder.SetIndent("", "  ")
-	err := encoder.Encode(value)
-	if err != nil {
+	e := json.NewEncoder(app.stdout)
+	e.SetIndent("", "  ")
+	if err := e.Encode(value); err != nil {
 		return fmt.Errorf("writing JSON: %w", err)
 	}
-
 	return nil
 }
 
 func (app *application) writef(format string, args ...any) error {
-	_, err := fmt.Fprintf(app.stdout, format, args...)
-	if err != nil {
+	if _, err := fmt.Fprintf(app.stdout, format, args...); err != nil {
 		return fmt.Errorf("writing output: %w", err)
 	}
-
 	return nil
 }
 
 func (app *application) writeln(args ...any) error {
-	_, err := fmt.Fprintln(app.stdout, args...)
-	if err != nil {
+	if _, err := fmt.Fprintln(app.stdout, args...); err != nil {
 		return fmt.Errorf("writing output: %w", err)
 	}
-
 	return nil
 }
 
-func (app *application) newPathCommand() *cobra.Command {
-	return &cobra.Command{
-		Use:   "path",
-		Short: "Print the registry state file path",
-		RunE: func(_ *cobra.Command, _ []string) error {
-			if app.outputJSON {
-				return app.writeJSON(map[string]string{"path": app.store().Path()})
-			}
-
-			return app.writeln(app.store().Path())
-		},
+func (app *application) warnf(format string, args ...any) {
+	if app.stderr != nil {
+		_, _ = fmt.Fprintf(app.stderr, format, args...)
 	}
+}
+
+func (app *application) newPathCommand() *cobra.Command {
+	return &cobra.Command{Use: "path", Short: "Print the registry state file path", RunE: func(_ *cobra.Command, _ []string) error {
+		if app.outputJSON {
+			return app.writeJSON(map[string]string{"path": app.store().Path()})
+		}
+		return app.writeln(app.store().Path())
+	}}
 }
 
 type reportOptions struct {
 	harness         string
-	state           string
+	presence        string
+	activity        string
 	sessionID       string
 	sessionPath     string
 	cwd             string
@@ -204,9 +141,10 @@ type reportOptions struct {
 	projectRootAuto bool
 	pid             int
 	ppid            int
+	processGroupID  int
+	startIdentity   string
+	executable      string
 	tty             string
-	source          string
-	confidence      string
 	event           string
 	observedAt      string
 	attributes      []string
@@ -216,219 +154,114 @@ type reportOptions struct {
 	queue           bool
 	quiet           bool
 	resumeCommand   []string
+	evidence        string
 }
-
 type preparedReport struct {
-	harness registry.Harness
-	report  registry.Report
-	stdin   []byte
-	ignored bool
+	harness     registry.Harness
+	observation registry.Observation
+	stdin       []byte
+	ignored     bool
 }
-
 type reportRuntimeContext struct {
 	tmux              registry.TmuxContext
-	parentArgs        []string
 	defaultObservedAt time.Time
 }
 
 func (app *application) newReportCommand() *cobra.Command {
 	options := defaultReportOptionsFromEnv()
-
-	cmd := &cobra.Command{
-		Use:          reportCommandName + " [harness] [state]",
-		Short:        "Upsert a session report from a harness hook or wrapper",
-		SilenceUsage: true,
-		Example: strings.Join([]string{
-			"  " + reportExampleHarness,
-			"  " + reportExampleStateFirst,
-			"  " + reportExampleWithSession,
-		}, "\n"),
-		Args: cobra.MaximumNArgs(maxReportArgs),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := applyReportArgs(args, &options); err != nil {
-				return err
+	cmd := &cobra.Command{Use: "report [harness]", Short: "Record a harness observation", SilenceUsage: true, Args: cobra.MaximumNArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		if len(args) == 1 {
+			if options.harness != "" {
+				return fmt.Errorf("%w: harness already set", errUnexpectedReportArg)
 			}
-			if cmd.Flags().Changed("cwd") {
-				options.cwdAuto = false
-			}
-			if cmd.Flags().Changed("project-root") {
-				options.projectRootAuto = false
-			}
-
-			return app.runReport(cmd.Context(), cmd.InOrStdin(), options)
-		},
-	}
-	cmd.Flags().StringVar(&options.harness, "harness", options.harness, "harness name: "+strings.Join(harnesspkg.SupportedNames(), ", "))
-	cmd.Flags().StringVar(&options.state, "state", options.state, "state: "+reportStatesLabel)
-	cmd.Flags().StringVar(&options.sessionID, "session-id", options.sessionID, "harness session id")
-	cmd.Flags().StringVar(&options.sessionPath, "session-path", options.sessionPath, "harness session file path")
-	cmd.Flags().StringVar(&options.cwd, "cwd", options.cwd, "agent current working directory")
-	cmd.Flags().StringVar(&options.projectRoot, "project-root", options.projectRoot, "project root")
-	cmd.Flags().IntVar(&options.pid, "pid", options.pid, "agent process id")
-	cmd.Flags().IntVar(&options.ppid, "ppid", options.ppid, "agent parent process id")
-	cmd.Flags().StringVar(&options.tty, "tty", options.tty, "agent tty")
-	cmd.Flags().StringVar(&options.source, "source", options.source, "report source label")
-	cmd.Flags().StringVar(&options.confidence, "confidence", options.confidence, "confidence label")
-	cmd.Flags().StringVar(&options.event, "event", options.event, "native harness event name")
-	cmd.Flags().StringVar(&options.observedAt, "observed-at", options.observedAt, "RFC3339 timestamp when the harness event was observed")
-	cmd.Flags().StringArrayVar(&options.attributes, "attribute", nil, "extra key=value attribute")
-	cmd.Flags().StringArrayVar(&options.resumeCommand, "resume-command", nil, "explicit resume command argv item, repeatable")
-	cmd.Flags().BoolVar(&options.rawStdin, "raw-stdin", false, "store stdin as raw hook payload")
-	cmd.Flags().BoolVar(&options.rawDefaultsOnly, "raw-stdin-defaults-only", false, "read stdin for harness defaults without storing raw hook payload")
-	cmd.Flags().BoolVar(&options.noTmux, "no-tmux", false, "do not auto-collect current tmux pane context")
-	cmd.Flags().BoolVar(&options.queue, "queue", false, "durably queue the report for asynchronous registry update")
-	_ = cmd.Flags().MarkHidden("queue")
-	cmd.Flags().BoolVar(&options.quiet, "quiet", false, "suppress normal report output")
-
+			options.harness = args[0]
+		}
+		if cmd.Flags().Changed("cwd") {
+			options.cwdAuto = false
+		}
+		if cmd.Flags().Changed("project-root") {
+			options.projectRootAuto = false
+		}
+		return app.runReport(cmd.Context(), cmd.InOrStdin(), options)
+	}}
+	f := cmd.Flags()
+	f.StringVar(&options.presence, "presence", options.presence, "presence: live, gone, unknown")
+	f.StringVar(&options.activity, "activity", options.activity, "activity: running, waiting, idle, unknown")
+	f.StringVar(&options.sessionID, "session-id", options.sessionID, "harness session id")
+	f.StringVar(&options.sessionPath, "session-path", options.sessionPath, "harness session file path")
+	f.StringVar(&options.cwd, "cwd", options.cwd, "agent current working directory")
+	f.StringVar(&options.projectRoot, "project-root", options.projectRoot, "project root")
+	f.IntVar(&options.pid, "pid", options.pid, "agent process id")
+	f.IntVar(&options.ppid, "ppid", options.ppid, "agent parent process id")
+	f.IntVar(&options.processGroupID, "process-group-id", options.processGroupID, "agent process group id")
+	f.StringVar(&options.startIdentity, "start-identity", options.startIdentity, "process start identity")
+	f.StringVar(&options.executable, "executable", options.executable, "resolved executable path")
+	f.StringVar(&options.tty, "tty", options.tty, "agent tty")
+	f.StringVar(&options.event, "event", options.event, "native harness event name")
+	f.StringVar(&options.observedAt, "observed-at", options.observedAt, "RFC3339 timestamp")
+	f.StringArrayVar(&options.attributes, "attribute", nil, "extra key=value attribute")
+	f.StringArrayVar(&options.resumeCommand, "resume-command", nil, "resume command argv item, repeatable")
+	f.StringVar(&options.evidence, "evidence", options.evidence, "evidence kind (managed shims)")
+	f.BoolVar(&options.rawStdin, "raw-stdin", false, "store stdin as raw hook payload")
+	f.BoolVar(&options.rawDefaultsOnly, "raw-stdin-defaults-only", false, "read stdin for defaults without storing raw payload")
+	f.BoolVar(&options.noTmux, "no-tmux", false, "do not collect tmux context")
+	f.BoolVar(&options.queue, "queue", false, "durably queue observation")
+	_ = f.MarkHidden("queue")
+	_ = f.MarkHidden("evidence")
+	f.BoolVar(&options.quiet, "quiet", false, "suppress output")
 	return cmd
 }
 
 func defaultReportOptionsFromEnv() reportOptions {
-	options := reportOptions{
-		harness:     firstEnv("AGENT_SESSIONS_HARNESS", "AGENT_HARNESS"),
-		state:       firstEnv("AGENT_SESSIONS_STATE", "AGENT_STATE"),
-		sessionID:   firstEnv(harnesspkg.EnvNames(harnesspkg.EnvSessionID)...),
-		sessionPath: firstEnv(harnesspkg.EnvNames(harnesspkg.EnvSessionPath)...),
-		cwdAuto:     true,
-		projectRoot: firstEnv(harnesspkg.EnvNames(harnesspkg.EnvProjectRoot)...),
-		pid:         firstEnvInt(harnesspkg.EnvNames(harnesspkg.EnvPID)...),
-		ppid:        firstEnvInt("AGENT_SESSIONS_PPID", "AGENT_PPID"),
-		tty:         firstEnv("AGENT_SESSIONS_TTY", "TTY"),
-		source:      firstEnv("AGENT_SESSIONS_SOURCE"),
-		confidence:  firstEnv("AGENT_SESSIONS_CONFIDENCE"),
-		event:       firstEnv(harnesspkg.EnvNames(harnesspkg.EnvEvent)...),
-	}
-	options.projectRootAuto = options.projectRoot == ""
-
-	return options
+	return reportOptions{harness: firstEnv("AGENT_SESSIONS_HARNESS", "AGENT_HARNESS"), sessionID: firstEnv(harnesspkg.EnvNames(harnesspkg.EnvSessionID)...), sessionPath: firstEnv(harnesspkg.EnvNames(harnesspkg.EnvSessionPath)...), cwdAuto: true, projectRoot: firstEnv(harnesspkg.EnvNames(harnesspkg.EnvProjectRoot)...), pid: firstEnvInt(harnesspkg.EnvNames(harnesspkg.EnvPID)...), ppid: firstEnvInt("AGENT_SESSIONS_PPID", "AGENT_PPID"), tty: firstEnv("AGENT_SESSIONS_TTY", "TTY"), event: firstEnv(harnesspkg.EnvNames(harnesspkg.EnvEvent)...)}
 }
 
-func applyReportArgs(args []string, options *reportOptions) error {
-	switch len(args) {
-	case 0:
-		return nil
-	case 1:
-		return applySingleReportArg(args[0], options)
-	case maxReportArgs:
-		return applyReportHarnessStateArgs(args[0], args[1], options)
-	default:
-		return nil
+func parseObservedAt(value string) (time.Time, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return time.Time{}, nil
 	}
-}
-
-func applySingleReportArg(arg string, options *reportOptions) error {
-	if options.harness == "" {
-		if _, err := harnesspkg.Normalize(arg); err == nil {
-			options.harness = arg
-
-			return nil
-		}
+	t, err := time.Parse(time.RFC3339Nano, value)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("parsing observed-at: %w", err)
 	}
-	if options.state == "" {
-		options.state = arg
-
-		return nil
-	}
-
-	return fmt.Errorf("%w: %q; state is already set to %q", errUnexpectedReportArg, arg, options.state)
-}
-
-func applyReportHarnessStateArgs(first string, second string, options *reportOptions) error {
-	firstArg := classifyReportArg(first)
-	secondArg := classifyReportArg(second)
-
-	if options.harness == "" && options.state == "" && applyReportArgPair(firstArg, secondArg, options) {
-		return nil
-	}
-	if options.harness == "" && firstArg.harnessOK {
-		options.harness = string(firstArg.harness)
-
-		return applySingleReportArg(second, options)
-	}
-	if options.state == "" && secondArg.stateOK {
-		options.state = string(secondArg.state)
-
-		return applySingleReportArg(first, options)
-	}
-
-	return fmt.Errorf("%w: %q %q; use --harness and --state explicitly", errInvalidReportArguments, first, second)
-}
-
-func applyReportArgPair(first reportArgClassification, second reportArgClassification, options *reportOptions) bool {
-	if first.harnessOK && second.stateOK {
-		options.harness = string(first.harness)
-		options.state = string(second.state)
-
-		return true
-	}
-	if first.stateOK && second.harnessOK {
-		options.harness = string(second.harness)
-		options.state = string(first.state)
-
-		return true
-	}
-
-	return false
-}
-
-type reportArgClassification struct {
-	harness   registry.Harness
-	harnessOK bool
-	state     registry.State
-	stateOK   bool
-}
-
-func classifyReportArg(arg string) reportArgClassification {
-	harness, harnessErr := harnesspkg.Normalize(arg)
-	state, stateErr := registry.NormalizeState(arg)
-
-	return reportArgClassification{
-		harness:   harness,
-		harnessOK: harnessErr == nil,
-		state:     state,
-		stateOK:   stateErr == nil && state != "",
-	}
+	return t, nil
 }
 
 func (app *application) runReport(ctx context.Context, stdin io.Reader, options reportOptions) error {
 	if options.queue {
 		return app.runQueuedReport(ctx, stdin, options)
 	}
-
-	prepared, err := app.prepareReport(stdin, options, reportRuntimeContext{
-		tmux:       reportTmuxContext(ctx, options.noTmux),
-		parentArgs: parentProcessArgs(ctx),
-	})
+	prepared, err := app.prepareReport(stdin, options, reportRuntimeContext{tmux: reportTmuxContext(ctx, options.noTmux)})
 	if err != nil {
 		return err
 	}
 	if prepared.ignored {
-		return app.writeIgnoredReport(prepared.harness, options.quiet)
+		if options.quiet {
+			return nil
+		}
+		return app.writef("ignored %s report: hook payload does not match harness\n", prepared.harness)
 	}
-
-	session, err := app.registryStore().Report(ctx, prepared.report)
+	session, err := app.registryStore().Observe(ctx, prepared.observation)
 	if err != nil {
-		return fmt.Errorf("reporting session: %w", err)
+		return fmt.Errorf("recording observation: %w", err)
 	}
-
 	return app.writeReportResult(session, options.quiet)
 }
 
-func (app *application) prepareReport(
-	stdin io.Reader,
-	options reportOptions,
-	runtime reportRuntimeContext,
-) (preparedReport, error) {
-	harness, state, err := normalizeReportHarnessAndState(options)
+//nolint:gocognit,cyclop // report preparation deliberately validates independent evidence dimensions in order
+func (app *application) prepareReport(stdin io.Reader, options reportOptions, runtime reportRuntimeContext) (preparedReport, error) {
+	if strings.TrimSpace(options.harness) == "" {
+		return preparedReport{}, errMissingReportHarness
+	}
+	harness, err := harnesspkg.Normalize(options.harness)
+	if err != nil {
+		return preparedReport{}, fmt.Errorf("normalizing harness: %w", err)
+	}
+	attrs, err := parseAttributes(options.attributes)
 	if err != nil {
 		return preparedReport{}, err
 	}
-
-	attributes, err := parseAttributes(options.attributes)
-	if err != nil {
-		return preparedReport{}, err
-	}
-
 	rawPayload, defaultsPayload, stdinData, err := readStdinPayloadData(stdin, options.rawStdin, options.rawDefaultsOnly)
 	if err != nil {
 		return preparedReport{}, err
@@ -436,123 +269,67 @@ func (app *application) prepareReport(
 	if !harnesspkg.PayloadCompatibleWithHarness(harness, defaultsPayload) {
 		return preparedReport{harness: harness, stdin: stdinData, ignored: true}, nil
 	}
-	applyPayloadDefaults(&options, attributes, harnesspkg.DefaultsFromPayload(harness, defaultsPayload))
+	applyPayloadDefaults(&options, attrs, harnesspkg.DefaultsFromPayload(harness, defaultsPayload))
 	applyReportRuntimeDefaults(&options)
-	if err := requireReportIdentity(state, options); err != nil {
-		return preparedReport{}, missingReportIdentityError(harness)
+	presence, err := registry.NormalizePresence(options.presence)
+	if err != nil {
+		return preparedReport{}, fmt.Errorf("normalize presence: %w", err)
+	}
+	activity, err := registry.NormalizeActivity(options.activity)
+	if err != nil {
+		return preparedReport{}, fmt.Errorf("normalize activity: %w", err)
+	}
+	if presence == registry.PresenceGone && activity != "" {
+		return preparedReport{}, errGonePresenceActivity
 	}
 	observedAt, err := parseObservedAt(options.observedAt)
 	if err != nil {
 		return preparedReport{}, err
 	}
-	if observedAt.IsZero() && !runtime.defaultObservedAt.IsZero() {
-		observedAt = runtime.defaultObservedAt.UTC()
+	if observedAt.IsZero() {
+		observedAt = runtime.defaultObservedAt
 	}
-	state = harnesspkg.AdjustRuntimeState(harness, state, options.event, attributes, runtime.parentArgs)
-
-	source := options.source
-	if source == "" {
-		source = "cli"
+	if observedAt.IsZero() {
+		observedAt = time.Now().UTC()
 	}
-
-	confidence := options.confidence
-	if confidence == "" {
-		confidence = hookConfidence
+	if presence == "" && activity == "" && options.event == "" && options.sessionID == "" && options.sessionPath == "" {
+		return preparedReport{}, errMissingReportIdentity
 	}
-
-	report := harnesspkg.WithResumeCommand(registry.Report{
-		Harness:       harness,
-		State:         state,
-		SessionID:     options.sessionID,
-		SessionPath:   options.sessionPath,
-		ResumeCommand: options.resumeCommand,
-		CWD:           options.cwd,
-		ProjectRoot:   options.projectRoot,
-		PID:           options.pid,
-		PPID:          options.ppid,
-		TTY:           options.tty,
-		Tmux:          runtime.tmux,
-		Source:        source,
-		Confidence:    confidence,
-		Event:         options.event,
-		Attributes:    attributes,
-		RawPayload:    rawPayload,
-		ObservedAt:    observedAt,
-	})
-
-	return preparedReport{harness: harness, report: report, stdin: stdinData}, nil
+	identity := registry.ObservationIdentity{SessionID: options.sessionID, SessionPath: options.sessionPath}
+	observation := registry.Observation{Source: registry.ObservationSourceNative, Evidence: registry.ObservationEvidenceNativeEvent, Harness: harness, Identity: identity, NativeEvent: options.event, Attributes: attrs, RawPayload: rawPayload, ObservedAt: observedAt}
+	if strings.EqualFold(options.evidence, "process") {
+		if options.pid <= 0 || options.startIdentity == "" {
+			return preparedReport{}, errProcessEvidenceIdentity
+		}
+		if activity != "" {
+			return preparedReport{}, errProcessEvidenceActivity
+		}
+		present := presence != registry.PresenceGone
+		observation.Source, observation.Evidence = registry.ObservationSourceProcess, registry.ObservationEvidenceProcessPresence
+		observation.NativeEvent = ""
+		observation.ProcessPresent = &present
+		observation.Process = &registry.ProcessIdentity{PID: options.pid, PPID: options.ppid, ProcessGroupID: options.processGroupID, StartIdentity: options.startIdentity, Executable: options.executable, CWD: options.cwd, TTY: options.tty}
+	}
+	if observation.Source == registry.ObservationSourceNative && presence != "" {
+		observation.Presence = &presence
+	}
+	if activity != "" {
+		observation.Activity = &activity
+	}
+	if observation.Source == registry.ObservationSourceNative && options.event == "" && (presence != "" || activity != "") {
+		observation.NativeEvent = "cli"
+	}
+	if options.cwd != "" || options.projectRoot != "" || len(options.resumeCommand) > 0 {
+		observation.Catalog = &registry.CatalogMetadata{ResumeCommand: append([]string(nil), options.resumeCommand...), CWD: options.cwd, ProjectRoot: options.projectRoot}
+	}
+	return preparedReport{harness: harness, observation: observation, stdin: stdinData}, nil
 }
 
-func (app *application) runQueuedReport(ctx context.Context, stdin io.Reader, options reportOptions) error {
-	now := time.Now().UTC()
-	parentArgs := parentProcessArgs(ctx)
-	prepared, err := app.prepareReport(stdin, options, reportRuntimeContext{
-		parentArgs:        parentArgs,
-		defaultObservedAt: now,
-	})
-	if err != nil {
-		return err
+func appReportActivity(session registry.Session) string {
+	if session.Activity == nil {
+		return "null"
 	}
-	if prepared.ignored {
-		return app.writeIgnoredReport(prepared.harness, options.quiet)
-	}
-
-	storePath := app.store().Path()
-	queue := reportqueue.New(storePath)
-	tmuxEnv := tmuxctx.Env{TMUX: os.Getenv("TMUX"), TMUXPane: os.Getenv("TMUX_PANE")}
-	minimalTmux := tmuxctx.ContextFromEnv(tmuxEnv)
-	cachedTmux := minimalTmux
-	if cached, ok := queue.LookupTmuxContext(minimalTmux, now, 0); ok {
-		cachedTmux = cached
-	}
-	result, err := queue.Enqueue(ctx, reportqueue.Envelope{
-		Version:       reportqueue.EnvelopeVersion,
-		CreatedAt:     now,
-		StorePath:     storePath,
-		Kind:          reportqueue.KindReport,
-		Report:        reportqueue.ReportFromRegistry(prepared.report),
-		RawPayloadSet: len(prepared.report.RawPayload) > 0,
-		NoTmux:        options.noTmux,
-		Stdin:         prepared.stdin,
-		Runtime: reportqueue.RuntimeContext{
-			CWD:        defaultCWD(),
-			ParentArgs: parentArgs,
-			Env: map[string]string{
-				"TMUX":      tmuxEnv.TMUX,
-				"TMUX_PANE": tmuxEnv.TMUXPane,
-				"PWD":       os.Getenv("PWD"),
-			},
-		},
-		CachedTmux: cachedTmux,
-	}, reportqueue.EnqueueOptions{Now: func() time.Time { return now }})
-	if err != nil {
-		fallback := options
-		fallback.queue = false
-
-		return app.runReport(ctx, bytes.NewReader(prepared.stdin), fallback)
-	}
-	app.kickQueueDrainer(ctx, storePath)
-
-	return app.writeQueueResult(result, options.quiet)
-}
-
-func (app *application) writeIgnoredReport(harness registry.Harness, quiet bool) error {
-	if quiet {
-		return nil
-	}
-
-	return app.writef("ignored %s report: hook payload does not match harness\n", harness)
-}
-
-func (app *application) writeQueueResult(result reportqueue.EnqueueResult, quiet bool) error {
-	if app.outputJSON {
-		return app.writeJSON(result)
-	}
-	if quiet {
-		return nil
-	}
-
-	return app.writef("queued\t%s\n", result.ID)
+	return string(*session.Activity)
 }
 
 func (app *application) writeReportResult(session registry.Session, quiet bool) error {
@@ -562,36 +339,28 @@ func (app *application) writeReportResult(session registry.Session, quiet bool) 
 	if quiet {
 		return nil
 	}
-
-	return app.writef("%s\t%s\t%s\n", session.ID, session.Harness, session.State)
+	return app.writef("%s\t%s\t%s\t%s\n", session.ID, session.Harness, session.Presence, appReportActivity(session))
 }
 
-func parseObservedAt(value string) (time.Time, error) {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return time.Time{}, nil
+func reportTmuxContext(ctx context.Context, noTmux bool) registry.TmuxContext {
+	if noTmux {
+		return registry.TmuxContext{}
 	}
-
-	observedAt, err := time.Parse(time.RFC3339Nano, value)
+	t, err := tmuxctx.Current(ctx)
 	if err != nil {
-		return time.Time{}, fmt.Errorf("parsing observed-at: %w", err)
+		return registry.TmuxContext{}
 	}
-
-	return observedAt, nil
+	return t
 }
 
-func parentProcessArgs(ctx context.Context) []string {
-	return processArgs(ctx, os.Getppid())
-}
-
+func parentProcessArgs(ctx context.Context) []string { return processArgs(ctx, os.Getppid()) }
 func processArgs(ctx context.Context, pid int) []string {
 	if pid <= 0 {
 		return nil
 	}
-	if args := procProcessArgs(pid); len(args) > 0 {
-		return args
+	if a := procProcessArgs(pid); len(a) > 0 {
+		return a
 	}
-
 	return psProcessArgs(ctx, pid)
 }
 
@@ -600,1070 +369,438 @@ func procProcessArgs(pid int) []string {
 	if err != nil || len(data) == 0 {
 		return nil
 	}
-	trimmed := strings.TrimRight(string(data), "\x00")
-	if trimmed == "" {
-		return nil
-	}
-
-	return strings.Split(trimmed, "\x00")
+	return strings.Split(strings.TrimRight(string(data), "\x00"), "\x00")
 }
 
 func psProcessArgs(ctx context.Context, pid int) []string {
-	output, err := exec.CommandContext(ctx, "ps", "-o", "args=", "-p", strconv.Itoa(pid)).Output()
+	out, err := exec.CommandContext(ctx, "ps", "-o", "args=", "-p", strconv.Itoa(pid)).Output()
 	if err != nil {
 		return nil
 	}
-
-	return strings.Fields(strings.TrimSpace(string(output)))
+	return strings.Fields(strings.TrimSpace(string(out)))
 }
 
-func normalizeReportHarnessAndState(options reportOptions) (registry.Harness, registry.State, error) {
-	if strings.TrimSpace(options.harness) == "" {
-		return "", "", missingReportHarnessError(options)
-	}
-	harness, err := harnesspkg.Normalize(options.harness)
-	if err != nil {
-		return "", "", fmt.Errorf("normalizing harness: %w", err)
-	}
-
-	state, err := registry.NormalizeState(options.state)
-	if err != nil {
-		return "", "", fmt.Errorf("normalizing state: %w", err)
-	}
-
-	return harness, state, nil
-}
-
-func reportTmuxContext(ctx context.Context, noTmux bool) registry.TmuxContext {
-	if noTmux {
-		return registry.TmuxContext{}
-	}
-
-	collected, err := tmuxctx.Current(ctx)
-	if err != nil {
-		return registry.TmuxContext{}
-	}
-
-	return collected
-}
-
-func requireReportIdentity(state registry.State, options reportOptions) error {
-	if state == "" && options.sessionID == "" && options.sessionPath == "" {
-		return errMissingReportIdentity
-	}
-
-	return nil
-}
-
-func missingReportHarnessError(options reportOptions) error {
-	if options.state != "" {
-		return fmt.Errorf(
-			"%w: state %q needs --harness <name>\n\n%s",
-			errMissingReportHarness,
-			options.state,
-			reportQuickHelp(reportExampleStateFirst),
-		)
-	}
-
-	return fmt.Errorf(
-		"%w: choose a harness and state\n\n%s",
-		errMissingReportHarness,
-		reportQuickHelp(reportExampleHarness),
-	)
-}
-
-func missingReportIdentityError(harness registry.Harness) error {
-	return fmt.Errorf(
-		"%w: report for %s needs a state, --session-id, or --session-path\n\n%s",
-		errMissingReportIdentity,
-		harness,
-		reportQuickHelp("agent-sessions report "+string(harness)+" running"),
-	)
-}
-
-func reportQuickHelp(primaryExample string) string {
-	return strings.Join([]string{
-		"Try:",
-		"  " + primaryExample,
-		"  " + reportExampleWithSession,
-		"",
-		"States: " + reportStatesLabel,
-		"Use \"agent-sessions report --help\" for all flags.",
-	}, "\n")
-}
-
+// list.
 type listOptions struct {
-	harness       string
-	state         string
-	tmuxSession   string
-	activeOnly    bool
-	liveOnly      bool
-	summary       bool
-	watch         bool
-	absoluteTime  bool
-	absoluteSet   bool
-	sortBy        string
-	sortSet       bool
-	desc          bool
-	descSet       bool
-	noSnapshot    bool
-	noSnapshotSet bool
-	watchFormat   string
-	formatSet     bool
+	harness, presence, activity, tmuxSession, sortBy, watchFormat                                           string
+	summary, watch, absoluteTime, absoluteSet, sortSet, desc, descSet, noSnapshot, noSnapshotSet, formatSet bool
 }
 
 func (app *application) newListCommand() *cobra.Command {
-	options := listOptions{}
-	cmd := &cobra.Command{
-		Use:   listCommandName,
-		Short: "List known agent sessions",
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			flags := cmd.Flags()
-			options.absoluteSet = flags.Changed("absolute-time")
-			options.sortSet = flags.Changed("sort")
-			options.descSet = flags.Changed("desc")
-			options.noSnapshotSet = flags.Changed("no-snapshot")
-			options.formatSet = flags.Changed("format")
-
-			return app.runList(cmd.Context(), options)
-		},
-	}
-	cmd.Flags().StringVar(&options.harness, "harness", "", "filter by harness")
-	cmd.Flags().StringVar(&options.state, "state", "", "filter by state")
-	cmd.Flags().StringVar(&options.tmuxSession, "tmux-session", "", "filter by tmux session id or name")
-	cmd.Flags().StringVar(&options.sortBy, "sort", "", "sort by: tmux, updated, state-changed, created, ended, event-at, event, harness, state, cwd, id (default: updated)")
-	cmd.Flags().BoolVar(&options.activeOnly, "active", false, "only busy sessions in running or waiting states")
-	cmd.Flags().BoolVar(&options.liveOnly, "live", false, "only sessions with a known owner that have not exited")
-	cmd.Flags().BoolVar(&options.summary, "summary", false, "summarize agent counts by tmux session")
-	cmd.Flags().BoolVar(&options.watch, "watch", false, "watch registry state changes")
-	cmd.Flags().BoolVar(&options.absoluteTime, "absolute-time", false, "show full RFC3339 timestamps in text output")
-	cmd.Flags().BoolVar(&options.desc, "desc", false, "sort descending")
-	cmd.Flags().BoolVar(&options.noSnapshot, "no-snapshot", false, "suppress the startup watch snapshot")
-	cmd.Flags().StringVar(&options.watchFormat, "format", "", "watch text output format: table, plain")
-
+	o := listOptions{}
+	cmd := &cobra.Command{Use: "list", Short: "List known agent sessions", RunE: func(c *cobra.Command, _ []string) error {
+		f := c.Flags()
+		o.absoluteSet = f.Changed("absolute-time")
+		o.sortSet = f.Changed("sort")
+		o.descSet = f.Changed("desc")
+		o.noSnapshotSet = f.Changed("no-snapshot")
+		o.formatSet = f.Changed("format")
+		return app.runList(c.Context(), o)
+	}}
+	f := cmd.Flags()
+	f.StringVar(&o.harness, "harness", "", "filter by harness")
+	f.StringVar(&o.presence, "presence", "", "filter by presence")
+	f.StringVar(&o.activity, "activity", "", "filter by activity")
+	f.StringVar(&o.tmuxSession, "tmux-session", "", "filter by tmux session")
+	f.StringVar(&o.sortBy, "sort", "", "sort by: tmux, updated, presence-changed, activity-changed, created, harness, presence, activity, cwd, id")
+	f.BoolVar(&o.summary, "summary", false, "summarize agent counts by tmux session")
+	f.BoolVar(&o.watch, "watch", false, "watch registry changes")
+	f.BoolVar(&o.absoluteTime, "absolute-time", false, "show full timestamps")
+	f.BoolVar(&o.desc, "desc", false, "sort descending")
+	f.BoolVar(&o.noSnapshot, "no-snapshot", false, "suppress startup snapshot")
+	f.StringVar(&o.watchFormat, "format", "", "watch output format: table, plain")
 	return cmd
 }
 
-func (app *application) runList(ctx context.Context, options listOptions) error {
-	if err := validateListOptions(options); err != nil {
-		return err
-	}
-
-	if options.watch {
-		filter, err := buildFilter(options)
-		if err != nil {
-			return err
+func (app *application) runList(ctx context.Context, o listOptions) error {
+	if o.watch {
+		p, e := buildFilter(o)
+		if e != nil {
+			return e
 		}
-
-		return app.runWatch(ctx, watchOptions{
-			filter:     filter,
-			summary:    options.summary,
-			noSnapshot: options.noSnapshot,
-			format:     options.watchFormat,
-			formatSet:  options.formatSet,
-			debounce:   0,
-			now:        nil,
-			ready:      nil,
-		})
+		return app.runWatch(ctx, watchOptions{filter: p, summary: o.summary, noSnapshot: o.noSnapshot, format: o.watchFormat, formatSet: o.formatSet})
 	}
-
-	if options.summary {
-		return app.runListSummary(ctx, options)
+	if o.summary {
+		return app.runListSummary(ctx, o)
 	}
-
-	return app.runListSessions(ctx, options)
+	return app.runListSessions(ctx, o)
 }
 
-func validateListOptions(options listOptions) error {
-	if !options.watch {
-		if options.noSnapshotSet {
-			return fmt.Errorf("%w: --no-snapshot requires --watch", errInvalidListFlags)
+func buildFilter(o listOptions) (registry.Filter, error) {
+	f := registry.Filter{TmuxSession: o.tmuxSession}
+	if o.harness != "" {
+		h, e := harnesspkg.Normalize(o.harness)
+		if e != nil {
+			return f, fmt.Errorf("normalize harness: %w", e)
 		}
-		if options.formatSet {
-			return fmt.Errorf("%w: --format requires --watch", errInvalidListFlags)
-		}
+		f.Harness = h
 	}
-	if options.watch || options.summary {
-		if options.sortSet {
-			return fmt.Errorf("%w: --sort only applies to session list output", errInvalidListFlags)
+	if o.presence != "" {
+		p, e := registry.NormalizePresence(o.presence)
+		if e != nil {
+			return f, fmt.Errorf("normalize presence: %w", e)
 		}
-		if options.descSet {
-			return fmt.Errorf("%w: --desc only applies to session list output", errInvalidListFlags)
-		}
-		if options.absoluteSet {
-			return fmt.Errorf("%w: --absolute-time only applies to session list output", errInvalidListFlags)
-		}
+		f.Presence = p
 	}
-
-	return nil
+	if o.activity != "" {
+		a, e := registry.NormalizeActivity(o.activity)
+		if e != nil {
+			return f, fmt.Errorf("normalize activity: %w", e)
+		}
+		f.Activity = a
+	}
+	return f, nil
 }
 
-func (app *application) runListSessions(ctx context.Context, options listOptions) error {
-	filter, err := buildFilter(options)
-	if err != nil {
-		return err
+func (app *application) runListSessions(ctx context.Context, o listOptions) error {
+	f, e := buildFilter(o)
+	if e != nil {
+		return e
 	}
-
-	sessions, err := app.registryStore().List(ctx, filter)
-	if err != nil {
-		return fmt.Errorf("listing sessions: %w", err)
+	ss, e := app.registryStore().List(ctx, f)
+	if e != nil {
+		return fmt.Errorf("listing sessions: %w", e)
 	}
-	if err := sortListSessions(sessions, options); err != nil {
-		return err
+	if e = sortListSessions(ss, o); e != nil {
+		return e
 	}
-
 	if app.outputJSON {
-		return app.writeJSON(sessions)
+		return app.writeJSON(ss)
 	}
-
-	writer := tabwriter.NewWriter(app.stdout, 0, 0, tabPadding, ' ', 0)
+	w := tabwriter.NewWriter(app.stdout, 0, 0, tabPadding, ' ', 0)
+	if _, e = fmt.Fprintln(w, "ID\tHARNESS\tPRESENCE\tACTIVITY\tTMUX\tWINDOW\tPANE\tCWD\tUPDATED"); e != nil {
+		return fmt.Errorf("write list header: %w", e)
+	}
 	now := time.Now().UTC()
-	if _, err := fmt.Fprintln(writer, "ID\tHARNESS\tSTATE\tTMUX\tWINDOW\tPANE\tCWD\tUPDATED"); err != nil {
-		return fmt.Errorf("writing output: %w", err)
-	}
-
-	for _, session := range sessions {
-		if _, err := fmt.Fprintf(
-			writer,
-			"%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-			session.ID,
-			session.Harness,
-			session.State,
-			tmuxSessionLabel(session.Tmux),
-			tmuxWindowLabel(session.Tmux),
-			session.Tmux.PaneID,
-			formatHumanPath(session.CWD),
-			formatUpdatedAt(session.UpdatedAt, now, options.absoluteTime),
-		); err != nil {
-			return fmt.Errorf("writing output: %w", err)
+	for _, s := range ss {
+		activity := appReportActivity(s)
+		if s.Presence == registry.PresenceGone {
+			activity = "-"
+		}
+		_, e = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", s.ID, s.Harness, s.Presence, activity, tmuxSessionLabel(s.Tmux), tmuxWindowLabel(s.Tmux), s.Tmux.PaneID, formatHumanPath(s.CWD), formatUpdatedAt(s.UpdatedAt, now, o.absoluteTime))
+		if e != nil {
+			return fmt.Errorf("write list row: %w", e)
 		}
 	}
-
-	if err := writer.Flush(); err != nil {
-		return fmt.Errorf("flushing output: %w", err)
+	if err := w.Flush(); err != nil {
+		return fmt.Errorf("flush list output: %w", err)
 	}
-
 	return nil
 }
 
-func (app *application) runListSummary(ctx context.Context, options listOptions) error {
-	filter, err := buildFilter(options)
-	if err != nil {
-		return err
+func (app *application) runListSummary(ctx context.Context, o listOptions) error {
+	f, e := buildFilter(o)
+	if e != nil {
+		return e
 	}
-
-	summaries, err := app.registryStore().SummaryByTmuxSessionWithOptions(ctx, registry.SummaryOptions{
-		Filter: filter,
-	})
-	if err != nil {
-		return fmt.Errorf("summarizing sessions: %w", err)
+	s, e := app.registryStore().SummaryByTmuxSessionWithOptions(ctx, registry.SummaryOptions{Filter: f})
+	if e != nil {
+		return fmt.Errorf("summarize sessions: %w", e)
 	}
-
 	if app.outputJSON {
-		return app.writeJSON(summaries)
+		return app.writeJSON(s)
 	}
-
-	return app.writeSummaryTable(summaries)
+	return app.writeSummaryTable(s)
 }
 
-func (app *application) writeSummaryTable(summaries []registry.Summary) error {
-	writer := tabwriter.NewWriter(app.stdout, 0, 0, tabPadding, ' ', 0)
-	if _, err := fmt.Fprintln(writer, "TMUX\tACTIVE/TOTAL\tRUNNING\tWAITING\tIDLE\tUNKNOWN\tEXITED"); err != nil {
-		return fmt.Errorf("writing output: %w", err)
+func (app *application) writeSummaryTable(ss []registry.Summary) error {
+	w := tabwriter.NewWriter(app.stdout, 0, 0, tabPadding, ' ', 0)
+	if _, e := fmt.Fprintln(w, "TMUX\tTOTAL\tLIVE\tGONE\tPRESENCE_UNKNOWN\tRUNNING\tWAITING\tIDLE\tACTIVITY_UNKNOWN"); e != nil {
+		return fmt.Errorf("write summary header: %w", e)
 	}
-
-	labels := summaryTableLabels(summaries)
-	for index, summary := range summaries {
-		if _, err := fmt.Fprintf(
-			writer,
-			"%s\t%d/%d\t%d\t%d\t%d\t%d\t%d\n",
-			labels[index],
-			summary.Active,
-			summary.Total,
-			summary.Running,
-			summary.Waiting,
-			summary.Idle,
-			summary.Unknown,
-			summary.Exited,
-		); err != nil {
-			return fmt.Errorf("writing output: %w", err)
+	labels := summaryTableLabels(ss)
+	for i, s := range ss {
+		if _, e := fmt.Fprintf(w, "%s\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\n", labels[i], s.Total, s.Live, s.Gone, s.PresenceUnknown, s.Running, s.Waiting, s.Idle, s.ActivityUnknown); e != nil {
+			return fmt.Errorf("write summary row: %w", e)
 		}
 	}
-
-	if err := writer.Flush(); err != nil {
-		return fmt.Errorf("flushing output: %w", err)
+	if err := w.Flush(); err != nil {
+		return fmt.Errorf("flush summary output: %w", err)
 	}
-
 	return nil
 }
 
-func summaryTableLabels(summaries []registry.Summary) []string {
-	baseCounts := make(map[string]int, len(summaries))
-	for _, summary := range summaries {
-		baseCounts[summaryLabel(summary)]++
-	}
-
-	labels := make([]string, 0, len(summaries))
-	for _, summary := range summaries {
-		label := summaryLabel(summary)
-		if baseCounts[label] > 1 && summary.TmuxSessionID != "" && summary.TmuxSessionName != "" {
-			label = fmt.Sprintf("%s (%s)", label, summary.TmuxSessionID)
+//nolint:gocritic // label precedence is intentionally explicit for stable output
+func summaryTableLabels(ss []registry.Summary) []string {
+	out := make([]string, 0, len(ss))
+	for _, s := range ss {
+		if s.TmuxSessionName != "" {
+			out = append(out, s.TmuxSessionName)
+		} else if s.TmuxSessionID != "" {
+			out = append(out, s.TmuxSessionID)
+		} else {
+			out = append(out, "unknown")
 		}
-		labels = append(labels, label)
 	}
-
-	return labels
+	return out
 }
 
 func (app *application) newGetCommand() *cobra.Command {
-	return &cobra.Command{
-		Use:   "get <id>",
-		Short: "Get one session by registry id",
-		Args:  cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			session, err := app.registryStore().Get(cmd.Context(), args[0])
-			if err != nil {
-				if errors.Is(err, registry.ErrSessionNotFound) {
-					return fmt.Errorf("%w: %s", registry.ErrSessionNotFound, args[0])
-				}
-
-				return fmt.Errorf("getting session: %w", err)
-			}
-
-			if app.outputJSON {
-				return app.writeJSON(session)
-			}
-
-			return app.writeJSON(session)
-		},
-	}
-}
-
-type scanOptions struct {
-	state               string
-	staleOwnerlessAfter time.Duration
-}
-
-func (app *application) newScanCommand() *cobra.Command {
-	options := scanOptions{
-		state:               string(registry.StateUnknown),
-		staleOwnerlessAfter: defaultStaleOwnerlessAfter,
-	}
-	cmd := &cobra.Command{
-		Use:   "scan",
-		Short: "Scan tmux panes for supported harness processes",
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			return app.runScan(cmd.Context(), options)
-		},
-	}
-	cmd.Flags().StringVar(&options.state, "state", options.state, "state to use for newly observed panes")
-	cmd.Flags().DurationVar(&options.staleOwnerlessAfter, "stale-ownerless-after", options.staleOwnerlessAfter, "mark ownerless non-exited sessions as exited after this age; negative disables")
-
-	return cmd
-}
-
-func (app *application) runScan(ctx context.Context, options scanOptions) error {
-	state, err := registry.NormalizeState(options.state)
-	if err != nil {
-		return fmt.Errorf("normalizing state: %w", err)
-	}
-
-	listPanes := app.listTmuxPanes
-	if listPanes == nil {
-		listPanes = tmuxctx.ListPanes
-	}
-
-	panes, err := listPanes(ctx)
-	if err != nil {
-		return fmt.Errorf("listing tmux panes: %w", err)
-	}
-	cacheScannedTmuxPanes(ctx, reportqueue.New(app.store().Path()), panes)
-
-	store := app.registryStore()
-	_, err = markMissingTmuxPaneSessionsExited(ctx, store, panes)
-	if err != nil {
-		return err
-	}
-	if options.staleOwnerlessAfter >= 0 {
-		_, err = markStaleOwnerlessSessionsExited(ctx, store, time.Now().UTC(), options.staleOwnerlessAfter)
-		if err != nil {
-			return err
+	return &cobra.Command{Use: "get <id>", Short: "Get one session by registry id", Args: cobra.ExactArgs(1), RunE: func(c *cobra.Command, a []string) error {
+		s, e := app.registryStore().Get(c.Context(), a[0])
+		if e != nil {
+			return fmt.Errorf("get session: %w", e)
 		}
-	}
-
-	sessions := make([]registry.Session, 0, len(panes))
-	for _, pane := range panes {
-		harness, ok := harnesspkg.FromCommand(pane.CurrentCommand)
-		if !ok {
-			continue
-		}
-
-		session, err := store.Report(ctx, registry.Report{
-			Harness:     harness,
-			State:       state,
-			CWD:         pane.Tmux.PaneCurrentPath,
-			ProjectRoot: findProjectRoot(pane.Tmux.PaneCurrentPath),
-			Tmux:        pane.Tmux,
-			Source:      "tmux-scan",
-			Confidence:  "process",
-			Attributes: map[string]string{
-				"pane_current_command": pane.CurrentCommand,
-			},
-		})
-		if err != nil {
-			return fmt.Errorf("reporting scanned pane: %w", err)
-		}
-		sessions = append(sessions, session)
-	}
-
-	if app.outputJSON {
-		return app.writeJSON(sessions)
-	}
-
-	return app.writef("reported %d session(s)\n", len(sessions))
-}
-
-func cacheScannedTmuxPanes(ctx context.Context, queue reportqueue.Queue, panes []tmuxctx.Pane) {
-	now := time.Now().UTC()
-	for _, pane := range panes {
-		_ = queue.StoreTmuxContext(ctx, pane.Tmux, now)
-	}
-}
-
-func markMissingTmuxPaneSessionsExited(
-	ctx context.Context,
-	store registry.Store,
-	panes []tmuxctx.Pane,
-) ([]registry.Session, error) {
-	sessions, err := store.List(ctx, registry.Filter{})
-	if err != nil {
-		return nil, fmt.Errorf("listing sessions for tmux reconciliation: %w", err)
-	}
-
-	livePanes := liveTmuxPaneKeys(panes)
-	exited := make([]registry.Session, 0)
-	for _, session := range sessions {
-		if session.State == registry.StateExited || session.Tmux.PaneID == "" {
-			continue
-		}
-		if _, ok := livePanes[tmuxPaneKey(session.Tmux)]; ok {
-			continue
-		}
-
-		updated, err := store.Report(ctx, registry.Report{
-			Harness:       session.Harness,
-			State:         registry.StateExited,
-			SessionID:     session.SessionID,
-			SessionPath:   session.SessionPath,
-			ResumeCommand: session.ResumeCommand,
-			CWD:           session.CWD,
-			ProjectRoot:   session.ProjectRoot,
-			PID:           session.PID,
-			PPID:          session.PPID,
-			TTY:           session.TTY,
-			Tmux:          session.Tmux,
-			Source:        "tmux-scan",
-			Confidence:    "process",
-			Event:         "tmux-pane-missing",
-			Attributes: map[string]string{
-				"agent_sessions_reconcile": "tmux-pane-missing",
-			},
-		})
-		if err != nil {
-			return nil, fmt.Errorf("marking missing tmux pane session exited: %w", err)
-		}
-		exited = append(exited, updated)
-	}
-
-	return exited, nil
-}
-
-func markStaleOwnerlessSessionsExited(
-	ctx context.Context,
-	store registry.Store,
-	now time.Time,
-	staleAfter time.Duration,
-) ([]registry.Session, error) {
-	sessions, err := store.List(ctx, registry.Filter{})
-	if err != nil {
-		return nil, fmt.Errorf("listing sessions for ownerless reconciliation: %w", err)
-	}
-
-	exited := make([]registry.Session, 0)
-	for _, session := range sessions {
-		if session.State == registry.StateExited || registry.HasOwner(session) {
-			continue
-		}
-		if !ownerlessSessionIsStale(session, now, staleAfter) {
-			continue
-		}
-
-		updated, err := store.Report(ctx, registry.Report{
-			Harness:       session.Harness,
-			State:         registry.StateExited,
-			SessionID:     session.SessionID,
-			SessionPath:   session.SessionPath,
-			ResumeCommand: session.ResumeCommand,
-			CWD:           session.CWD,
-			ProjectRoot:   session.ProjectRoot,
-			TTY:           session.TTY,
-			Source:        "registry-reconcile",
-			Confidence:    session.Confidence,
-			Event:         "ownerless-stale",
-			Attributes: map[string]string{
-				"agent_sessions_reconcile": "ownerless-stale",
-			},
-		})
-		if err != nil {
-			return nil, fmt.Errorf("marking stale ownerless session exited: %w", err)
-		}
-		exited = append(exited, updated)
-	}
-
-	return exited, nil
-}
-
-func ownerlessSessionIsStale(session registry.Session, now time.Time, staleAfter time.Duration) bool {
-	if staleAfter < 0 {
-		return false
-	}
-	reference := session.LastSeenAt
-	if reference.IsZero() {
-		reference = session.UpdatedAt
-	}
-	if reference.IsZero() {
-		reference = session.CreatedAt
-	}
-	if reference.IsZero() {
-		return false
-	}
-
-	return !reference.After(now) && now.Sub(reference) >= staleAfter
-}
-
-func liveTmuxPaneKeys(panes []tmuxctx.Pane) map[string]struct{} {
-	keys := make(map[string]struct{}, len(panes))
-	for _, pane := range panes {
-		key := tmuxPaneKey(pane.Tmux)
-		if key != "" {
-			keys[key] = struct{}{}
-		}
-		fallbackKey := tmuxPaneFallbackKey(pane.Tmux)
-		if fallbackKey != "" {
-			keys[fallbackKey] = struct{}{}
-		}
-	}
-
-	return keys
-}
-
-func tmuxPaneKey(tmux registry.TmuxContext) string {
-	if tmux.PaneID == "" {
-		return ""
-	}
-	if tmux.SessionID != "" && tmux.SessionName != "" {
-		return "tmux:" + tmux.SessionID + "\x00" + tmux.SessionName + "\x00" + tmux.PaneID
-	}
-	if tmux.SessionID != "" {
-		return "tmux:" + tmux.SessionID + "\x00" + tmux.PaneID
-	}
-
-	return tmuxPaneFallbackKey(tmux)
-}
-
-func tmuxPaneFallbackKey(tmux registry.TmuxContext) string {
-	if tmux.PaneID == "" {
-		return ""
-	}
-
-	return "pane:" + tmux.PaneID
+		return app.writeJSON(s)
+	}}
 }
 
 func (app *application) newGCCommand() *cobra.Command {
-	var deleteAfter time.Duration
-	cmd := &cobra.Command{
-		Use:   "gc",
-		Short: "Delete old exited session records",
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			effectiveDeleteAfter := deleteAfter
-			if !cmd.Flags().Changed("delete-after") {
-				effectiveDeleteAfter = -1
-			}
-			result, err := app.registryStore().GC(cmd.Context(), effectiveDeleteAfter)
-			if err != nil {
-				return fmt.Errorf("garbage collecting sessions: %w", err)
-			}
-
-			if app.outputJSON {
-				return app.writeJSON(result)
-			}
-
-			return app.writef("deleted=%d remaining=%d\n", result.Deleted, result.Remaining)
-		},
-	}
-	cmd.Flags().DurationVar(&deleteAfter, "delete-after", 0, "delete exited sessions after this age")
-
-	return cmd
-}
-
-func buildFilter(options listOptions) (registry.Filter, error) {
-	filter := registry.Filter{
-		TmuxSession: options.tmuxSession,
-		ActiveOnly:  options.activeOnly,
-		LiveOnly:    options.liveOnly,
-	}
-
-	if options.harness != "" {
-		harness, err := harnesspkg.Normalize(options.harness)
-		if err != nil {
-			return registry.Filter{}, fmt.Errorf("normalizing harness filter: %w", err)
+	var age time.Duration
+	c := &cobra.Command{Use: "gc", Short: "Delete old gone session records", RunE: func(cmd *cobra.Command, _ []string) error {
+		if !cmd.Flags().Changed("delete-after") {
+			age = -1
 		}
-
-		filter.Harness = harness
-	}
-
-	if options.state != "" {
-		state, err := registry.NormalizeState(options.state)
-		if err != nil {
-			return registry.Filter{}, fmt.Errorf("normalizing state filter: %w", err)
+		r, e := app.registryStore().GC(cmd.Context(), age)
+		if e != nil {
+			return fmt.Errorf("gc sessions: %w", e)
 		}
-
-		filter.State = state
-	}
-
-	return filter, nil
-}
-
-func sortListSessions(sessions []registry.Session, options listOptions) error {
-	sortBy := strings.TrimSpace(options.sortBy)
-	if sortBy == "" {
-		sortBy = listSortUpdated
-	}
-
-	less, err := listSortLess(sortBy)
-	if err != nil {
-		return err
-	}
-
-	sort.SliceStable(sessions, func(i int, j int) bool {
-		cmp := less(sessions[i], sessions[j])
-		if options.desc {
-			return cmp > 0
+		if app.outputJSON {
+			return app.writeJSON(r)
 		}
-
-		return cmp < 0
-	})
-
-	return nil
+		return app.writef("deleted=%d remaining=%d\n", r.Deleted, r.Remaining)
+	}}
+	c.Flags().DurationVar(&age, "delete-after", 0, "delete gone sessions after this age")
+	return c
 }
 
 type sessionCompareFunc func(registry.Session, registry.Session) int
 
-var listSortComparers = map[string]sessionCompareFunc{
-	"tmux":          compareSessionTmux,
-	listSortUpdated: compareSessionUpdated,
-	"state-changed": compareSessionStateChanged,
-	"created":       compareSessionCreated,
-	"ended":         compareSessionEnded,
-	"event-at":      compareSessionEventAt,
-	"event":         compareSessionEvent,
-	"harness":       compareSessionHarness,
-	"state":         compareSessionState,
-	"cwd":           compareSessionCWD,
-	"id":            compareSessionID,
-}
-
-func listSortLess(sortBy string) (sessionCompareFunc, error) {
-	comparer, ok := listSortComparers[normalizeListSort(sortBy)]
-	if !ok {
-		return nil, fmt.Errorf("%w: %q", errInvalidListSort, sortBy)
+func sortListSessions(ss []registry.Session, o listOptions) error {
+	key := normalizeListSort(o.sortBy)
+	cmp, e := listSortLess(key)
+	if e != nil {
+		return e
 	}
-
-	return comparer, nil
-}
-
-func normalizeListSort(sortBy string) string {
-	normalized := strings.ToLower(strings.TrimSpace(sortBy))
-	normalized = strings.ReplaceAll(normalized, "_", "-")
-
-	switch normalized {
-	case "":
-		return "tmux"
-	case "time", "updated-at", listSortUpdated:
-		return listSortUpdated
-	case "state-changed-at", "state-since", "state-changed":
-		return "state-changed"
-	case "created-at", "created":
-		return "created"
-	case "ended-at", "ended":
-		return "ended"
-	case "last-event-at", "event-at":
-		return "event-at"
-	case "last-event", "event":
-		return "event"
-	default:
-		return normalized
-	}
-}
-
-func compareSessionTmux(left registry.Session, right registry.Session) int {
-	if cmp := strings.Compare(left.Tmux.SessionName, right.Tmux.SessionName); cmp != 0 {
-		return cmp
-	}
-	if cmp := compareNumericStrings(left.Tmux.WindowIndex, right.Tmux.WindowIndex); cmp != 0 {
-		return cmp
-	}
-	if cmp := compareNumericStrings(left.Tmux.PaneIndex, right.Tmux.PaneIndex); cmp != 0 {
-		return cmp
-	}
-	if cmp := strings.Compare(string(left.Harness), string(right.Harness)); cmp != 0 {
-		return cmp
-	}
-	if cmp := strings.Compare(left.ID, right.ID); cmp != 0 {
-		return cmp
-	}
-
-	return compareTime(left.UpdatedAt, right.UpdatedAt)
-}
-
-func compareNumericStrings(left string, right string) int {
-	leftNumber, leftErr := strconv.Atoi(left)
-	rightNumber, rightErr := strconv.Atoi(right)
-	if leftErr == nil && rightErr == nil {
-		switch {
-		case leftNumber < rightNumber:
-			return -1
-		case leftNumber > rightNumber:
-			return 1
-		default:
-			return 0
+	sort.SliceStable(ss, func(i, j int) bool {
+		v := cmp(ss[i], ss[j])
+		if o.desc {
+			return v > 0
 		}
+		return v < 0
+	})
+	return nil
+}
+
+func listSortLess(k string) (sessionCompareFunc, error) {
+	if c, ok := map[string]sessionCompareFunc{"tmux": compareSessionTmux, "updated": compareSessionUpdated, "presence-changed": func(a, b registry.Session) int { return compareTime(a.PresenceChangedAt, b.PresenceChangedAt) }, "activity-changed": func(a, b registry.Session) int { return compareTime(a.ActivityChangedAt, b.ActivityChangedAt) }, "created": compareSessionCreated, "harness": func(a, b registry.Session) int { return strings.Compare(string(a.Harness), string(b.Harness)) }, "presence": func(a, b registry.Session) int { return strings.Compare(string(a.Presence), string(b.Presence)) }, "activity": func(a, b registry.Session) int { return strings.Compare(appReportActivity(a), appReportActivity(b)) }, "cwd": func(a, b registry.Session) int { return strings.Compare(a.CWD, b.CWD) }, "id": compareSessionID}[k]; ok {
+		return c, nil
 	}
-
-	return strings.Compare(left, right)
+	return nil, fmt.Errorf("%w: %q", errInvalidListSort, k)
 }
 
-func compareSessionUpdated(left registry.Session, right registry.Session) int {
-	return compareTime(left.UpdatedAt, right.UpdatedAt)
+func normalizeListSort(s string) string {
+	s = strings.ToLower(strings.ReplaceAll(strings.TrimSpace(s), "_", "-"))
+	switch s {
+	case "", "time", "updated-at":
+		return "updated"
+	case "presence-changed-at", "presence-since":
+		return "presence-changed"
+	case "activity-changed-at", "activity-since":
+		return "activity-changed"
+	}
+	return s
 }
 
-func compareSessionStateChanged(left registry.Session, right registry.Session) int {
-	return compareTime(left.StateChangedAt, right.StateChangedAt)
+func compareSessionTmux(a, b registry.Session) int {
+	if c := strings.Compare(a.Tmux.SessionName, b.Tmux.SessionName); c != 0 {
+		return c
+	}
+	if c := strings.Compare(a.Tmux.WindowIndex, b.Tmux.WindowIndex); c != 0 {
+		return c
+	}
+	return strings.Compare(a.ID, b.ID)
 }
 
-func compareSessionCreated(left registry.Session, right registry.Session) int {
-	return compareTime(left.CreatedAt, right.CreatedAt)
-}
+func compareSessionUpdated(a, b registry.Session) int { return compareTime(a.UpdatedAt, b.UpdatedAt) }
 
-func compareSessionEnded(left registry.Session, right registry.Session) int {
-	return compareTime(left.EndedAt, right.EndedAt)
-}
-
-func compareSessionEventAt(left registry.Session, right registry.Session) int {
-	return compareTime(left.LastEventAt, right.LastEventAt)
-}
-
-func compareSessionEvent(left registry.Session, right registry.Session) int {
-	return strings.Compare(left.LastEvent, right.LastEvent)
-}
-
-func compareSessionHarness(left registry.Session, right registry.Session) int {
-	return strings.Compare(string(left.Harness), string(right.Harness))
-}
-
-func compareSessionState(left registry.Session, right registry.Session) int {
-	return strings.Compare(string(left.State), string(right.State))
-}
-
-func compareSessionCWD(left registry.Session, right registry.Session) int {
-	return strings.Compare(left.CWD, right.CWD)
-}
-
-func compareSessionID(left registry.Session, right registry.Session) int {
-	return strings.Compare(left.ID, right.ID)
-}
-
-func compareTime(left time.Time, right time.Time) int {
-	switch {
-	case left.Equal(right):
+func compareSessionCreated(a, b registry.Session) int { return compareTime(a.CreatedAt, b.CreatedAt) }
+func compareSessionID(a, b registry.Session) int      { return strings.Compare(a.ID, b.ID) }
+func compareTime(a, b time.Time) int {
+	if a.Equal(b) {
 		return 0
-	case left.IsZero():
+	}
+	if a.IsZero() {
 		return -1
-	case right.IsZero():
-		return 1
-	case left.Before(right):
-		return -1
-	default:
+	}
+	if b.IsZero() || a.After(b) {
 		return 1
 	}
+	return -1
 }
 
 func firstEnv(names ...string) string {
-	for _, name := range names {
-		if value := strings.TrimSpace(os.Getenv(name)); value != "" {
-			return value
+	for _, n := range names {
+		if v := strings.TrimSpace(os.Getenv(n)); v != "" {
+			return v
 		}
 	}
-
 	return ""
 }
-
-func firstEnvInt(names ...string) int {
-	value := firstEnv(names...)
-	if value == "" {
-		return 0
-	}
-
-	parsed, err := strconv.Atoi(value)
-	if err != nil {
-		return 0
-	}
-
-	return parsed
-}
-
-func defaultCWD() string {
-	cwd, err := os.Getwd()
-	if err != nil {
-		return ""
-	}
-
-	return cwd
-}
-
+func firstEnvInt(names ...string) int { v := firstEnv(names...); n, _ := strconv.Atoi(v); return n }
+func defaultCWD() string              { v, _ := os.Getwd(); return v }
 func findProjectRoot(start string) string {
 	if start == "" {
 		return ""
 	}
-
-	dir, err := filepath.Abs(start)
-	if err != nil {
-		return start
-	}
-
+	d, _ := filepath.Abs(start)
 	for {
-		if exists(filepath.Join(dir, ".git")) {
-			return dir
+		if exists(filepath.Join(d, ".git")) {
+			return d
 		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
+		p := filepath.Dir(d)
+		if p == d {
 			return ""
 		}
-		dir = parent
+		d = p
 	}
 }
-
-func exists(path string) bool {
-	_, err := os.Stat(path)
-
-	return err == nil
-}
-
+func exists(path string) bool { _, e := os.Stat(path); return e == nil }
 func parseAttributes(values []string) (map[string]string, error) {
-	if len(values) == 0 {
-		return map[string]string{}, nil
-	}
-
-	attributes := make(map[string]string, len(values))
-	for _, value := range values {
-		key, item, ok := strings.Cut(value, "=")
-		if !ok || strings.TrimSpace(key) == "" {
-			return nil, fmt.Errorf("%w: must be key=value: %q", errInvalidAttribute, value)
+	a := map[string]string{}
+	for _, v := range values {
+		k, x, ok := strings.Cut(v, "=")
+		if !ok || strings.TrimSpace(k) == "" {
+			return nil, fmt.Errorf("%w: must be key=value: %q", errInvalidAttribute, v)
 		}
-
-		attributes[strings.TrimSpace(key)] = item
+		a[strings.TrimSpace(k)] = x
 	}
-
-	return attributes, nil
+	return a, nil
 }
 
-func readStdinPayloadData(
-	stdin io.Reader,
-	storeRaw bool,
-	defaultsOnly bool,
-) (json.RawMessage, json.RawMessage, []byte, error) {
+func readStdinPayloadData(stdin io.Reader, storeRaw, defaultsOnly bool) (json.RawMessage, json.RawMessage, []byte, error) {
 	if !storeRaw && !defaultsOnly {
 		return nil, nil, nil, nil
 	}
-
-	data, err := io.ReadAll(stdin)
+	d, err := io.ReadAll(stdin)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("reading stdin payload: %w", err)
+		return nil, nil, nil, fmt.Errorf("read stdin payload: %w", err)
 	}
-	data = []byte(strings.TrimSpace(string(data)))
-	if len(data) == 0 {
+	d = []byte(strings.TrimSpace(string(d)))
+	if len(d) == 0 {
 		return nil, nil, nil, nil
 	}
-
-	var payload json.RawMessage
-	if json.Valid(data) {
-		payload = json.RawMessage(data)
+	var p json.RawMessage
+	if json.Valid(d) {
+		p = json.RawMessage(d)
 	} else {
-		wrapped, err := json.Marshal(string(data))
+		encoded, err := json.Marshal(string(d))
 		if err != nil {
-			return nil, nil, data, fmt.Errorf("encoding stdin payload: %w", err)
+			return nil, nil, nil, fmt.Errorf("encode stdin payload: %w", err)
 		}
-		payload = json.RawMessage(wrapped)
+		p = encoded
 	}
-
 	if storeRaw {
-		return payload, payload, data, nil
+		return p, p, d, nil
 	}
-
-	return nil, payload, data, nil
+	return nil, p, d, nil
 }
 
-func applyPayloadDefaults(
-	options *reportOptions,
-	attributes map[string]string,
-	defaults harnesspkg.PayloadDefaults,
-) {
-	applyStringDefault(&options.sessionID, defaults.SessionID)
-	applyStringDefault(&options.sessionPath, defaults.SessionPath)
-	applyStringDefault(&options.event, defaults.Event)
-	applyProjectRootDefault(options, defaults.ProjectRoot)
-	applyCWDDefault(options, defaults.CWD)
-	maps.Copy(attributes, defaults.Attributes)
+func applyPayloadDefaults(o *reportOptions, a map[string]string, d harnesspkg.PayloadDefaults) {
+	applyStringDefault(&o.sessionID, d.SessionID)
+	applyStringDefault(&o.sessionPath, d.SessionPath)
+	applyStringDefault(&o.event, d.Event)
+	applyCWDDefault(o, d.CWD)
+	applyProjectRootDefault(o, d.ProjectRoot)
+	maps.Copy(a, d.Attributes)
 }
 
-func applyReportRuntimeDefaults(options *reportOptions) {
-	if options.cwd == "" && options.cwdAuto {
-		options.cwd = defaultCWD()
+func applyReportRuntimeDefaults(o *reportOptions) {
+	if o.cwd == "" && o.cwdAuto {
+		o.cwd = defaultCWD()
 	}
-	if options.projectRoot == "" && options.projectRootAuto {
-		options.projectRoot = findProjectRoot(options.cwd)
+	if o.projectRoot == "" && o.projectRootAuto {
+		o.projectRoot = findProjectRoot(o.cwd)
 	}
 }
 
-func applyStringDefault(target *string, value string) {
-	if *target != "" || value == "" {
-		return
+func applyStringDefault(p *string, v string) {
+	if *p == "" {
+		*p = v
 	}
-
-	*target = value
 }
 
-func applyCWDDefault(options *reportOptions, cwd string) {
-	if cwd == "" || (options.cwd != "" && !options.cwdAuto) {
-		return
+func applyCWDDefault(o *reportOptions, v string) {
+	if v != "" && o.cwdAuto && o.cwd == "" {
+		o.cwd = v
+		o.projectRoot = findProjectRoot(v)
 	}
-
-	options.cwd = cwd
-	if options.projectRoot != "" {
-		return
-	}
-
-	options.projectRoot = findProjectRoot(cwd)
-	options.projectRootAuto = true
 }
 
-func applyProjectRootDefault(options *reportOptions, projectRoot string) {
-	if projectRoot == "" || (options.projectRoot != "" && !options.projectRootAuto) {
-		return
+func applyProjectRootDefault(o *reportOptions, v string) {
+	if v != "" && o.projectRootAuto && o.projectRoot == "" {
+		o.projectRoot = v
 	}
-
-	options.projectRoot = projectRoot
-	options.projectRootAuto = true
 }
 
-func tmuxSessionLabel(ctx registry.TmuxContext) string {
-	if ctx.SessionName != "" {
-		return ctx.SessionName
+func tmuxSessionLabel(c registry.TmuxContext) string {
+	if c.SessionName != "" {
+		return c.SessionName
 	}
-
-	if ctx.SessionID != "" {
-		return ctx.SessionID
+	if c.SessionID != "" {
+		return c.SessionID
 	}
-
 	return "-"
 }
 
-func tmuxWindowLabel(ctx registry.TmuxContext) string {
-	switch {
-	case ctx.WindowIndex != "" && ctx.WindowName != "":
-		return ctx.WindowIndex + ":" + ctx.WindowName
-	case ctx.WindowName != "":
-		return ctx.WindowName
-	case ctx.WindowIndex != "":
-		return ctx.WindowIndex
-	default:
-		return "-"
+func tmuxWindowLabel(c registry.TmuxContext) string {
+	if c.WindowIndex != "" && c.WindowName != "" {
+		return c.WindowIndex + ":" + c.WindowName
 	}
+	if c.WindowName != "" {
+		return c.WindowName
+	}
+	if c.WindowIndex != "" {
+		return c.WindowIndex
+	}
+	return "-"
 }
 
-func summaryLabel(summary registry.Summary) string {
-	if summary.TmuxSessionName != "" {
-		return summary.TmuxSessionName
-	}
-	if summary.TmuxSessionID != "" {
-		return summary.TmuxSessionID
-	}
-
-	return "unknown"
-}
-
-func formatUpdatedAt(updatedAt time.Time, now time.Time, absolute bool) string {
-	if updatedAt.IsZero() {
+func formatUpdatedAt(t, now time.Time, absolute bool) string {
+	if t.IsZero() {
 		return "-"
 	}
 	if absolute {
-		return updatedAt.Format(time.RFC3339)
+		return t.Format(time.RFC3339)
 	}
-
-	elapsed := now.Sub(updatedAt)
-	if elapsed < time.Second {
+	d := now.Sub(t)
+	if d < time.Second {
 		return "just now"
 	}
-
-	return formatElapsed(elapsed)
+	return formatElapsed(d)
 }
 
-func formatHumanPath(path string) string {
-	if path == "" {
+func formatHumanPath(p string) string {
+	if p == "" {
 		return ""
 	}
-
-	home, err := os.UserHomeDir()
-	if err != nil || home == "" {
-		return path
+	h, e := os.UserHomeDir()
+	if e != nil {
+		return p
 	}
-
-	relative, err := filepath.Rel(home, path)
-	if err != nil || filepath.IsAbs(relative) || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
-		return path
+	r, e := filepath.Rel(h, p)
+	if e != nil || filepath.IsAbs(r) || r == ".." || strings.HasPrefix(r, ".."+string(filepath.Separator)) {
+		return p
 	}
-	if relative == "." {
+	if r == "." {
 		return "~"
 	}
-
-	return filepath.Join("~", relative)
+	return filepath.Join("~", r)
 }
 
-func formatElapsed(elapsed time.Duration) string {
+func formatElapsed(d time.Duration) string {
 	switch {
-	case elapsed < time.Minute:
-		return fmt.Sprintf("%ds ago", int(elapsed/time.Second))
-	case elapsed < time.Hour:
-		return fmt.Sprintf("%dm ago", int(elapsed/time.Minute))
-	case elapsed < dayDuration():
-		return fmt.Sprintf("%dh ago", int(elapsed/time.Hour))
-	case elapsed < weekDuration():
-		return fmt.Sprintf("%dd ago", int(elapsed/dayDuration()))
-	case elapsed < yearDuration():
-		return fmt.Sprintf("%dw ago", int(elapsed/weekDuration()))
+	case d < time.Minute:
+		return fmt.Sprintf("%ds ago", int(d/time.Second))
+	case d < time.Hour:
+		return fmt.Sprintf("%dm ago", int(d/time.Minute))
+	case d < hoursPerDay*time.Hour:
+		return fmt.Sprintf("%dh ago", int(d/time.Hour))
+	case d < 7*hoursPerDay*time.Hour:
+		return fmt.Sprintf("%dd ago", int(d/(hoursPerDay*time.Hour)))
+	case d < 365*hoursPerDay*time.Hour:
+		return fmt.Sprintf("%dw ago", int(d/(7*hoursPerDay*time.Hour)))
 	default:
-		return fmt.Sprintf("%dy ago", int(elapsed/yearDuration()))
+		return fmt.Sprintf("%dy ago", int(d/(365*hoursPerDay*time.Hour)))
 	}
-}
-
-func dayDuration() time.Duration {
-	return hoursPerDay * time.Hour
-}
-
-func weekDuration() time.Duration {
-	return daysPerWeek * dayDuration()
-}
-
-func yearDuration() time.Duration {
-	return daysPerYear * dayDuration()
 }

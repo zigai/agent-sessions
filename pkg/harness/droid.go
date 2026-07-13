@@ -43,83 +43,47 @@ func (droidHarness) InstallPlan(binary string) InstallPlan {
 				{
 					Event:   HookEventSessionStart,
 					Matcher: "",
-					Command: SelfRefreshCommand(binary, registry.HarnessDroid, true) + " " + droidHookCommand(
-						binary,
-						registry.StateIdle,
-						HookEventSessionStart,
-					),
+					Command: droidHookCommand(binary, registry.ActivityIdle, HookEventSessionStart),
 				},
 				{
 					Event:   HookEventUserPromptSubmit,
 					Matcher: "",
-					Command: droidHookCommand(
-						binary,
-						registry.StateRunning,
-						HookEventUserPromptSubmit,
-					),
+					Command: droidHookCommand(binary, registry.ActivityRunning, HookEventUserPromptSubmit),
 				},
 				{
 					Event:   HookEventPreToolUse,
 					Matcher: "",
-					Command: droidHookCommand(
-						binary,
-						registry.StateRunning,
-						HookEventPreToolUse,
-					),
+					Command: droidHookCommand(binary, registry.ActivityRunning, HookEventPreToolUse),
 				},
 				{
 					Event:   "PostToolUse",
 					Matcher: "",
-					Command: droidHookCommand(
-						binary,
-						registry.StateRunning,
-						"PostToolUse",
-					),
+					Command: droidHookCommand(binary, registry.ActivityRunning, "PostToolUse"),
 				},
 				{
 					Event:   "Notification",
 					Matcher: "",
-					Command: droidHookCommand(
-						binary,
-						registry.StateWaiting,
-						"Notification",
-					),
+					Command: droidHookCommand(binary, registry.ActivityWaiting, "Notification"),
 				},
 				{
 					Event:   HookEventStop,
 					Matcher: "",
-					Command: droidHookCommand(
-						binary,
-						registry.StateIdle,
-						HookEventStop,
-					),
+					Command: droidHookCommand(binary, registry.ActivityIdle, HookEventStop),
 				},
 				{
 					Event:   "SubagentStop",
 					Matcher: "",
-					Command: droidHookCommand(
-						binary,
-						registry.StateIdle,
-						"SubagentStop",
-					),
+					Command: droidHookCommand(binary, registry.ActivityIdle, "SubagentStop"),
 				},
 				{
 					Event:   "PreCompact",
 					Matcher: "",
-					Command: droidHookCommand(
-						binary,
-						registry.StateRunning,
-						"PreCompact",
-					),
+					Command: droidHookCommand(binary, registry.ActivityRunning, "PreCompact"),
 				},
 				{
 					Event:   "SessionEnd",
 					Matcher: "",
-					Command: droidHookCommand(
-						binary,
-						registry.StateExited,
-						"SessionEnd",
-					),
+					Command: droidHookCommand(binary, registry.PresenceGone, "SessionEnd"),
 				},
 			},
 		}}},
@@ -142,8 +106,8 @@ func (droidHarness) PayloadDefaults(payload map[string]any) PayloadDefaults {
 	return droidPayloadDefaults(payload)
 }
 
-func droidHookCommand(binary string, state registry.State, event string) string {
-	return RawStdinDefaultsReportHookCommand(binary, registry.HarnessDroid, state, event, droidIntegrationSource)
+func droidHookCommand(binary string, transition any, event string) string {
+	return RawStdinDefaultsReportHookCommand(binary, registry.HarnessDroid, transition, event, droidIntegrationSource)
 }
 
 func droidPayloadDefaults(payload map[string]any) PayloadDefaults {

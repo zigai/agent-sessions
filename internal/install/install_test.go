@@ -171,7 +171,7 @@ func TestInstallClaudeReplacesManagedHooks(t *testing.T) {
 		Harness:              registry.HarnessClaude,
 		Path:                 path,
 		RemovedText:          "old-agent-sessions",
-		RequiredText:         []string{"install-hooks", "claude"},
+		RequiredText:         []string{"--raw-stdin", "agent_sessions_integration_version=3"},
 		FirstChangeMessage:   "expected claude install to replace old managed hook",
 		SecondChangedMessage: "expected second claude install to be idempotent",
 	})
@@ -266,8 +266,6 @@ func TestInstallCursorWritesHooks(t *testing.T) {
 	requireTestHookEvents(t, hooks, []string{
 		"sessionStart",
 		"beforeSubmitPrompt",
-		"beforeShellExecution",
-		"afterShellExecution",
 		"stop",
 		"sessionEnd",
 	})
@@ -277,7 +275,6 @@ func TestInstallCursorWritesHooks(t *testing.T) {
 		"--raw-stdin-defaults-only",
 		"agent_sessions_integration=cursor-hook",
 		"continue",
-		"permission",
 	}, "cursor hooks")
 	if strings.Contains(text, "--raw-stdin ") {
 		t.Fatalf("expected defaults-only cursor hook commands: %s", text)
@@ -415,9 +412,6 @@ func TestInstallClineWritesHookFiles(t *testing.T) {
 		"PreToolUse.sh",
 		"PostToolUse.sh",
 		"TaskComplete.sh",
-		"TaskError.sh",
-		"TaskCancel.sh",
-		"SessionShutdown.sh",
 	} {
 		text := string(readTestFile(t, filepath.Join(hooksDir, name), "reading cline hook "+name))
 		requireTextContainsAll(t, text, []string{
@@ -550,8 +544,8 @@ func TestInstallShimSupportsHarnessesMissingExitHooks(t *testing.T) {
 			requireTextContainsAll(t, result.Snippet, []string{
 				managedMarker,
 				"harness_bin=" + tc.targetBinary,
-				"report --harness " + string(tc.harness) + " --state idle --event process.start --source " + string(tc.harness) + "-shim",
-				"report --harness " + string(tc.harness) + " --state exited --event process.exit --source " + string(tc.harness) + "-shim",
+				"report " + string(tc.harness) + " --presence live --evidence process --pid \"$$\"",
+				"report " + string(tc.harness) + " --presence gone --evidence process --pid \"$$\"",
 			}, "shim script")
 		})
 	}
@@ -642,10 +636,7 @@ func TestInstallPiWritesExtension(t *testing.T) {
 	if !strings.Contains(result.Snippet, "AGENT_SESSIONS_INTEGRATION_ID=pi") {
 		t.Fatalf("expected integration id in snippet: %q", result.Snippet)
 	}
-	if !strings.Contains(result.Snippet, `install-hooks", "pi"`) {
-		t.Fatalf("expected self-refresh install command in snippet: %q", result.Snippet)
-	}
-	if !strings.Contains(result.Snippet, `"--harness", "pi"`) {
+	if !strings.Contains(result.Snippet, `"report", "pi"`) {
 		t.Fatalf("expected pi report command in snippet: %q", result.Snippet)
 	}
 	if !strings.Contains(result.Snippet, `"--observed-at", observedAt`) {
@@ -714,10 +705,7 @@ func TestInstallKiloWritesPlugin(t *testing.T) {
 		`export default { id: "agent-sessions-state", server: AgentSessionsPlugin };`,
 		`event: async ({ event }`,
 		`"permission.asked"`,
-		`case "session.status":`,
-		`case "session.updated":`,
-		`install-hooks", "kilo"`,
-		`"--harness", "kilo"`,
+		`"AGENT_SESSIONS_INTEGRATION_VERSION=3"`,
 		`"--observed-at", observedAt`,
 		`"kilo_status"`,
 		`"agent_sessions_integration", "kilo-plugin"`,
@@ -761,10 +749,6 @@ const old = "old-agent-sessions";
 	if strings.Contains(text, "old-agent-sessions") {
 		t.Fatalf("expected old managed plugin to be removed: %s", text)
 	}
-	if !strings.Contains(text, `install-hooks", "kilo"`) {
-		t.Fatalf("expected self-refresh install command in plugin: %s", text)
-	}
-
 	second, err := Run(Options{
 		Harness:      registry.HarnessKilo,
 		Binary:       testInstallBinary,
@@ -799,14 +783,14 @@ func TestInstallAgyWritesPlugin(t *testing.T) {
 	if !result.Changed {
 		t.Fatal("expected agy install to report changed")
 	}
-	if result.Path != filepath.Join(home, ".gemini", "config", "plugins", agyPluginName) {
+	if result.Path != filepath.Join(home, ".gemini", "antigravity-cli", "plugins", agyPluginName) {
 		t.Fatalf("unexpected path %q", result.Path)
 	}
 	requireTextContainsAll(t, result.Snippet, []string{"hook agy"}, "agy snippet")
 	requireAgyPluginManifest(t, result.Path)
 	requireAgyPluginHooks(t, result.Path)
 	requireAgyPluginMarker(t, result.Path)
-	requireAgyImportManifest(t, filepath.Join(home, ".gemini", "config", agyImportManifestName))
+	requireAgyImportManifest(t, filepath.Join(home, ".gemini", "antigravity-cli", agyImportManifestName))
 
 	second, err := Run(Options{
 		Harness:      registry.HarnessAgy,
@@ -827,7 +811,7 @@ func TestInstallAgyWritesPlugin(t *testing.T) {
 func TestInstallAgyRequiresForceForForeignPlugin(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	pluginDir := filepath.Join(home, ".gemini", "config", "plugins", agyPluginName)
+	pluginDir := filepath.Join(home, ".gemini", "antigravity-cli", "plugins", agyPluginName)
 	if err := os.MkdirAll(pluginDir, 0o700); err != nil {
 		t.Fatalf("creating agy plugin dir: %v", err)
 	}
@@ -946,7 +930,7 @@ func TestInstallDroidWritesHooks(t *testing.T) {
 	requireTextContainsAll(t, text, []string{
 		"--raw-stdin-defaults-only",
 		"agent_sessions_integration=droid-hook",
-		"install-hooks droid",
+		"agent_sessions_integration_version=3",
 	}, "droid hooks")
 	if strings.Contains(text, "statusMessage") {
 		t.Fatalf("expected Droid hooks not to include unsupported statusMessage field: %s", text)
@@ -1014,15 +998,15 @@ func TestInstallKimiCodeWritesHooks(t *testing.T) {
 		"--raw-stdin",
 		"--quiet",
 		"agent_sessions_integration=kimi-code-hook",
+		"agent_sessions_integration_version=3",
 		managedMarker,
-		"install-hooks kimi-code",
-		"--state idle --event SessionStart",
-		"--state running --event UserPromptSubmit",
-		"--state waiting --event PermissionRequest",
-		"--state running --event PermissionResult",
-		"--state idle --event StopFailure",
-		"--state idle --event Interrupt",
-		"--state exited --event SessionEnd",
+		"--activity idle --event SessionStart",
+		"--activity running --event UserPromptSubmit",
+		"--activity waiting --event PermissionRequest",
+		"--activity running --event PermissionResult",
+		"--activity idle --event StopFailure",
+		"--activity idle --event Interrupt",
+		"--presence gone --event SessionEnd",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("expected %q in snippet: %s", want, text)
@@ -1214,9 +1198,6 @@ func TestInstallGrokReplacesManagedHooks(t *testing.T) {
 	text := string(data)
 	if strings.Contains(text, "old-agent-sessions") {
 		t.Fatalf("expected old managed hook to be removed: %s", text)
-	}
-	if !strings.Contains(text, "install-hooks") || !strings.Contains(text, "grok") {
-		t.Fatalf("expected self-refresh hook in snippet: %s", text)
 	}
 
 	second, err := Run(Options{
@@ -1422,8 +1403,8 @@ func requireAgyPluginMarker(t *testing.T, dir string) {
 	if !strings.Contains(string(marker), managedMarker) {
 		t.Fatalf("expected managed marker, got %q", marker)
 	}
-	if !strings.Contains(string(marker), "AGENT_SESSIONS_INTEGRATION_VERSION=2") {
-		t.Fatalf("expected agy integration version 2 marker, got %q", marker)
+	if !strings.Contains(string(marker), "AGENT_SESSIONS_INTEGRATION_VERSION=3") {
+		t.Fatalf("expected agy integration version 3 marker, got %q", marker)
 	}
 }
 
@@ -1496,7 +1477,6 @@ func requireGoosePluginHooks(t *testing.T, dir string) {
 	text := string(hooksData)
 	requireTextContainsAll(t, text, []string{
 		"${PLUGIN_ROOT}/scripts/report.sh",
-		"install-hooks goose",
 	}, "goose hooks")
 }
 
@@ -1508,7 +1488,9 @@ func requireGoosePluginScript(t *testing.T, dir string) {
 		managedMarker,
 		"--raw-stdin-defaults-only",
 		"agent_sessions_integration=goose-hook",
-		`--state "$state"`,
+		"agent_sessions_integration_version=3",
+		`--presence "$transition"`,
+		`--activity "$transition"`,
 		`--event "$event"`,
 	}, "goose report script")
 }

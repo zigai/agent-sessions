@@ -4,7 +4,6 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -15,7 +14,7 @@ import (
 )
 
 const (
-	EnvelopeVersion = 1
+	EnvelopeVersion = 2
 	KindReport      = "report"
 )
 
@@ -38,71 +37,22 @@ type Envelope struct {
 	CachedTmux          registry.TmuxContext `json:"cached_tmux,omitzero"`
 }
 
-type Report struct {
-	Harness          registry.Harness     `json:"harness"`
-	State            registry.State       `json:"state"`
-	SessionID        string               `json:"session_id,omitempty"`
-	SessionPath      string               `json:"session_path,omitempty"`
-	ResumeCommand    []string             `json:"resume_command,omitempty"`
-	CWD              string               `json:"cwd,omitempty"`
-	ProjectRoot      string               `json:"project_root,omitempty"`
-	PID              int                  `json:"pid,omitempty"`
-	ProcessStartTime string               `json:"process_start_time,omitempty"`
-	PPID             int                  `json:"ppid,omitempty"`
-	TTY              string               `json:"tty,omitempty"`
-	Tmux             registry.TmuxContext `json:"tmux,omitzero"`
-	Source           string               `json:"source,omitempty"`
-	Confidence       string               `json:"confidence,omitempty"`
-	Event            string               `json:"event,omitempty"`
-	Attributes       map[string]string    `json:"attributes,omitempty"`
-	RawPayload       json.RawMessage      `json:"raw_payload,omitempty"`
-	ObservedAt       time.Time            `json:"observed_at,omitzero"`
+// Report is the v2 observation payload carried by a queue envelope.
+//
+// It aliases the registry contract so queue serialization cannot drift from
+// registry observation semantics.
+type Report = registry.Observation
+
+func ReportFromRegistry(observation registry.Observation) Report {
+	return observation
 }
 
-func ReportFromRegistry(report registry.Report) Report {
-	return Report{
-		Harness:          report.Harness,
-		State:            report.State,
-		SessionID:        report.SessionID,
-		SessionPath:      report.SessionPath,
-		ResumeCommand:    report.ResumeCommand,
-		CWD:              report.CWD,
-		ProjectRoot:      report.ProjectRoot,
-		PID:              report.PID,
-		ProcessStartTime: report.ProcessStartTime,
-		PPID:             report.PPID,
-		TTY:              report.TTY,
-		Tmux:             report.Tmux,
-		Source:           report.Source,
-		Confidence:       report.Confidence,
-		Event:            report.Event,
-		Attributes:       report.Attributes,
-		RawPayload:       report.RawPayload,
-		ObservedAt:       report.ObservedAt,
-	}
+func RegistryObservation(report Report) registry.Observation {
+	return report
 }
 
-func (r Report) RegistryReport() registry.Report {
-	return registry.Report{
-		Harness:          r.Harness,
-		State:            r.State,
-		SessionID:        r.SessionID,
-		SessionPath:      r.SessionPath,
-		ResumeCommand:    r.ResumeCommand,
-		CWD:              r.CWD,
-		ProjectRoot:      r.ProjectRoot,
-		PID:              r.PID,
-		ProcessStartTime: r.ProcessStartTime,
-		PPID:             r.PPID,
-		TTY:              r.TTY,
-		Tmux:             r.Tmux,
-		Source:           r.Source,
-		Confidence:       r.Confidence,
-		Event:            r.Event,
-		Attributes:       r.Attributes,
-		RawPayload:       r.RawPayload,
-		ObservedAt:       r.ObservedAt,
-	}
+func RegistryReport(report Report) registry.Observation {
+	return report
 }
 
 type RuntimeContext struct {
