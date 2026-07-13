@@ -28,11 +28,14 @@ const (
 	integrationCaptureGroups  = 2
 )
 
-var integrationVersionPattern = regexp.MustCompile(`(?i)(?:agent[_-]?sessions[_-]?integration[_-]?version|AGENT_SESSIONS_INTEGRATION_VERSION)\s*[=:]\s*["']?([0-9]+)`)
+var (
+	integrationVersionPattern = regexp.MustCompile(`(?i)(?:agent[_-]?sessions[_-]?integration[_-]?version|AGENT_SESSIONS_INTEGRATION_VERSION)\s*[=:]\s*["']?([0-9]+)`)
+	integrationSourcePattern  = regexp.MustCompile(`(?i)agent[_-]?sessions[_-]?integration\s*[=:]`)
+)
 
 // ClassifyArtifact inspects a generated artifact without modifying it. It is
 // intentionally format-agnostic: managed ownership is established by the
-// marker and generation is established by the integration-version metadata.
+// marker or source metadata and generation is established by the version.
 func ClassifyArtifact(path string) (ArtifactStatus, error) {
 	info, err := os.Stat(path)
 	if err != nil {
@@ -61,7 +64,7 @@ func ClassifyArtifact(path string) (ArtifactStatus, error) {
 }
 
 func classifyArtifactContent(content string) ArtifactStatus {
-	if !strings.Contains(content, managedMarker) {
+	if !strings.Contains(content, managedMarker) && !integrationSourcePattern.MatchString(content) {
 		return ArtifactForeign
 	}
 

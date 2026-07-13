@@ -265,9 +265,7 @@ func installPlanPaths(plan harness.InstallPlan) []string {
 				paths = append(paths, filepath.Join(value.Plan.Dir, file.Name))
 			}
 		case harness.PluginDirectoryAction:
-			for _, file := range value.Plan.Files {
-				paths = append(paths, filepath.Join(value.Plan.Dir, file.Name))
-			}
+			paths = append(paths, value.Plan.Dir)
 		}
 	}
 	return paths
