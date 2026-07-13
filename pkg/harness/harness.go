@@ -57,7 +57,7 @@ const IntegrationVersion = 3
 
 //nolint:cyclop,exhaustruct // capabilities are a documented per-harness matrix
 func capabilitiesFor(id registry.Harness) Capabilities {
-	capabilities := Capabilities{SessionStart: false, SessionEnd: false, RunningIdle: false, WaitingPermission: false, ProcessIdentity: true, NativeCatalog: false, TTYTmuxContext: true}
+	capabilities := Capabilities{SessionStart: false, SessionEnd: false, RunningIdle: false, WaitingPermission: false, ProcessIdentity: false, NativeCatalog: false, TTYTmuxContext: false}
 	switch id {
 	case registry.HarnessClaude:
 		capabilities.SessionStart, capabilities.SessionEnd, capabilities.RunningIdle, capabilities.WaitingPermission, capabilities.NativeCatalog = true, true, true, true, true
