@@ -60,6 +60,18 @@ func TestObserverDefaultMissingRequiresTwoSnapshots(t *testing.T) {
 	}
 }
 
+func TestResolveHarnessIgnoresLaterArguments(t *testing.T) {
+	t.Parallel()
+	process := processinfo.Process{Executable: "/usr/bin/tmux", Args: []string{"/usr/bin/tmux", "new-session", "-s", "agent-test", "/tmp/codex"}}
+	if harnessID, ok := resolveHarness(process); ok || harnessID != "" {
+		t.Fatalf("tmux launcher was classified as harness: %q", harnessID)
+	}
+	process.Args = []string{"/tmp/codex", "resume"}
+	if harnessID, ok := resolveHarness(process); !ok || harnessID != registry.HarnessCodex {
+		t.Fatalf("codex argv was not classified: %q %t", harnessID, ok)
+	}
+}
+
 func TestObserverCatalogCorrelatesCurrentClaudeProcess(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "sessions.json")

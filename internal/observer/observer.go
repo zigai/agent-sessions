@@ -19,8 +19,9 @@ import (
 )
 
 const (
-	defaultObserverInterval = 3 * time.Second
-	defaultMissingSnapshots = 2
+	defaultObserverInterval    = 3 * time.Second
+	defaultMissingSnapshots    = 2
+	commandArgumentPrefixCount = 2
 )
 
 var errObserverContextNil = errors.New("observer context is nil")
@@ -357,7 +358,7 @@ func resolveHarness(process processinfo.Process) (registry.Harness, bool) {
 	if harnessID, ok := harness.FromCommand(process.Executable); ok {
 		return harnessID, true
 	}
-	for _, arg := range process.Args {
+	for _, arg := range process.Args[:min(commandArgumentPrefixCount, len(process.Args))] {
 		if harnessID, ok := harness.FromCommand(arg); ok {
 			return harnessID, true
 		}
@@ -423,7 +424,7 @@ func (o *Observer) acquireLock() error {
 	if err := os.MkdirAll(filepath.Dir(o.lockPath), 0o700); err != nil {
 		return fmt.Errorf("create observer lock directory: %w", err)
 	}
-	file, err := os.OpenFile(o.lockPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	file, err := openObserverLock(o.lockPath)
 	if err != nil {
 		return fmt.Errorf("observer already running or lock unavailable: %w", err)
 	}
@@ -440,8 +441,8 @@ func (o *Observer) releaseLock() {
 	if file == nil {
 		return
 	}
-	_ = file.Close()
-	_ = os.Remove(o.lockPath)
+	_ = closeObserverLock(file)
+	_ = removeObserverLock(o.lockPath)
 }
 
 //nolint:cyclop,funcorder // health persistence handles degraded categories and atomic writes
