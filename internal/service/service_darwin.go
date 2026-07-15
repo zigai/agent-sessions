@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -45,10 +46,10 @@ func RenderLaunchAgent(options Options) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	args := []string{normalized.Binary, "--store", normalized.StorePath, "observe", "--interval", normalized.Interval.String(), "--grace-period", normalized.GracePeriod.String(), "--quiet"}
+	args := []string{normalized.Binary, "--store", normalized.StorePath, "monitor", "run", "--interval", normalized.Interval.String(), "--grace-period", normalized.GracePeriod.String(), "--quiet"}
 	var b strings.Builder
 	b.WriteString("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n")
-	b.WriteString("<!-- " + managedMarker + " -->\n<!-- version: 2 -->\n")
+	b.WriteString("<!-- " + managedMarker + " -->\n<!-- version: " + strconv.Itoa(managedVersion) + " -->\n")
 	b.WriteString("<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n")
 	b.WriteString("<plist version=\"1.0\"><dict>\n")
 	b.WriteString("<key>Label</key><string>" + xmlEscape(darwinLabel) + "</string>\n")

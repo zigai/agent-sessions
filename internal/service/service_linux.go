@@ -44,12 +44,12 @@ func RenderSystemdUnit(options Options) (string, error) {
 	}
 	return strings.Join([]string{
 		"# " + managedMarker,
-		"# version: 2",
+		"# version: " + strconv.Itoa(managedVersion),
 		"[Unit]",
 		"Description=Agent Sessions observer",
 		"",
 		"[Service]",
-		"ExecStart=" + systemdArg(normalized.Binary) + " --store " + systemdArg(normalized.StorePath) + " observe --interval " + normalized.Interval.String() + " --grace-period " + normalized.GracePeriod.String() + " --quiet",
+		"ExecStart=" + systemdArg(normalized.Binary) + " --store " + systemdArg(normalized.StorePath) + " monitor run --interval " + normalized.Interval.String() + " --grace-period " + normalized.GracePeriod.String() + " --quiet",
 		"Restart=on-failure",
 		"",
 		"[Install]",

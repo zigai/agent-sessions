@@ -12,7 +12,7 @@ import (
 )
 
 const (
-	ManagedVersion       = 2
+	ManagedVersion       = 3
 	ManagedMarker        = "agent-sessions managed observer service"
 	managedVersion       = ManagedVersion
 	managedMarker        = ManagedMarker
@@ -224,11 +224,10 @@ func (s *Service) Status(ctx context.Context, options Options) (Result, error) {
 	}
 	running, message := backend.running(ctx, s.executor)
 	result.Running, result.Message = running, message
-	if result.Current && result.Running && result.Message == "" {
+	if !result.Current {
+		result.Message = "stale; " + result.Message
+	} else if result.Running && result.Message == "" {
 		result.Message = "running"
-	}
-	if !result.Current && result.Message == "" {
-		result.Message = "stale"
 	}
 	return result, nil
 }
@@ -250,10 +249,11 @@ func (s *Service) apply(ctx context.Context, options Options, update bool) (Resu
 	}
 	result.Installed = installed
 	result.Current = installed && string(content) == backend.content()
-	if installed && result.Current && !update {
+	if installed && result.Current {
 		running, _ := backend.running(ctx, s.executor)
 		if running {
-			result.Message = "already installed"
+			result.Running = true
+			result.Message = "already enabled"
 			return result, nil
 		}
 		if options.DryRun {
@@ -342,7 +342,16 @@ func syncDirectory(path string) error {
 }
 
 func isManaged(content string) bool {
-	return strings.Contains(content, managedMarker) && strings.Contains(content, "version: 2")
+	if !strings.Contains(content, managedMarker) {
+		return false
+	}
+	for line := range strings.Lines(content) {
+		switch strings.TrimSpace(line) {
+		case "# version: 2", "# version: 3", "<!-- version: 2 -->", "<!-- version: 3 -->":
+			return true
+		}
+	}
+	return false
 }
 
 func managerMissing(output []byte) bool {

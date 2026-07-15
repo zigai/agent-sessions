@@ -2,7 +2,6 @@ package cli
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -44,7 +43,7 @@ const (
 )
 
 var (
-	errWatchFormatJSONConflict    = errors.New("list --format cannot be used with --json")
+	errWatchFormatJSONConflict    = errors.New("--format cannot be used with --json")
 	errWatchStateDirectoryMissing = errors.New("watching store: state directory does not exist")
 	errWatchStateDirectoryNotDir  = errors.New("watching store: state directory is not a directory")
 	errInvalidWatchFormat         = errors.New("invalid watch format")
@@ -78,6 +77,9 @@ type watchEvent struct {
 
 //nolint:gocognit,cyclop // watch orchestration keeps filesystem, registry, and timer transitions together
 func (app *application) runWatch(ctx context.Context, o watchOptions) error {
+	if o.formatSet && strings.TrimSpace(o.format) == "" {
+		return fmt.Errorf("%w: empty value", errInvalidWatchFormat)
+	}
 	o = normalizeWatchOptions(o)
 	if app.outputJSON {
 		if o.formatSet {
@@ -331,8 +333,8 @@ func (app *application) writeWatchEvents(e []watchEvent, f string) error {
 	for _, v := range e {
 		switch f {
 		case watchFormatJSON:
-			if er := json.NewEncoder(app.stdout).Encode(v); er != nil {
-				return fmt.Errorf("encode watch event: %w", er)
+			if er := app.writeJSONLine(v); er != nil {
+				return er
 			}
 		case watchFormatPlain:
 			if er := app.writeln(formatWatchPlainEvent(v)); er != nil {

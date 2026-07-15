@@ -126,6 +126,7 @@ func agyHookHandler(binary string, event string) map[string]any {
 func agyHookCommand(binary string, event string) string {
 	return strings.Join([]string{
 		ShellQuote(binary),
+		"--json",
 		"hook",
 		string(registry.HarnessAgy),
 		"--event", ShellQuote(event),
@@ -137,7 +138,7 @@ func agyMarkerContent() string {
 	return strings.Join([]string{
 		ManagedMarker,
 		"AGENT_SESSIONS_INTEGRATION_ID=" + agyIntegrationID,
-		"AGENT_SESSIONS_INTEGRATION_VERSION=" + strconv.Itoa(IntegrationVersion),
+		"AGENT_SESSIONS_INTEGRATION_VERSION=" + strconv.Itoa(IntegrationVersionFor(registry.HarnessAgy)),
 		"AGENT_SESSIONS_SOURCE=" + agyHookSource,
 	}, "\n")
 }
@@ -277,7 +278,7 @@ func agyHookAttributes(defaultAttributes map[string]string, event string) map[st
 		attributes["agy_hook_event"] = event
 	}
 	attributes["agent_sessions_integration"] = agyHookSource
-	attributes["agent_sessions_integration_version"] = strconv.Itoa(IntegrationVersion)
+	attributes["agent_sessions_integration_version"] = strconv.Itoa(IntegrationVersionFor(registry.HarnessAgy))
 	return attributes
 }
 

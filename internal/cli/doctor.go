@@ -6,8 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"runtime"
+	"text/tabwriter"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -56,31 +56,16 @@ type doctorResult struct {
 	Capabilities []doctorCapability `json:"capabilities"`
 }
 
-//nolint:nestif // command rendering keeps JSON and human output branches together
 func (app *application) newDoctorCommand() *cobra.Command {
-	return &cobra.Command{
+	var verbose bool
+	var all bool
+	command := &cobra.Command{
 		Use:   "doctor",
-		Short: "Check observer, registry, queue, and integrations",
+		Short: "Check whether agent-sessions is set up and working",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			result := app.runDoctor(cmd.Context())
-			if app.outputJSON {
-				if err := app.writeJSON(result); err != nil {
-					return err
-				}
-			} else {
-				for _, check := range result.Checks {
-					if err := app.writef("%s\t%s\t%s\n", check.Name, check.Status, check.Message); err != nil {
-						return err
-					}
-				}
-				if err := app.writeln("HARNESS\tSESSION_START\tSESSION_END\tRUNNING_IDLE\tWAITING_PERMISSION\tPROCESS_IDENTITY\tNATIVE_CATALOG\tTTY_TMUX"); err != nil {
-					return err
-				}
-				for _, capability := range result.Capabilities {
-					if err := app.writef("%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", capability.Harness, yesNo(capability.SessionStart), yesNo(capability.SessionEnd), yesNo(capability.RunningIdle), yesNo(capability.Waiting), yesNo(capability.ProcessIdentity), yesNo(capability.NativeCatalog), yesNo(capability.TTYTmuxContext)); err != nil {
-						return err
-					}
-				}
+			result := app.runDoctor(cmd.Context(), verbose || all)
+			if err := app.writeDoctorResult(result); err != nil {
+				return err
 			}
 			if !result.OK {
 				return errDoctorFailed
@@ -88,10 +73,47 @@ func (app *application) newDoctorCommand() *cobra.Command {
 			return nil
 		},
 	}
+	command.Flags().BoolVarP(&verbose, "verbose", "v", false, "include all integrations and capability details")
+	command.Flags().BoolVar(&all, "all", false, "include all integrations and capability details")
+	return command
+}
+
+func (app *application) writeDoctorResult(result doctorResult) error {
+	if app.outputJSON {
+		return app.writeJSON(result)
+	}
+	writer := tabwriter.NewWriter(app.stdout, 0, 0, tabPadding, ' ', 0)
+	if _, err := fmt.Fprintln(writer, "CHECK\tSTATUS\tMESSAGE"); err != nil {
+		return fmt.Errorf("write doctor header: %w", err)
+	}
+	for _, check := range result.Checks {
+		if _, err := fmt.Fprintf(writer, "%s\t%s\t%s\n", check.Name, check.Status, check.Message); err != nil {
+			return fmt.Errorf("write doctor check: %w", err)
+		}
+	}
+	if err := writer.Flush(); err != nil {
+		return fmt.Errorf("flush doctor checks: %w", err)
+	}
+	return app.writeDoctorCapabilities(result.Capabilities)
+}
+
+func (app *application) writeDoctorCapabilities(capabilities []doctorCapability) error {
+	if len(capabilities) == 0 {
+		return nil
+	}
+	if err := app.writeln("HARNESS\tSESSION_START\tSESSION_END\tRUNNING_IDLE\tWAITING_PERMISSION\tPROCESS_IDENTITY\tNATIVE_CATALOG\tTTY_TMUX"); err != nil {
+		return err
+	}
+	for _, capability := range capabilities {
+		if err := app.writef("%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", capability.Harness, yesNo(capability.SessionStart), yesNo(capability.SessionEnd), yesNo(capability.RunningIdle), yesNo(capability.Waiting), yesNo(capability.ProcessIdentity), yesNo(capability.NativeCatalog), yesNo(capability.TTYTmuxContext)); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 //nolint:gocognit,gocritic,nestif,cyclop // the doctor command intentionally reports independent checks in one ordered result
-func (app *application) runDoctor(ctx context.Context) doctorResult {
+func (app *application) runDoctor(ctx context.Context, includeAll bool) doctorResult {
 	result := doctorResult{Checks: make([]doctorCheck, 0, doctorCheckCapacity+len(harness.All())), Capabilities: make([]doctorCapability, 0, len(harness.All()))}
 	add := func(name string, status doctorStatus, message string) {
 		result.Checks = append(result.Checks, doctorCheck{Name: name, Status: status, Message: message})
@@ -132,6 +154,8 @@ func (app *application) runDoctor(ctx context.Context) doctorResult {
 		}
 	} else if !serviceResult.Installed {
 		add("observer.service", doctorWarning, "managed observer service is not installed")
+	} else if !serviceResult.Current {
+		add("observer.service", doctorWarning, "managed observer service is stale; run agent-sessions monitor enable")
 	} else if !serviceResult.Running {
 		add("observer.service", doctorWarning, "managed observer service is stopped")
 	} else {
@@ -170,9 +194,13 @@ func (app *application) runDoctor(ctx context.Context) doctorResult {
 	}
 	for _, adapter := range harness.All() {
 		definition := adapter.Definition()
-		result.Capabilities = append(result.Capabilities, doctorCapability{Harness: string(definition.ID), SessionStart: definition.Capabilities.SessionStart, SessionEnd: definition.Capabilities.SessionEnd, RunningIdle: definition.Capabilities.RunningIdle, Waiting: definition.Capabilities.WaitingPermission, ProcessIdentity: definition.Capabilities.ProcessIdentity, NativeCatalog: definition.Capabilities.NativeCatalog, TTYTmuxContext: definition.Capabilities.TTYTmuxContext})
-		status, message := app.integrationStatus(definition.ID)
-		add("integration."+string(definition.ID), status, message)
+		if includeAll {
+			result.Capabilities = append(result.Capabilities, doctorCapability{Harness: string(definition.ID), SessionStart: definition.Capabilities.SessionStart, SessionEnd: definition.Capabilities.SessionEnd, RunningIdle: definition.Capabilities.RunningIdle, Waiting: definition.Capabilities.WaitingPermission, ProcessIdentity: definition.Capabilities.ProcessIdentity, NativeCatalog: definition.Capabilities.NativeCatalog, TTYTmuxContext: definition.Capabilities.TTYTmuxContext})
+		}
+		status, message, relevant := app.integrationStatus(definition.ID)
+		if includeAll || relevant {
+			add("integration."+string(definition.ID), status, message)
+		}
 	}
 	result.OK = true
 	for _, check := range result.Checks {
@@ -194,7 +222,7 @@ func (app *application) addObserverReconciliationCheck(result *doctorResult, sto
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			result.Checks = append(result.Checks, doctorCheck{Name: "observer.reconciliation", Status: doctorWarning, Message: "observer health sidecar is missing; run observe or install the service"})
+			result.Checks = append(result.Checks, doctorCheck{Name: "observer.reconciliation", Status: doctorWarning, Message: "monitor health is missing; run agent-sessions monitor run --once or agent-sessions monitor enable"})
 			return
 		}
 		result.Checks = append(result.Checks, doctorCheck{Name: "observer.reconciliation", Status: doctorError, Message: err.Error()})
@@ -216,59 +244,23 @@ func (app *application) addObserverReconciliationCheck(result *doctorResult, sto
 	result.Checks = append(result.Checks, doctorCheck{Name: "observer.reconciliation", Status: doctorOK, Message: "last successful reconciliation at " + health.LastSuccessAt.Format(time.RFC3339)})
 }
 
-func (app *application) integrationStatus(id registry.Harness) (doctorStatus, string) {
-	adapter, ok := harness.Find(id)
-	if !ok {
-		return doctorError, "adapter is not registered"
+func (app *application) integrationStatus(id registry.Harness) (doctorStatus, string, bool) {
+	status, err := install.Inspect(id, defaultInstallBinary())
+	if err != nil {
+		return doctorError, err.Error(), true
 	}
-	installable, ok := adapter.(harness.Installable)
-	if !ok {
-		return doctorOK, "no managed integration declared"
+	switch status.Status {
+	case install.ArtifactCurrent:
+		return doctorOK, "managed integration is current", true
+	case install.ArtifactMissing:
+		return doctorWarning, status.Message, false
+	case install.ArtifactStale:
+		return doctorWarning, status.Message, true
+	case install.ArtifactForeign:
+		return doctorError, status.Message, true
+	default:
+		return doctorWarning, status.Message, true
 	}
-	plan := installable.InstallPlan(defaultInstallBinary())
-	paths := installPlanPaths(plan)
-	if len(paths) == 0 {
-		return doctorWarning, "managed integration has no inspectable artifact path"
-	}
-	for _, path := range paths {
-		status, err := install.ClassifyArtifact(path)
-		if err != nil {
-			return doctorError, err.Error()
-		}
-		switch status {
-		case install.ArtifactCurrent:
-		case install.ArtifactMissing:
-			return doctorWarning, "managed integration is missing: " + path
-		case install.ArtifactStale:
-			return doctorWarning, "managed integration is stale: " + path
-		case install.ArtifactForeign:
-			return doctorError, "foreign integration content: " + path
-		}
-	}
-	return doctorOK, "managed integration is current"
-}
-
-func installPlanPaths(plan harness.InstallPlan) []string {
-	paths := make([]string, 0, len(plan.Actions))
-	for _, action := range plan.Actions {
-		switch value := action.(type) {
-		case harness.JSONCommandHooksAction:
-			paths = append(paths, value.Plan.Path)
-		case harness.CursorJSONHooksAction:
-			paths = append(paths, value.Plan.Path)
-		case harness.ManagedTextBlockAction:
-			paths = append(paths, value.Plan.Path)
-		case harness.RenderedFileAction:
-			paths = append(paths, value.Plan.Path)
-		case harness.RenderedFilesAction:
-			for _, file := range value.Plan.Files {
-				paths = append(paths, filepath.Join(value.Plan.Dir, file.Name))
-			}
-		case harness.PluginDirectoryAction:
-			paths = append(paths, value.Plan.Dir)
-		}
-	}
-	return paths
 }
 
 func yesNo(value bool) string {

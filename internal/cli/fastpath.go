@@ -9,6 +9,11 @@ import (
 	"strings"
 )
 
+const (
+	storeArgument = "--store"
+	jsonArgument  = "--json"
+)
+
 type fastPathGlobals struct {
 	storePath  string
 	outputJSON bool
@@ -52,15 +57,15 @@ func splitFastPathArgs(args []string) (fastPathGlobals, string, []string, bool) 
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		switch {
-		case a == "--store":
+		case a == storeArgument:
 			if i+1 >= len(args) {
 				return g, "", nil, false
 			}
 			i++
 			g.storePath = args[i]
-		case strings.HasPrefix(a, "--store="):
-			g.storePath = strings.TrimPrefix(a, "--store=")
-		case a == "--json":
+		case strings.HasPrefix(a, storeArgument+"="):
+			g.storePath = strings.TrimPrefix(a, storeArgument+"=")
+		case a == jsonArgument:
 			g.outputJSON = true
 		case strings.HasPrefix(a, "-"):
 			return g, "", nil, false

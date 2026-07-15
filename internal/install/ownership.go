@@ -31,6 +31,7 @@ const (
 var (
 	integrationVersionPattern = regexp.MustCompile(`(?i)(?:agent[_-]?sessions[_-]?integration[_-]?version|AGENT_SESSIONS_INTEGRATION_VERSION)\s*[=:]\s*["']?([0-9]+)`)
 	integrationSourcePattern  = regexp.MustCompile(`(?i)agent[_-]?sessions[_-]?integration\s*[=:]`)
+	integrationIDPattern      = regexp.MustCompile(`(?i)AGENT_SESSIONS_INTEGRATION_ID\s*=\s*["']?([a-z0-9_-]+)`)
 )
 
 // ClassifyArtifact inspects a generated artifact without modifying it. It is
@@ -73,9 +74,21 @@ func classifyArtifactContent(content string) ArtifactStatus {
 		return ArtifactStale
 	}
 	version, err := strconv.Atoi(match[1])
-	if err != nil || version != managedIntegrationVersion {
+	if err != nil || version != expectedIntegrationVersion(content) {
 		return ArtifactStale
 	}
 
 	return ArtifactCurrent
+}
+
+func expectedIntegrationVersion(content string) int {
+	match := integrationIDPattern.FindStringSubmatch(content)
+	if len(match) != integrationCaptureGroups {
+		return managedIntegrationVersion
+	}
+	id, err := harnesspkg.Normalize(match[1])
+	if err != nil {
+		return managedIntegrationVersion
+	}
+	return harnesspkg.IntegrationVersionFor(id)
 }

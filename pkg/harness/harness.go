@@ -55,6 +55,14 @@ type Definition struct {
 
 const IntegrationVersion = 3
 
+// IntegrationVersionFor returns the managed artifact generation for a harness.
+func IntegrationVersionFor(id registry.Harness) int {
+	if id == registry.HarnessAgy {
+		return IntegrationVersion + 1
+	}
+	return IntegrationVersion
+}
+
 //nolint:cyclop,exhaustruct // capabilities are a documented per-harness matrix
 func capabilitiesFor(id registry.Harness) Capabilities {
 	capabilities := Capabilities{SessionStart: false, SessionEnd: false, RunningIdle: false, WaitingPermission: false, ProcessIdentity: false, NativeCatalog: false, TTYTmuxContext: false}

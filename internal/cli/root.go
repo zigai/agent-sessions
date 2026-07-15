@@ -31,6 +31,7 @@ var (
 	errInvalidListSort           = errors.New("invalid list sort")
 	errUnexpectedReportArg       = errors.New("unexpected report argument")
 	errMissingReportHarness      = errors.New("missing harness")
+	errConflictingReportStdin    = errors.New("--raw-stdin and --raw-stdin-defaults-only cannot be used together")
 	errMissingReportIdentity     = errors.New("missing report identity or transition")
 	errDoctorFailed              = errors.New("doctor found errors")
 	errInvalidObserveInterval    = errors.New("interval must be positive")
@@ -38,16 +39,30 @@ var (
 	errGonePresenceActivity      = errors.New("gone presence cannot include activity")
 	errProcessEvidenceIdentity   = errors.New("process evidence requires pid and start identity")
 	errProcessEvidenceActivity   = errors.New("process evidence cannot include activity")
+	errManagedHookJSONRequired   = errors.New("hook commands require --json for their protocol response")
+	errListWatchOnlyFlag         = errors.New("--format and --no-snapshot require list --watch or the watch command")
+	errListSnapshotFlag          = errors.New("--summary, --sort, --desc, and --absolute-time are not valid with list --watch")
+	errListSummaryFlag           = errors.New("--sort, --desc, and --absolute-time are not valid with --summary")
+	errListAbsoluteJSON          = errors.New("--absolute-time cannot be used with --json")
 )
 
 const (
-	tabPadding         = 2
-	reportCommandName  = "report"
-	listCommandName    = "list"
-	hookCommandName    = "hook"
-	agyHookCommandName = "agy-hook"
-	listSortUpdated    = "updated"
-	hoursPerDay        = 24
+	tabPadding            = 2
+	registryIDShortLength = 8
+	reportCommandName     = "report"
+	listCommandName       = "list"
+	statusCommandName     = "status"
+	installCommandName    = "install"
+	integrationsCommand   = "integrations"
+	monitorCommand        = "monitor"
+	registryCommandName   = "registry"
+	hookCommandName       = "hook"
+	agyHookCommandName    = "agy-hook"
+	listSortUpdated       = "updated"
+	hoursPerDay           = 24
+	sessionsGroupID       = "sessions"
+	setupGroupID          = "setup"
+	systemGroupID         = "system"
 )
 
 type application struct {
@@ -60,8 +75,13 @@ type application struct {
 func NewRootCommand(stdout io.Writer, stderr io.Writer) *cobra.Command {
 	app := &application{stdout: stdout, stderr: stderr}
 	var showVersion bool
-	root := &cobra.Command{Use: "agent-sessions", Short: "Track local coding-agent sessions across harnesses and tmux panes", RunE: func(cmd *cobra.Command, _ []string) error {
+	root := &cobra.Command{Use: "agent-sessions", Short: "Track local coding-agent sessions and where they are running", PersistentPreRun: func(cmd *cobra.Command, _ []string) {
+		cmd.Root().SilenceUsage = true
+	}, RunE: func(cmd *cobra.Command, _ []string) error {
 		if showVersion {
+			if app.outputJSON {
+				return app.writeJSON(map[string]string{"version": version, "commit": commit, "built": date})
+			}
 			return app.writef("agent-sessions %s (commit: %s, built: %s)\n", version, commit, date)
 		}
 		return cmd.Help()
@@ -69,10 +89,32 @@ func NewRootCommand(stdout io.Writer, stderr io.Writer) *cobra.Command {
 	root.SetOut(stdout)
 	root.SetErr(stderr)
 	root.PersistentFlags().StringVar(&app.storePath, "store", "", "registry state file path")
-	root.PersistentFlags().BoolVar(&app.outputJSON, "json", false, "emit JSON")
+	root.PersistentFlags().BoolVar(&app.outputJSON, "json", false, "emit JSON (JSON Lines for streams)")
 	root.Flags().BoolVarP(&showVersion, "version", "v", false, "print version")
-	root.AddCommand(app.newReportCommand(), app.newListCommand(), app.newGetCommand(), app.newGCCommand(), app.newManageCommand(), app.newPathCommand(), app.newInstallHooksCommand(), app.newHookCommand(), app.newAgyHookCommand(), app.newDrainQueueCommand(), app.newQueueStatusCommand(), app.newObserveCommand(), app.newServiceCommand(), app.newDoctorCommand())
+	root.AddGroup(
+		&cobra.Group{ID: sessionsGroupID, Title: "Sessions:"},
+		&cobra.Group{ID: setupGroupID, Title: "Setup:"},
+		&cobra.Group{ID: systemGroupID, Title: "System:"},
+	)
+	root.AddCommand(
+		inCommandGroup(app.newListCommand(), sessionsGroupID),
+		inCommandGroup(app.newWatchCommand(), sessionsGroupID),
+		inCommandGroup(app.newShowCommand(), sessionsGroupID),
+		inCommandGroup(app.newStopCommand(), sessionsGroupID),
+		inCommandGroup(app.newSetupCommand(), setupGroupID),
+		inCommandGroup(app.newIntegrationsCommand(), setupGroupID),
+		inCommandGroup(app.newHookCommand(), setupGroupID),
+		inCommandGroup(app.newMonitorCommand(), systemGroupID),
+		inCommandGroup(app.newRegistryCommand(), systemGroupID),
+		inCommandGroup(app.newDoctorCommand(), systemGroupID),
+		app.newReportCommand(), app.newGetCommand(), app.newGCCommand(), app.newManageCommand(), app.newPathCommand(), app.newInstallHooksCommand(), app.newAgyHookCommand(), app.newDrainQueueCommand(), app.newQueueStatusCommand(), app.newObserveCommand(), app.newServiceCommand(),
+	)
 	return root
+}
+
+func inCommandGroup(command *cobra.Command, groupID string) *cobra.Command {
+	command.GroupID = groupID
+	return command
 }
 
 func Execute() {
@@ -100,6 +142,14 @@ func (app *application) writeJSON(value any) error {
 	return nil
 }
 
+func (app *application) writeJSONLine(value any) error {
+	e := json.NewEncoder(app.stdout)
+	if err := e.Encode(value); err != nil {
+		return fmt.Errorf("writing JSON line: %w", err)
+	}
+	return nil
+}
+
 func (app *application) writef(format string, args ...any) error {
 	if _, err := fmt.Fprintf(app.stdout, format, args...); err != nil {
 		return fmt.Errorf("writing output: %w", err)
@@ -121,7 +171,7 @@ func (app *application) warnf(format string, args ...any) {
 }
 
 func (app *application) newPathCommand() *cobra.Command {
-	return &cobra.Command{Use: "path", Short: "Print the registry state file path", RunE: func(_ *cobra.Command, _ []string) error {
+	return &cobra.Command{Use: "path", Short: "Print the registry state file path", Hidden: true, RunE: func(_ *cobra.Command, _ []string) error {
 		if app.outputJSON {
 			return app.writeJSON(map[string]string{"path": app.store().Path()})
 		}
@@ -169,7 +219,7 @@ type reportRuntimeContext struct {
 
 func (app *application) newReportCommand() *cobra.Command {
 	options := defaultReportOptionsFromEnv()
-	cmd := &cobra.Command{Use: "report [harness]", Short: "Record a harness observation", SilenceUsage: true, Args: cobra.MaximumNArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+	cmd := &cobra.Command{Use: "report [harness]", Short: "Record a harness observation", Hidden: true, SilenceUsage: true, Args: cobra.MaximumNArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
 		if len(args) == 1 {
 			if options.harness != "" {
 				return fmt.Errorf("%w: harness already set", errUnexpectedReportArg)
@@ -208,7 +258,7 @@ func (app *application) newReportCommand() *cobra.Command {
 	f.BoolVar(&options.queue, "queue", false, "durably queue observation")
 	_ = f.MarkHidden("queue")
 	_ = f.MarkHidden("evidence")
-	f.BoolVar(&options.quiet, "quiet", false, "suppress output")
+	f.BoolVar(&options.quiet, "quiet", false, "suppress human-readable output")
 	return cmd
 }
 
@@ -237,6 +287,9 @@ func (app *application) runReport(ctx context.Context, stdin io.Reader, options 
 		return err
 	}
 	if prepared.ignored {
+		if app.outputJSON {
+			return app.writeJSON(map[string]string{statusCommandName: "ignored", "harness": string(prepared.harness)})
+		}
 		if options.quiet {
 			return nil
 		}
@@ -251,6 +304,9 @@ func (app *application) runReport(ctx context.Context, stdin io.Reader, options 
 
 //nolint:gocognit,cyclop // report preparation deliberately validates independent evidence dimensions in order
 func (app *application) prepareReport(stdin io.Reader, options reportOptions, runtime reportRuntimeContext) (preparedReport, error) {
+	if options.rawStdin && options.rawDefaultsOnly {
+		return preparedReport{}, errConflictingReportStdin
+	}
 	if strings.TrimSpace(options.harness) == "" {
 		return preparedReport{}, errMissingReportHarness
 	}
@@ -382,15 +438,17 @@ func psProcessArgs(ctx context.Context, pid int) []string {
 
 // list.
 type listOptions struct {
-	harness, presence, activity, tmuxSession, sortBy, watchFormat                                           string
-	summary, watch, absoluteTime, absoluteSet, sortSet, desc, descSet, noSnapshot, noSnapshotSet, formatSet bool
+	harness, presence, activity, tmuxSession, sortBy, watchFormat                             string
+	summary, summarySet, watch, absoluteTime, absoluteSet, sortSet, desc, descSet, noSnapshot bool
+	noSnapshotSet, formatSet                                                                  bool
 }
 
 func (app *application) newListCommand() *cobra.Command {
 	o := listOptions{}
-	cmd := &cobra.Command{Use: "list", Short: "List known agent sessions", RunE: func(c *cobra.Command, _ []string) error {
+	cmd := &cobra.Command{Use: listCommandName, Short: "Show known sessions", RunE: func(c *cobra.Command, _ []string) error {
 		f := c.Flags()
 		o.absoluteSet = f.Changed("absolute-time")
+		o.summarySet = f.Changed("summary")
 		o.sortSet = f.Changed("sort")
 		o.descSet = f.Changed("desc")
 		o.noSnapshotSet = f.Changed("no-snapshot")
@@ -398,7 +456,9 @@ func (app *application) newListCommand() *cobra.Command {
 		return app.runList(c.Context(), o)
 	}}
 	f := cmd.Flags()
-	f.StringVar(&o.harness, "harness", "", "filter by harness")
+	f.StringVar(&o.harness, "agent", "", "filter by agent")
+	f.StringVar(&o.harness, "harness", "", "legacy alias for --agent")
+	_ = f.MarkHidden("harness")
 	f.StringVar(&o.presence, "presence", "", "filter by presence")
 	f.StringVar(&o.activity, "activity", "", "filter by activity")
 	f.StringVar(&o.tmuxSession, "tmux-session", "", "filter by tmux session")
@@ -413,6 +473,9 @@ func (app *application) newListCommand() *cobra.Command {
 }
 
 func (app *application) runList(ctx context.Context, o listOptions) error {
+	if err := app.validateListOptions(o); err != nil {
+		return err
+	}
 	if o.watch {
 		p, e := buildFilter(o)
 		if e != nil {
@@ -424,6 +487,33 @@ func (app *application) runList(ctx context.Context, o listOptions) error {
 		return app.runListSummary(ctx, o)
 	}
 	return app.runListSessions(ctx, o)
+}
+
+func (app *application) validateListOptions(options listOptions) error {
+	if app.outputJSON && options.absoluteSet {
+		return errListAbsoluteJSON
+	}
+	if options.watch {
+		return validateLegacyWatchListOptions(options)
+	}
+	return validateSnapshotListOptions(options)
+}
+
+func validateLegacyWatchListOptions(options listOptions) error {
+	if options.summarySet || options.absoluteSet || options.sortSet || options.descSet {
+		return errListSnapshotFlag
+	}
+	return nil
+}
+
+func validateSnapshotListOptions(options listOptions) error {
+	if options.noSnapshotSet || options.formatSet {
+		return errListWatchOnlyFlag
+	}
+	if options.summary && (options.absoluteSet || options.sortSet || options.descSet) {
+		return errListSummaryFlag
+	}
+	return nil
 }
 
 func buildFilter(o listOptions) (registry.Filter, error) {
@@ -453,6 +543,11 @@ func buildFilter(o listOptions) (registry.Filter, error) {
 }
 
 func (app *application) runListSessions(ctx context.Context, o listOptions) error {
+	var err error
+	o, err = normalizedListOptions(o)
+	if err != nil {
+		return err
+	}
 	f, e := buildFilter(o)
 	if e != nil {
 		return e
@@ -468,16 +563,14 @@ func (app *application) runListSessions(ctx context.Context, o listOptions) erro
 		return app.writeJSON(ss)
 	}
 	w := tabwriter.NewWriter(app.stdout, 0, 0, tabPadding, ' ', 0)
-	if _, e = fmt.Fprintln(w, "ID\tHARNESS\tPRESENCE\tACTIVITY\tTMUX\tWINDOW\tPANE\tCWD\tUPDATED"); e != nil {
+	if _, e = fmt.Fprintln(w, "ID\tAGENT\tSESSION\tPRESENCE\tACTIVITY\tTMUX\tWINDOW\tPANE\tCWD\tUPDATED"); e != nil {
 		return fmt.Errorf("write list header: %w", e)
 	}
 	now := time.Now().UTC()
+	displayIDs := abbreviatedRegistryIDs(ss)
 	for _, s := range ss {
-		activity := appReportActivity(s)
-		if s.Presence == registry.PresenceGone {
-			activity = "-"
-		}
-		_, e = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", s.ID, s.Harness, s.Presence, activity, tmuxSessionLabel(s.Tmux), tmuxWindowLabel(s.Tmux), s.Tmux.PaneID, formatHumanPath(s.CWD), formatUpdatedAt(s.UpdatedAt, now, o.absoluteTime))
+		activity := listActivity(s)
+		_, e = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", displayIDs[s.ID], s.Harness, sessionDisplayLabel(s), s.Presence, activity, tmuxSessionLabel(s.Tmux), tmuxWindowLabel(s.Tmux), s.Tmux.PaneID, formatHumanPath(s.CWD), formatUpdatedAt(s.UpdatedAt, now, o.absoluteTime))
 		if e != nil {
 			return fmt.Errorf("write list row: %w", e)
 		}
@@ -486,6 +579,89 @@ func (app *application) runListSessions(ctx context.Context, o listOptions) erro
 		return fmt.Errorf("flush list output: %w", err)
 	}
 	return nil
+}
+
+func normalizedListOptions(options listOptions) (listOptions, error) {
+	if options.sortSet && strings.TrimSpace(options.sortBy) == "" {
+		return options, fmt.Errorf("%w: empty value", errInvalidListSort)
+	}
+	if !options.sortSet && !options.descSet {
+		options.desc = true
+	}
+	return options, nil
+}
+
+func listActivity(session registry.Session) string {
+	if session.Presence == registry.PresenceGone {
+		return "-"
+	}
+	return appReportActivity(session)
+}
+
+func shortRegistryID(id string) string {
+	separator := strings.LastIndexByte(id, '-')
+	if separator < 0 || len(id)-separator-1 <= registryIDShortLength {
+		return id
+	}
+	return id[:separator+1] + id[separator+1:separator+1+registryIDShortLength]
+}
+
+func abbreviatedRegistryIDs(sessions []registry.Session) map[string]string {
+	result := make(map[string]string, len(sessions))
+	for _, session := range sessions {
+		prefix, suffix := splitRegistryID(session.ID)
+		if len(suffix) <= registryIDShortLength {
+			result[session.ID] = session.ID
+			continue
+		}
+		length := registryIDShortLength
+		for _, other := range sessions {
+			otherPrefix, otherSuffix := splitRegistryID(other.ID)
+			if session.ID == other.ID || prefix != otherPrefix {
+				continue
+			}
+			common := commonPrefixLength(suffix, otherSuffix)
+			if common >= length {
+				length = min(common+1, len(suffix))
+			}
+		}
+		result[session.ID] = prefix + suffix[:length]
+	}
+	return result
+}
+
+func splitRegistryID(id string) (string, string) {
+	separator := strings.LastIndexByte(id, '-')
+	if separator < 0 {
+		return "", id
+	}
+	return id[:separator+1], id[separator+1:]
+}
+
+func commonPrefixLength(left string, right string) int {
+	limit := min(len(left), len(right))
+	for index := range limit {
+		if left[index] != right[index] {
+			return index
+		}
+	}
+	return limit
+}
+
+func sessionDisplayLabel(session registry.Session) string {
+	if session.SessionID != "" {
+		return session.SessionID
+	}
+	if session.SessionPath != "" {
+		return filepath.Base(session.SessionPath)
+	}
+	if session.Tmux.PaneID != "" {
+		return session.Tmux.PaneID
+	}
+	if session.CWD != "" {
+		return filepath.Base(session.CWD)
+	}
+	return shortRegistryID(session.ID)
 }
 
 func (app *application) runListSummary(ctx context.Context, o listOptions) error {
@@ -536,31 +712,69 @@ func summaryTableLabels(ss []registry.Summary) []string {
 }
 
 func (app *application) newGetCommand() *cobra.Command {
-	return &cobra.Command{Use: "get <id>", Short: "Get one session by registry id", Args: cobra.ExactArgs(1), RunE: func(c *cobra.Command, a []string) error {
+	return &cobra.Command{Use: "get <id>", Short: "Get one session by registry id", Hidden: true, Args: cobra.ExactArgs(1), RunE: func(c *cobra.Command, a []string) error {
 		s, e := app.registryStore().Get(c.Context(), a[0])
 		if e != nil {
 			return fmt.Errorf("get session: %w", e)
 		}
-		return app.writeJSON(s)
+		if app.outputJSON {
+			return app.writeJSON(s)
+		}
+		return app.writeSessionDetails(s)
 	}}
 }
 
+func (app *application) writeSessionDetails(session registry.Session) error {
+	w := tabwriter.NewWriter(app.stdout, 0, 0, tabPadding, ' ', 0)
+	rows := [][2]string{
+		{"ID", session.ID},
+		{"Agent", string(session.Harness)},
+		{"Presence", string(session.Presence)},
+		{"Activity", appReportActivity(session)},
+		{"Session ID", session.SessionID},
+		{"Session path", session.SessionPath},
+		{"CWD", session.CWD},
+		{"Project root", session.ProjectRoot},
+		{"Resume command", strings.Join(session.ResumeCommand, " ")},
+		{"Tmux", watchTmuxLabel(session.Tmux)},
+		{"Created", session.CreatedAt.Format(time.RFC3339)},
+		{"Updated", session.UpdatedAt.Format(time.RFC3339)},
+	}
+	if session.Process != nil {
+		rows = append(rows, [2]string{"Process", fmt.Sprintf("pid=%d executable=%s", session.Process.PID, session.Process.Executable)})
+	}
+	for _, row := range rows {
+		if row[1] == "" {
+			continue
+		}
+		if _, err := fmt.Fprintf(w, "%s:\t%s\n", row[0], row[1]); err != nil {
+			return fmt.Errorf("write session details: %w", err)
+		}
+	}
+	if err := w.Flush(); err != nil {
+		return fmt.Errorf("flush session details: %w", err)
+	}
+	return nil
+}
+
 func (app *application) newGCCommand() *cobra.Command {
-	var age time.Duration
-	c := &cobra.Command{Use: "gc", Short: "Delete old gone session records", RunE: func(cmd *cobra.Command, _ []string) error {
-		if !cmd.Flags().Changed("delete-after") {
-			age = -1
+	options := cleanOptions{}
+	var legacyAge time.Duration
+	c := &cobra.Command{Use: "gc", Short: "Delete old gone session records", Hidden: true, RunE: func(cmd *cobra.Command, _ []string) error {
+		legacySet := cmd.Flags().Changed("delete-after")
+		options.ageSet = cmd.Flags().Changed("older-than") || legacySet
+		if legacySet {
+			if cmd.Flags().Changed("older-than") {
+				return errCleanSelection
+			}
+			options.olderThan = legacyAge
 		}
-		r, e := app.registryStore().GC(cmd.Context(), age)
-		if e != nil {
-			return fmt.Errorf("gc sessions: %w", e)
-		}
-		if app.outputJSON {
-			return app.writeJSON(r)
-		}
-		return app.writef("deleted=%d remaining=%d\n", r.Deleted, r.Remaining)
+		return app.runRegistryClean(cmd.Context(), options)
 	}}
-	c.Flags().DurationVar(&age, "delete-after", 0, "delete gone sessions after this age")
+	c.Flags().BoolVar(&options.all, "all", false, "delete every gone session record")
+	c.Flags().DurationVar(&options.olderThan, "older-than", 0, "delete gone records older than this age")
+	c.Flags().DurationVar(&legacyAge, "delete-after", 0, "legacy alias for --older-than")
+	_ = c.Flags().MarkHidden("delete-after")
 	return c
 }
 

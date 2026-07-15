@@ -54,7 +54,10 @@ func (app *application) newQueueStatusCommand() *cobra.Command {
 		if e != nil {
 			return fmt.Errorf("queue status: %w", e)
 		}
-		return app.writeJSON(s)
+		if app.outputJSON {
+			return app.writeJSON(s)
+		}
+		return app.writef("pending=%d ready=%d deferred=%d processing=%d retries=%d stale-leases=%d dead=%d invalid=%d root=%s\n", s.Pending, s.Ready, s.Deferred, s.Processing, s.Retries, s.StaleLeases, s.Dead, s.Invalid, s.Root)
 	}}
 }
 
@@ -154,6 +157,9 @@ func (app *application) runQueuedReport(ctx context.Context, stdin io.Reader, o 
 		return e
 	}
 	if p.ignored {
+		if app.outputJSON {
+			return app.writeJSON(map[string]string{statusCommandName: "ignored", "harness": string(p.harness)})
+		}
 		return nil
 	}
 	now := time.Now().UTC()
@@ -162,6 +168,9 @@ func (app *application) runQueuedReport(ctx context.Context, stdin io.Reader, o 
 		return fmt.Errorf("queueing report: %w", e)
 	}
 	app.kickQueueDrainer(ctx, app.store().Path())
+	if app.outputJSON {
+		return app.writeJSON(map[string]string{statusCommandName: "queued"})
+	}
 	if o.quiet {
 		return nil
 	}

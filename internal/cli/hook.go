@@ -40,6 +40,7 @@ func (app *application) newHookCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   hookCommandName + " <harness>",
 		Short: "Run a request/response hook for a harness",
+		Long:  "Run a request/response hook for a harness. Hook stdout is a JSON protocol response, so --json is required.",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return app.runManagedHook(cmd.Context(), cmd.InOrStdin(), args[0], options)
@@ -77,6 +78,9 @@ func (app *application) runManagedHook(
 	harnessName string,
 	options managedHookOptions,
 ) error {
+	if !app.outputJSON {
+		return errManagedHookJSONRequired
+	}
 	harness, err := harnesspkg.Normalize(harnessName)
 	if err != nil {
 		return fmt.Errorf("normalizing hook harness: %w", err)

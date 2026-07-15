@@ -110,7 +110,7 @@ func (defaultSessionStopSignaler) SendProcessInterrupt(pid int) error {
 }
 
 func (app *application) newManageCommand() *cobra.Command {
-	c := &cobra.Command{Use: "manage", Short: "Manage registry and agent sessions"}
+	c := &cobra.Command{Use: "manage", Short: "Manage registry and agent sessions", Hidden: true}
 	c.AddCommand(app.newManageResetCommand(), app.newManageStopAllCommand())
 	return c
 }
@@ -144,19 +144,51 @@ func (app *application) newManageStopAllCommand() *cobra.Command {
 }
 
 func (app *application) runManageStopAll(ctx context.Context, o manageStopAllOptions) (manageStopAllResult, error) {
-	if o.signaler == nil {
-		o.signaler = defaultSessionStopSignaler{}
-	}
 	ss, e := app.store().List(ctx, registry.Filter{Presence: registry.PresenceLive})
 	if e != nil {
 		return manageStopAllResult{}, fmt.Errorf("list live sessions: %w", e)
+	}
+	return app.runManageStopSessions(ctx, ss, o)
+}
+
+func (app *application) runStop(ctx context.Context, args []string, all bool, dryRun bool) error {
+	var sessions []registry.Session
+	if all {
+		listed, err := app.store().List(ctx, registry.Filter{Presence: registry.PresenceLive})
+		if err != nil {
+			return fmt.Errorf("list live sessions: %w", err)
+		}
+		sessions = listed
+	} else {
+		session, err := app.resolveSession(ctx, args[0])
+		if err != nil {
+			return err
+		}
+		sessions = []registry.Session{session}
+	}
+	result, err := app.runManageStopSessions(ctx, sessions, manageStopAllOptions{dryRun: dryRun})
+	if writeErr := app.writeManageStopAllResult(result); writeErr != nil {
+		return writeErr
+	}
+	return err
+}
+
+func (app *application) runManageStopSessions(ctx context.Context, ss []registry.Session, o manageStopAllOptions) (manageStopAllResult, error) {
+	if o.signaler == nil {
+		o.signaler = defaultSessionStopSignaler{}
 	}
 	sort.Slice(ss, func(i, j int) bool { return ss[i].ID < ss[j].ID })
 	r := manageStopAllResult{DryRun: o.dryRun, Results: make([]manageStopSessionResult, 0, len(ss))}
 	seen := map[string]bool{}
 	for _, s := range ss {
-		t, ok := stopTargetForSession(s)
 		entry := manageStopSessionResult{ID: s.ID, Harness: s.Harness, Presence: s.Presence, Activity: s.Activity, Status: "skipped"}
+		if s.Presence != registry.PresenceLive {
+			entry.Reason = "session is not live"
+			r.Skipped++
+			r.Results = append(r.Results, entry)
+			continue
+		}
+		t, ok := stopTargetForSession(s)
 		if !ok {
 			entry.Reason = "no stop target"
 			r.Skipped++

@@ -178,6 +178,17 @@ func New(options Options) *Observer {
 }
 
 func (o *Observer) Run(ctx context.Context) error {
+	return o.run(ctx, nil)
+}
+
+// RunWithResults runs the observer and calls handle after every reconciliation
+// cycle. It is used by foreground clients that stream cycle results.
+func (o *Observer) RunWithResults(ctx context.Context, handle func(Result) error) error {
+	return o.run(ctx, handle)
+}
+
+//nolint:funcorder // shared run loop stays beside its two exported entrypoints
+func (o *Observer) run(ctx context.Context, handle func(Result) error) error {
 	if ctx == nil {
 		return errObserverContextNil
 	}
@@ -186,7 +197,12 @@ func (o *Observer) Run(ctx context.Context) error {
 	}
 	defer o.releaseLock()
 	for {
-		_, err := o.runCycle(ctx)
+		result, err := o.runCycle(ctx)
+		if handle != nil {
+			if handleErr := handle(result); handleErr != nil {
+				return fmt.Errorf("handling observer result: %w", handleErr)
+			}
+		}
 		if err != nil {
 			if ctx.Err() != nil {
 				return nil
@@ -222,6 +238,8 @@ func (o *Observer) runCycle(ctx context.Context) (Result, error) {
 	result := Result{ObservedAt: at, Observations: 0, Sessions: 0, Processes: 0, Panes: 0, Catalog: 0, Present: 0, Gone: 0, Changed: 0, Degraded: false, Error: ""}
 	processes, err := o.processList(ctx)
 	if err != nil {
+		result.Degraded = true
+		result.Error = err.Error()
 		o.recordHealth(at, true, "process-enumeration", err, result)
 		return result, fmt.Errorf("listing processes: %w", err)
 	}
