@@ -6,7 +6,7 @@ process presence, tmux location, and current catalog metadata. A native event
 can describe what a harness is doing; it never substitutes for process
 presence.
 
-Supported harnesses: `claude`, `codex`, `cursor`, `copilot`, `cline`, `kimi-code`, `grok`, `goose`, `pi`, `opencode`, `agy`, `kilo`, and `droid`.
+Supported harnesses: `claude`, `codex`, `cursor`, `copilot`, `cline`, `kimi-code`, `grok`, `goose`, `pi`, `omp` (oh-my-pi), `opencode`, `agy`, `kilo`, and `droid`.
 
 ## Installation
 
