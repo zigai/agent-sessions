@@ -9,6 +9,10 @@ help:
 test:
     go test ./...
 
+# Run tests with coverage
+coverage:
+    go test -cover ./...
+
 # Run tests with the race detector
 race:
     go test -race ./...
@@ -115,3 +119,5 @@ release-major: _release-check
     git push origin "$new"
 
 alias release := release-patch
+
+alias cov := coverage
