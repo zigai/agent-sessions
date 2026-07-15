@@ -12,15 +12,15 @@ import (
 type HookPayloadValidator func(json.RawMessage) bool
 
 type claudeHookPayload struct {
-	SessionID      string `json:"session_id"      validate:"required,notblank"`
-	TranscriptPath string `json:"transcript_path" validate:"required,pathcontains=/.claude/"`
-	CWD            string `json:"cwd"             validate:"required,notblank"`
-	HookEventName  string `json:"hook_event_name" validate:"required,notblank"`
+	SessionID      string  `json:"session_id"      validate:"required,notblank"`
+	TranscriptPath *string `json:"transcript_path" validate:"omitempty"`
+	CWD            string  `json:"cwd"             validate:"required,notblank"`
+	HookEventName  string  `json:"hook_event_name" validate:"required,notblank"`
 }
 
 type codexHookPayload struct {
 	SessionID      string  `json:"session_id"      validate:"required,notblank"`
-	TranscriptPath *string `json:"transcript_path" validate:"omitempty,pathcontains=/.codex/"`
+	TranscriptPath *string `json:"transcript_path" validate:"omitempty"`
 	CWD            string  `json:"cwd"             validate:"required,notblank"`
 	HookEventName  string  `json:"hook_event_name" validate:"required,notblank"`
 	Model          string  `json:"model"           validate:"required,notblank"`
@@ -93,24 +93,12 @@ func payloadObject(rawPayload json.RawMessage) (map[string]any, bool) {
 func hookPayloadValidator() *validator.Validate {
 	hookPayloadValidatorOnce.Do(func() {
 		hookPayloadValidate = validator.New(validator.WithRequiredStructEnabled())
-		if err := hookPayloadValidate.RegisterValidation("pathcontains", validatePathContains); err != nil {
-			panic(err)
-		}
 		if err := hookPayloadValidate.RegisterValidation("notblank", validateNotBlank); err != nil {
 			panic(err)
 		}
 	})
 
 	return hookPayloadValidate
-}
-
-func validatePathContains(field validator.FieldLevel) bool {
-	value, ok := validationString(field.Field())
-	if !ok {
-		return false
-	}
-
-	return strings.Contains(normalizePayloadPath(value), field.Param())
 }
 
 func validateNotBlank(field validator.FieldLevel) bool {
@@ -130,8 +118,4 @@ func validationString(value reflect.Value) (string, bool) {
 	}
 
 	return strings.TrimSpace(value.String()), true
-}
-
-func normalizePayloadPath(value string) string {
-	return strings.ReplaceAll(value, "\\", "/")
 }

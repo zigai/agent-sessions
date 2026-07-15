@@ -78,8 +78,10 @@ func ompAgentDir() string {
 		}
 	}
 
-	profile := strings.TrimSpace(os.Getenv("OMP_PROFILE"))
-	if profile == "" {
+	var profile string
+	if value, ok := os.LookupEnv("OMP_PROFILE"); ok {
+		profile = strings.TrimSpace(value)
+	} else {
 		profile = strings.TrimSpace(os.Getenv("PI_PROFILE"))
 	}
 	if profile != "" && profile != "default" {

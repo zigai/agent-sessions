@@ -64,6 +64,10 @@ func (openCodeHarness) ResumeCommand(sessionID string, _ string) []string {
 }
 
 func openCodeConfigDir() string {
+	if value := strings.TrimSpace(os.Getenv("OPENCODE_CONFIG_DIR")); value != "" {
+		return value
+	}
+
 	if value := strings.TrimSpace(os.Getenv("OPENCODE_CONFIG")); value != "" {
 		return filepath.Dir(value)
 	}

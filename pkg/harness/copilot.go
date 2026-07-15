@@ -22,6 +22,7 @@ type copilotHarness struct {
 type copilotHookSpec struct {
 	event      string
 	transition any
+	matcher    string
 }
 
 func copilotAdapter() Adapter {
@@ -48,6 +49,14 @@ func (copilotHarness) InstallPlan(binary string) InstallPlan {
 	}
 }
 
+func (copilotHarness) ResumeCommand(sessionID string, _ string) []string {
+	if sessionID == "" {
+		return nil
+	}
+
+	return []string{"copilot", "--resume", sessionID}
+}
+
 func (copilotHarness) PayloadCompatible(rawPayload json.RawMessage) bool {
 	return copilotPayloadValidator(rawPayload)
 }
@@ -58,20 +67,24 @@ func (copilotHarness) PayloadDefaults(payload map[string]any) PayloadDefaults {
 
 func copilotHookConfig(binary string) map[string]any {
 	specs := []copilotHookSpec{
-		{event: "sessionStart", transition: registry.ActivityIdle},
-		{event: "userPromptSubmitted", transition: registry.ActivityRunning},
-		{event: "preToolUse", transition: registry.ActivityRunning},
-		{event: "permissionRequest", transition: registry.ActivityWaiting},
-		{event: "notification", transition: registry.ActivityWaiting},
-		{event: "postToolUse", transition: registry.ActivityRunning},
-		{event: "postToolUseFailure", transition: registry.ActivityRunning},
-		{event: "agentStop", transition: registry.ActivityIdle},
-		{event: "sessionEnd", transition: registry.PresenceGone},
+		{event: "sessionStart", transition: registry.ActivityIdle, matcher: ""},
+		{event: "userPromptSubmitted", transition: registry.ActivityRunning, matcher: ""},
+		{event: "preToolUse", transition: registry.ActivityRunning, matcher: ""},
+		{event: "permissionRequest", transition: registry.ActivityWaiting, matcher: ""},
+		{event: "notification", transition: registry.ActivityWaiting, matcher: "permission_prompt"},
+		{event: "postToolUse", transition: registry.ActivityRunning, matcher: ""},
+		{event: "postToolUseFailure", transition: registry.ActivityRunning, matcher: ""},
+		{event: "preCompact", transition: registry.ActivityRunning, matcher: ""},
+		{event: "subagentStart", transition: registry.ActivityRunning, matcher: ""},
+		{event: "subagentStop", transition: registry.ActivityIdle, matcher: ""},
+		{event: "agentStop", transition: registry.ActivityIdle, matcher: ""},
+		{event: "sessionEnd", transition: registry.PresenceGone, matcher: ""},
 	}
 
 	hooks := make(map[string]any, len(specs))
 	for _, spec := range specs {
-		hooks[spec.event] = []any{copilotCommandHook(binary, spec)}
+		existing, _ := hooks[spec.event].([]any)
+		hooks[spec.event] = append(existing, copilotCommandHook(binary, spec))
 	}
 
 	return map[string]any{
@@ -81,7 +94,7 @@ func copilotHookConfig(binary string) map[string]any {
 }
 
 func copilotCommandHook(binary string, spec copilotHookSpec) map[string]any {
-	return map[string]any{
+	hook := map[string]any{
 		"type":       HookTypeCommand,
 		"command":    copilotHookCommand(binary, spec.transition, spec.event),
 		"timeoutSec": float64(HookTimeoutSeconds),
@@ -90,6 +103,11 @@ func copilotCommandHook(binary string, spec copilotHookSpec) map[string]any {
 			"AGENT_SESSIONS_INTEGRATION_VERSION": strconv.Itoa(IntegrationVersion),
 		},
 	}
+	if spec.matcher != "" {
+		hook["matcher"] = spec.matcher
+	}
+
+	return hook
 }
 
 func copilotHookCommand(binary string, transition any, event string) string {
@@ -132,6 +150,9 @@ func copilotHome() string {
 		return value
 	}
 	if home := strings.TrimSpace(os.Getenv("HOME")); home != "" {
+		return filepath.Join(home, ".copilot")
+	}
+	if home, err := os.UserHomeDir(); err == nil && strings.TrimSpace(home) != "" {
 		return filepath.Join(home, ".copilot")
 	}
 

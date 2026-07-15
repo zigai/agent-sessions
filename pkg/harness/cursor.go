@@ -142,6 +142,9 @@ func cursorHome() string {
 	if home := strings.TrimSpace(os.Getenv("HOME")); home != "" {
 		return filepath.Join(home, ".cursor")
 	}
+	if home, err := os.UserHomeDir(); err == nil && strings.TrimSpace(home) != "" {
+		return filepath.Join(home, ".cursor")
+	}
 
 	return ".cursor"
 }

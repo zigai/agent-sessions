@@ -8,10 +8,6 @@ import { spawn } from "node:child_process";
 const agentSessionsBin = {{BINARY}};
 const source = {{SOURCE}};
 
-let currentSessionId: string | undefined;
-let currentSessionPath: string | undefined;
-let currentCwd: string | undefined;
-let currentProjectRoot: string | undefined;
 
 function firstString(...values: unknown[]): string | undefined {
   for (const value of values) {
@@ -38,6 +34,9 @@ function firstPathString(value: any, paths: string[][]): string | undefined {
 }
 
 function normalizeStatus(value: unknown): string | undefined {
+  if (value !== null && typeof value === "object") {
+    value = (value as { type?: unknown }).type;
+  }
   if (typeof value !== "string") {
     return undefined;
   }
@@ -45,7 +44,7 @@ function normalizeStatus(value: unknown): string | undefined {
   if (["running", "busy", "retry"].includes(status)) {
     return "running";
   }
-  if (status === "idle") {
+  if (status === "idle" || status === "offline") {
     return "idle";
   }
   return undefined;
@@ -55,12 +54,17 @@ function stateForEvent(event: any): string | undefined {
   switch (event?.type) {
     case "session.created":
       return "idle";
+    case "session.idle":
+      return "idle";
     case "permission.asked":
       return "waiting";
     case "permission.replied":
       return "running";
     case "session.status":
       return normalizeStatus(firstPathString(event, [
+        ["status", "type"],
+        ["properties", "status", "type"],
+        ["session", "status", "type"],
         ["status"],
         ["properties", "status"],
         ["session", "status"],
@@ -70,37 +74,53 @@ function stateForEvent(event: any): string | undefined {
   }
 }
 
-function refreshSessionRef(ctx: any, event: any): void {
-  currentSessionId = firstPathString(event, [
-    ["sessionID"],
-    ["sessionId"],
-    ["session_id"],
-    ["properties", "sessionID"],
-    ["properties", "sessionId"],
-    ["properties", "session_id"],
-    ["session", "id"],
-    ["session", "sessionID"],
-    ["session", "sessionId"],
-  ]) ?? currentSessionId;
+async function AgentSessionsPlugin(ctx: any): Promise<any> {
+  let currentSessionId: string | undefined;
+  let currentSessionPath: string | undefined;
+  let currentCwd: string | undefined;
+  let currentProjectRoot: string | undefined;
 
-  currentSessionPath = firstPathString(event, [
-    ["sessionPath"],
-    ["session_path"],
-    ["path"],
-    ["session", "path"],
-    ["session", "file"],
-  ]) ?? currentSessionPath;
+  function refreshSessionRef(event: any): void {
+    currentSessionId = firstPathString(event, [
+      ["sessionID"],
+      ["sessionId"],
+      ["session_id"],
+      ["properties", "sessionID"],
+      ["properties", "sessionId"],
+      ["properties", "session_id"],
+      ["properties", "info", "id"],
+      ["properties", "info", "sessionID"],
+      ["session", "id"],
+      ["session", "sessionID"],
+      ["session", "sessionId"],
+    ]) ?? currentSessionId;
 
-  currentCwd = firstString(
-    ctx?.directory,
-    ctx?.worktree,
-    event?.cwd,
-    event?.session?.cwd,
-    event?.properties?.cwd,
-  ) ?? currentCwd;
+    currentSessionPath = firstPathString(event, [
+      ["sessionPath"],
+      ["session_path"],
+      ["path"],
+      ["properties", "info", "path"],
+      ["properties", "info", "file"],
+      ["session", "path"],
+      ["session", "file"],
+    ]) ?? currentSessionPath;
 
-  currentProjectRoot = firstString(ctx?.worktree, ctx?.project?.path, ctx?.project?.root) ?? currentProjectRoot;
-}
+    currentCwd = firstString(
+      ctx?.directory,
+      ctx?.worktree,
+      event?.cwd,
+      event?.session?.cwd,
+      event?.properties?.cwd,
+      event?.properties?.info?.directory,
+    ) ?? currentCwd;
+
+    currentProjectRoot = firstString(
+      ctx?.worktree,
+      ctx?.project?.path,
+      ctx?.project?.root,
+      event?.properties?.info?.directory,
+    ) ?? currentProjectRoot;
+  }
 
 function addAttribute(args: string[], key: string, value: unknown): void {
   if (typeof value === "string" && value.length > 0) {
@@ -114,45 +134,47 @@ function addEvent(args: string[], value: unknown): void {
   }
 }
 
-function report(state: string, ctx: any, event: any): void {
-  const observedAt = new Date().toISOString();
-  refreshSessionRef(ctx, event);
+  function report(state: string, event: any): void {
+    const observedAt = new Date().toISOString();
+    refreshSessionRef(event);
 
-  const args = ["report", "opencode", "--activity", state, "--observed-at", observedAt, "--queue", "--quiet"];
-  addEvent(args, event?.type);
-  args.push("--attribute", `agent_sessions_integration_version={{INTEGRATION_VERSION}}`);
-  if (currentSessionId) {
-    args.push("--session-id", currentSessionId);
-  }
-  if (currentSessionPath) {
-    args.push("--session-path", currentSessionPath);
-  }
-  if (currentCwd) {
-    args.push("--cwd", currentCwd);
-  }
-  if (currentProjectRoot) {
-    args.push("--project-root", currentProjectRoot);
-  }
+    const args = ["report", "opencode", "--activity", state, "--observed-at", observedAt, "--queue", "--quiet"];
+    addEvent(args, event?.type);
+    args.push("--attribute", `agent_sessions_integration_version={{INTEGRATION_VERSION}}`);
+    if (currentSessionId) {
+      args.push("--session-id", currentSessionId);
+    }
+    if (currentSessionPath) {
+      args.push("--session-path", currentSessionPath);
+    }
+    if (currentCwd) {
+      args.push("--cwd", currentCwd);
+    }
+    if (currentProjectRoot) {
+      args.push("--project-root", currentProjectRoot);
+    }
 
-  addAttribute(args, "opencode_event", event?.type);
-  addAttribute(args, "opencode_status", firstPathString(event, [
-    ["status"],
-    ["properties", "status"],
-    ["session", "status"],
-  ]));
-  addAttribute(args, "agent_sessions_integration", "opencode-plugin");
+    addAttribute(args, "opencode_status", firstPathString(event, [
+      ["status", "type"],
+      ["properties", "status", "type"],
+      ["session", "status", "type"],
+      ["status"],
+      ["properties", "status"],
+      ["session", "status"],
+    ]));
+    addAttribute(args, "agent_sessions_integration", source);
 
-  try {
-    const child = spawn(agentSessionsBin, args, {
-      detached: true,
-      stdio: "ignore",
-    });
-    child.unref();
-  } catch {
-    // Session reporting must never break OpenCode startup or turns.
+    try {
+      const child = spawn(agentSessionsBin, args, {
+        detached: true,
+        stdio: "ignore",
+      });
+      child.on("error", () => {});
+      child.unref();
+    } catch {
+      // Session reporting must never break OpenCode startup or turns.
+    }
   }
-}
-
 
   return {
     event: async ({ event }: any) => {
@@ -161,7 +183,9 @@ function report(state: string, ctx: any, event: any): void {
         return;
       }
 
-      report(state, ctx, event);
+      report(state, event);
     },
   };
-};
+}
+
+export default { id: "agent-sessions-state", server: AgentSessionsPlugin };

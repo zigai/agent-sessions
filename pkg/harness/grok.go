@@ -77,14 +77,54 @@ func grokHookConfig(binary string) map[string]any {
 			command: grokHookCommand(binary, registry.ActivityRunning, HookEventUserPromptSubmit),
 		},
 		{
-			event:   "Notification",
-			matcher: "approval_required",
-			command: grokHookCommand(binary, registry.ActivityWaiting, "Notification"),
+			event:   HookEventPreToolUse,
+			matcher: "",
+			command: grokHookCommand(binary, registry.ActivityRunning, HookEventPreToolUse),
+		},
+		{
+			event:   HookEventPostToolUse,
+			matcher: "",
+			command: grokHookCommand(binary, registry.ActivityRunning, HookEventPostToolUse),
+		},
+		{
+			event:   HookEventPostToolUseFailure,
+			matcher: "",
+			command: grokHookCommand(binary, registry.ActivityRunning, HookEventPostToolUseFailure),
+		},
+		{
+			event:   "PermissionDenied",
+			matcher: "",
+			command: grokHookCommand(binary, registry.ActivityIdle, "PermissionDenied"),
+		},
+		{
+			event:   "SubagentStart",
+			matcher: "",
+			command: grokHookCommand(binary, registry.ActivityRunning, "SubagentStart"),
+		},
+		{
+			event:   "SubagentStop",
+			matcher: "",
+			command: grokHookCommand(binary, registry.ActivityIdle, "SubagentStop"),
+		},
+		{
+			event:   "PreCompact",
+			matcher: "",
+			command: grokHookCommand(binary, registry.ActivityRunning, "PreCompact"),
+		},
+		{
+			event:   "PostCompact",
+			matcher: "",
+			command: grokHookCommand(binary, registry.ActivityIdle, "PostCompact"),
 		},
 		{
 			event:   HookEventStop,
 			matcher: "",
 			command: grokHookCommand(binary, registry.ActivityIdle, HookEventStop),
+		},
+		{
+			event:   "StopFailure",
+			matcher: "",
+			command: grokHookCommand(binary, registry.ActivityIdle, "StopFailure"),
 		},
 		{
 			event:   "SessionEnd",

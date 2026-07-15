@@ -8,14 +8,16 @@ import (
 )
 
 const (
-	ManagedMarker             = "agent-sessions managed integration"
-	HookTimeoutSeconds        = 5
-	HookTypeCommand           = "command"
-	HookEventSessionStart     = "SessionStart"
-	HookEventUserPromptSubmit = "UserPromptSubmit"
-	HookEventPreToolUse       = "PreToolUse"
-	HookEventStop             = "Stop"
-	resumeFlag                = "--resume"
+	ManagedMarker               = "agent-sessions managed integration"
+	HookTimeoutSeconds          = 5
+	HookTypeCommand             = "command"
+	HookEventSessionStart       = "SessionStart"
+	HookEventUserPromptSubmit   = "UserPromptSubmit"
+	HookEventPostToolUse        = "PostToolUse"
+	HookEventPostToolUseFailure = "PostToolUseFailure"
+	HookEventPreToolUse         = "PreToolUse"
+	HookEventStop               = "Stop"
+	resumeFlag                  = "--resume"
 )
 
 type InstallPlan struct {

@@ -84,9 +84,12 @@ func clineHookSpecs() []clineHookSpec {
 		{name: "TaskResume", transition: registry.ActivityIdle},
 		{name: HookEventUserPromptSubmit, transition: registry.ActivityRunning},
 		{name: HookEventPreToolUse, transition: registry.ActivityRunning},
-		{name: "PostToolUse", transition: registry.ActivityRunning},
+		{name: HookEventPostToolUse, transition: registry.ActivityRunning},
 		{name: "TaskComplete", transition: registry.ActivityIdle},
 		{name: "TaskCancel", transition: registry.ActivityIdle},
+		{name: "TaskError", transition: registry.ActivityIdle},
+		{name: "PreCompact", transition: registry.ActivityRunning},
+		{name: "SessionShutdown", transition: registry.PresenceGone},
 	}
 }
 
@@ -150,7 +153,7 @@ func clineSessionPath(sessionID string) string {
 		return ""
 	}
 
-	return filepath.Join(clineDataDir(), "sessions", sessionID, sessionID+".messages.json")
+	return filepath.Join(clineSessionDir(), sessionID, sessionID+".messages.json")
 }
 
 func clineHooksDir() string {
@@ -164,13 +167,16 @@ func clineHooksDir() string {
 	return filepath.Join(".cline", "hooks")
 }
 
-func clineDataDir() string {
-	if value := strings.TrimSpace(os.Getenv("CLINE_DATA_DIR")); value != "" {
+func clineSessionDir() string {
+	if value := strings.TrimSpace(os.Getenv("CLINE_SESSION_DATA_DIR")); value != "" {
 		return value
 	}
+	if value := strings.TrimSpace(os.Getenv("CLINE_DATA_DIR")); value != "" {
+		return filepath.Join(value, "sessions")
+	}
 	if home := strings.TrimSpace(os.Getenv("HOME")); home != "" {
-		return filepath.Join(home, ".cline", "data")
+		return filepath.Join(home, ".cline", "data", "sessions")
 	}
 
-	return filepath.Join(".cline", "data")
+	return filepath.Join(".cline", "data", "sessions")
 }

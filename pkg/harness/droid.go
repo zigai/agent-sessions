@@ -56,9 +56,9 @@ func (droidHarness) InstallPlan(binary string) InstallPlan {
 					Command: droidHookCommand(binary, registry.ActivityRunning, HookEventPreToolUse),
 				},
 				{
-					Event:   "PostToolUse",
+					Event:   HookEventPostToolUse,
 					Matcher: "",
-					Command: droidHookCommand(binary, registry.ActivityRunning, "PostToolUse"),
+					Command: droidHookCommand(binary, registry.ActivityRunning, HookEventPostToolUse),
 				},
 				{
 					Event:   "Notification",

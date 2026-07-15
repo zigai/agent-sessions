@@ -51,14 +51,64 @@ func (claudeHarness) InstallPlan(binary string) InstallPlan {
 					Command: ReportHookCommand(binary, registry.HarnessClaude, registry.ActivityRunning, HookEventUserPromptSubmit, claudeIntegrationSource),
 				},
 				{
+					Event:   HookEventPreToolUse,
+					Matcher: "",
+					Command: ReportHookCommand(binary, registry.HarnessClaude, registry.ActivityRunning, HookEventPreToolUse, claudeIntegrationSource),
+				},
+				{
+					Event:   HookEventPostToolUse,
+					Matcher: "",
+					Command: ReportHookCommand(binary, registry.HarnessClaude, registry.ActivityRunning, HookEventPostToolUse, claudeIntegrationSource),
+				},
+				{
+					Event:   HookEventPostToolUseFailure,
+					Matcher: "",
+					Command: ReportHookCommand(binary, registry.HarnessClaude, registry.ActivityRunning, HookEventPostToolUseFailure, claudeIntegrationSource),
+				},
+				{
+					Event:   "PermissionRequest",
+					Matcher: "",
+					Command: ReportHookCommand(binary, registry.HarnessClaude, registry.ActivityWaiting, "PermissionRequest", claudeIntegrationSource),
+				},
+				{
+					Event:   "PermissionDenied",
+					Matcher: "",
+					Command: ReportHookCommand(binary, registry.HarnessClaude, registry.ActivityIdle, "PermissionDenied", claudeIntegrationSource),
+				},
+				{
 					Event:   "Notification",
 					Matcher: "permission_prompt",
 					Command: ReportHookCommand(binary, registry.HarnessClaude, registry.ActivityWaiting, "Notification", claudeIntegrationSource),
 				},
 				{
+					Event:   "SubagentStart",
+					Matcher: "",
+					Command: ReportHookCommand(binary, registry.HarnessClaude, registry.ActivityRunning, "SubagentStart", claudeIntegrationSource),
+				},
+				{
+					Event:   "SubagentStop",
+					Matcher: "",
+					Command: ReportHookCommand(binary, registry.HarnessClaude, registry.ActivityIdle, "SubagentStop", claudeIntegrationSource),
+				},
+				{
+					Event:   "PreCompact",
+					Matcher: "",
+					Command: ReportHookCommand(binary, registry.HarnessClaude, registry.ActivityRunning, "PreCompact", claudeIntegrationSource),
+				},
+				{
+					Event:   "PostCompact",
+					Matcher: "",
+					Command: ReportHookCommand(binary, registry.HarnessClaude, registry.ActivityIdle, "PostCompact", claudeIntegrationSource),
+				},
+				{
 					Event:   HookEventStop,
 					Matcher: "",
 					Command: ReportHookCommand(binary, registry.HarnessClaude, registry.ActivityIdle, HookEventStop, claudeIntegrationSource),
+				},
+				{
+					Event:   "StopFailure",
+					Matcher: "",
+					Command: ReportHookCommand(binary, registry.HarnessClaude, registry.ActivityIdle, "StopFailure", claudeIntegrationSource),
 				},
 				{
 					Event:   "SessionEnd",

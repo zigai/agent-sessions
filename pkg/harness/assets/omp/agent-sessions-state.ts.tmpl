@@ -118,9 +118,6 @@ export default function (pi: any) {
     report("running", undefined, ctx, event);
   });
 
-  pi.on("agent_end", (event: any, ctx: any) => {
-    report("idle", undefined, ctx, event);
-  });
 
   pi.on("session_stop", (event: any, ctx: any) => {
     report("idle", undefined, ctx, event);

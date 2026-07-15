@@ -97,11 +97,11 @@ func (agyHarness) HandleHook(invocation HookInvocation) HookResult {
 func agyHookConfig(binary string) map[string]any {
 	return map[string]any{
 		agyPluginName: map[string]any{
-			"PreInvocation":     []any{agyHookHandler(binary, "PreInvocation")},
-			"PostInvocation":    []any{agyHookHandler(binary, "PostInvocation")},
-			HookEventPreToolUse: []any{agyToolHookGroup(binary, HookEventPreToolUse)},
-			"PostToolUse":       []any{agyToolHookGroup(binary, "PostToolUse")},
-			HookEventStop:       []any{agyHookHandler(binary, HookEventStop)},
+			"PreInvocation":      []any{agyHookHandler(binary, "PreInvocation")},
+			"PostInvocation":     []any{agyHookHandler(binary, "PostInvocation")},
+			HookEventPreToolUse:  []any{agyToolHookGroup(binary, HookEventPreToolUse)},
+			HookEventPostToolUse: []any{agyToolHookGroup(binary, HookEventPostToolUse)},
+			HookEventStop:        []any{agyHookHandler(binary, HookEventStop)},
 		},
 	}
 }
@@ -243,7 +243,7 @@ func agyActivityForHook(event string, payload map[string]any) *registry.Activity
 		} else {
 			activity = registry.ActivityRunning
 		}
-	case "PostToolUse":
+	case HookEventPostToolUse:
 		if _, ok := payload["toolCall"].(map[string]any); !ok {
 			return nil
 		}

@@ -56,6 +56,31 @@ func (codexHarness) InstallPlan(binary string) InstallPlan {
 					Command: ReportHookCommand(binary, registry.HarnessCodex, registry.ActivityWaiting, "PermissionRequest", codexIntegrationSource),
 				},
 				{
+					Event:   HookEventPostToolUse,
+					Matcher: "",
+					Command: ReportHookCommand(binary, registry.HarnessCodex, registry.ActivityRunning, HookEventPostToolUse, codexIntegrationSource),
+				},
+				{
+					Event:   "PreCompact",
+					Matcher: "",
+					Command: ReportHookCommand(binary, registry.HarnessCodex, registry.ActivityRunning, "PreCompact", codexIntegrationSource),
+				},
+				{
+					Event:   "PostCompact",
+					Matcher: "",
+					Command: ReportHookCommand(binary, registry.HarnessCodex, registry.ActivityIdle, "PostCompact", codexIntegrationSource),
+				},
+				{
+					Event:   "SubagentStart",
+					Matcher: "",
+					Command: ReportHookCommand(binary, registry.HarnessCodex, registry.ActivityRunning, "SubagentStart", codexIntegrationSource),
+				},
+				{
+					Event:   "SubagentStop",
+					Matcher: "",
+					Command: ReportHookCommand(binary, registry.HarnessCodex, registry.ActivityIdle, "SubagentStop", codexIntegrationSource),
+				},
+				{
 					Event:   HookEventStop,
 					Matcher: "",
 					Command: ReportHookCommand(binary, registry.HarnessCodex, registry.ActivityIdle, HookEventStop, codexIntegrationSource),
