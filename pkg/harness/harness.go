@@ -85,6 +85,8 @@ func capabilitiesFor(id registry.Harness) Capabilities {
 		capabilities.SessionStart, capabilities.SessionEnd, capabilities.RunningIdle, capabilities.NativeCatalog = true, true, true, true
 	case registry.HarnessPi:
 		capabilities.SessionStart, capabilities.SessionEnd, capabilities.RunningIdle, capabilities.NativeCatalog = true, true, true, true
+	case registry.HarnessOmp:
+		capabilities.SessionStart, capabilities.SessionEnd, capabilities.RunningIdle, capabilities.WaitingPermission, capabilities.NativeCatalog = true, true, true, true, true
 	case registry.HarnessOpenCode:
 		capabilities.SessionStart, capabilities.RunningIdle, capabilities.WaitingPermission, capabilities.NativeCatalog = true, true, true, true
 	case registry.HarnessAgy:

@@ -22,6 +22,7 @@ const (
 	IDGrok     = "grok"
 	IDGoose    = "goose"
 	IDPi       = "pi"
+	IDOmp      = "omp"
 	IDOpenCode = "opencode"
 	IDAgy      = "agy"
 	IDKilo     = "kilo"
@@ -73,6 +74,11 @@ var definitions = []Definition{
 		ID:           IDPi,
 		Aliases:      nil,
 		ProcessNames: []string{"pi"},
+	},
+	{
+		ID:           IDOmp,
+		Aliases:      []string{"ohmypi", "oh-my-pi", "oh_my_pi"},
+		ProcessNames: []string{"omp", "ohmypi", "oh-my-pi"},
 	},
 	{
 		ID:           IDOpenCode,

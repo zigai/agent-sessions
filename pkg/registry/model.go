@@ -27,6 +27,8 @@ const (
 	HarnessGrok     Harness = harnessmeta.IDGrok
 	HarnessGoose    Harness = harnessmeta.IDGoose
 	HarnessPi       Harness = harnessmeta.IDPi
+	HarnessOmp      Harness = harnessmeta.IDOmp
+	HarnessOhMyPi   Harness = HarnessOmp
 	HarnessOpenCode Harness = harnessmeta.IDOpenCode
 	HarnessAgy      Harness = harnessmeta.IDAgy
 	HarnessKilo     Harness = harnessmeta.IDKilo

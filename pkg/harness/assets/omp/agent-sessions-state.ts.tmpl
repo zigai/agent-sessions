@@ -1,0 +1,132 @@
+"{{MANAGED_MARKER}}";
+"AGENT_SESSIONS_INTEGRATION_ID={{INTEGRATION_ID}}";
+"AGENT_SESSIONS_INTEGRATION_VERSION={{INTEGRATION_VERSION}}";
+"agent_sessions_integration_version={{INTEGRATION_VERSION}}";
+
+import { spawn } from "node:child_process";
+
+const agentSessionsBin = {{BINARY}};
+const currentSessionSource = {{SOURCE}};
+
+let currentSessionId: string | undefined;
+let currentSessionPath: string | undefined;
+let currentCwd: string | undefined;
+
+function updateSessionRef(ctx: any): void {
+  const sessionManager = ctx?.sessionManager;
+  try {
+    const file = sessionManager?.getSessionFile?.();
+    currentSessionPath = typeof file === "string" && file.length > 0 ? file : undefined;
+  } catch {
+    currentSessionPath = undefined;
+  }
+
+  try {
+    const id = sessionManager?.getSessionId?.();
+    currentSessionId = typeof id === "string" && id.length > 0 ? id : undefined;
+  } catch {
+    currentSessionId = undefined;
+  }
+
+  try {
+    const cwd = typeof ctx?.cwd === "string" && ctx.cwd.length > 0 ? ctx.cwd : sessionManager?.getCwd?.();
+    currentCwd = typeof cwd === "string" && cwd.length > 0 ? cwd : undefined;
+  } catch {
+    currentCwd = undefined;
+  }
+}
+
+function addAttribute(args: string[], key: string, value: unknown): void {
+  if (typeof value === "string" && value.length > 0) {
+    args.push("--attribute", `${key}=${value}`);
+  }
+}
+
+function addResumeCommand(args: string[]): void {
+  const session = currentSessionPath ?? currentSessionId;
+  if (!session) return;
+
+  for (const item of ["omp", "--session", session]) {
+    args.push("--resume-command", item);
+  }
+}
+
+function report(activity: string | undefined, presence: string | undefined, ctx?: any, event?: any): void {
+  const observedAt = new Date().toISOString();
+  updateSessionRef(ctx);
+
+  const args = ["report", "omp", "--observed-at", observedAt, "--queue", "--quiet"];
+  if (presence) args.push("--presence", presence);
+  if (activity) args.push("--activity", activity);
+  args.push("--attribute", `agent_sessions_integration_version={{INTEGRATION_VERSION}}`);
+  args.push("--attribute", `agent_sessions_integration=${currentSessionSource}`);
+  addAttribute(args, "omp_event", event?.type);
+  addAttribute(args, "omp_tool_name", event?.toolName);
+  addAttribute(args, "omp_approval_mode", event?.approvalMode);
+  addAttribute(args, "omp_approval_reason", event?.reason);
+  if (typeof event?.approved === "boolean") {
+    addAttribute(args, "omp_approved", String(event.approved));
+  }
+
+  if (currentSessionPath) {
+    args.push("--session-path", currentSessionPath);
+  } else if (currentSessionId) {
+    args.push("--session-id", currentSessionId);
+  }
+  if (currentCwd) args.push("--cwd", currentCwd);
+  addResumeCommand(args);
+
+  try {
+    const child = spawn(agentSessionsBin, args, {
+      detached: true,
+      stdio: "ignore",
+    });
+    child.unref();
+  } catch {
+    // Session reporting must never break oh-my-pi startup or turns.
+  }
+}
+
+export default function (pi: any) {
+  pi.on("session_start", (event: any, ctx: any) => {
+    report("idle", "live", ctx, event);
+  });
+
+  for (const eventName of ["session_switch", "session_branch", "session_tree"]) {
+    pi.on(eventName, (event: any, ctx: any) => {
+      report("idle", undefined, ctx, event);
+    });
+  }
+
+  pi.on("input", (event: any, ctx: any) => {
+    report("running", undefined, ctx, event);
+  });
+
+  pi.on("before_agent_start", (event: any, ctx: any) => {
+    report("running", undefined, ctx, event);
+  });
+
+  pi.on("agent_start", (event: any, ctx: any) => {
+    report("running", undefined, ctx, event);
+  });
+
+  pi.on("tool_approval_requested", (event: any, ctx: any) => {
+    report("waiting", undefined, ctx, event);
+  });
+
+  pi.on("tool_approval_resolved", (event: any, ctx: any) => {
+    report("running", undefined, ctx, event);
+  });
+
+  pi.on("agent_end", (event: any, ctx: any) => {
+    report("idle", undefined, ctx, event);
+  });
+
+  pi.on("session_stop", (event: any, ctx: any) => {
+    report("idle", undefined, ctx, event);
+  });
+
+  pi.on("session_shutdown", (event: any, ctx: any) => {
+    report(undefined, "gone", ctx, event);
+  });
+}

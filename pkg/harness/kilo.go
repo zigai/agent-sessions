@@ -48,7 +48,6 @@ func (kiloHarness) InstallPlan(binary string) InstallPlan {
 			Content: renderScriptTemplate(
 				kiloPluginTemplate,
 				kiloIntegrationID,
-				IntegrationVersion,
 				binary,
 				kiloIntegrationSource,
 			),

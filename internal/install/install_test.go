@@ -16,6 +16,7 @@ import (
 const (
 	testInstallBinary     = "/usr/local/bin/agent-sessions"
 	piExtensionName       = "agent-sessions-state.ts"
+	ompExtensionName      = "agent-sessions-state.ts"
 	openCodePluginName    = "agent-sessions-state.ts"
 	kiloPluginName        = "agent-sessions-state.ts"
 	agyPluginName         = "agent-sessions-state"
@@ -641,6 +642,72 @@ func TestInstallPiWritesExtension(t *testing.T) {
 	}
 	if !strings.Contains(result.Snippet, `"--observed-at", observedAt`) {
 		t.Fatalf("expected pi observed timestamp in snippet: %q", result.Snippet)
+	}
+}
+
+func TestInstallOmpWritesExtension(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("PI_CODING_AGENT_DIR", dir)
+
+	result, err := Run(Options{
+		Harness:      registry.HarnessOmp,
+		Binary:       testInstallBinary,
+		TargetBinary: "",
+		DryRun:       false,
+		Force:        false,
+		UseShim:      false,
+	})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("expected oh-my-pi install to report changed")
+	}
+	if result.Path != filepath.Join(dir, "extensions", ompExtensionName) {
+		t.Fatalf("unexpected path %q", result.Path)
+	}
+	requireTextContainsAll(t, result.Snippet, []string{
+		"AGENT_SESSIONS_INTEGRATION_ID=omp",
+		`pi.on("session_start"`,
+		`pi.on("tool_approval_requested"`,
+		`pi.on("tool_approval_resolved"`,
+		`pi.on("session_stop"`,
+		`pi.on("session_shutdown"`,
+		`report("idle", "live"`,
+		`report("waiting"`,
+		`report("running"`,
+		`report(undefined, "gone"`,
+		`"--resume-command", item`,
+		`"--session-path", currentSessionPath`,
+		`"--cwd", currentCwd`,
+		`"report", "omp"`,
+		"AGENT_SESSIONS_INTEGRATION_VERSION=3",
+	}, "oh-my-pi extension")
+}
+
+func TestInstallOmpUsesProfileAgentDir(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("PI_CODING_AGENT_DIR", "")
+	t.Setenv("PI_CONFIG_DIR", ".omp")
+	t.Setenv("OMP_PROFILE", "work")
+	t.Setenv("PI_PROFILE", "")
+
+	result, err := Run(Options{
+		Harness:      registry.HarnessOmp,
+		Binary:       testInstallBinary,
+		TargetBinary: "",
+		DryRun:       false,
+		Force:        false,
+		UseShim:      false,
+	})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+
+	wantPath := filepath.Join(home, ".omp", "profiles", "work", "agent", "extensions", ompExtensionName)
+	if result.Path != wantPath {
+		t.Fatalf("unexpected profile path %q, want %q", result.Path, wantPath)
 	}
 }
 

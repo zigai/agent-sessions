@@ -79,6 +79,20 @@ func TestResumeCommandFor(t *testing.T) {
 			want:        []string{"pi", "--session", "/tmp/session.jsonl"},
 		},
 		{
+			name:        "omp path",
+			harness:     registry.HarnessOmp,
+			sessionID:   testSessionID,
+			sessionPath: "/tmp/omp-session.jsonl",
+			want:        []string{"omp", "--session", "/tmp/omp-session.jsonl"},
+		},
+		{
+			name:        "omp id",
+			harness:     registry.HarnessOmp,
+			sessionID:   testSessionID,
+			sessionPath: "",
+			want:        []string{"omp", "--session", testSessionID},
+		},
+		{
 			name:        "opencode",
 			harness:     registry.HarnessOpenCode,
 			sessionID:   testSessionID,
@@ -139,6 +153,9 @@ func TestNormalize(t *testing.T) {
 		{name: "claude alias hyphen", value: "claude-code", want: registry.HarnessClaude},
 		{name: "claude alias underscore", value: "claude_code", want: registry.HarnessClaude},
 		{name: "kimi-code", value: "kimi-code", want: registry.HarnessKimiCode},
+		{name: "omp", value: "omp", want: registry.HarnessOmp},
+		{name: "ohmypi alias", value: "ohmypi", want: registry.HarnessOmp},
+		{name: "oh-my-pi alias", value: "oh-my-pi", want: registry.HarnessOmp},
 		{name: "kimi alias", value: "kimi", want: registry.HarnessKimiCode},
 		{name: "kimi alias underscore", value: "kimi_code", want: registry.HarnessKimiCode},
 		{name: "kimi alias compact", value: "kimicode", want: registry.HarnessKimiCode},
@@ -186,6 +203,7 @@ func TestSupportedNames(t *testing.T) {
 		"grok",
 		"goose",
 		"pi",
+		"omp",
 		"opencode",
 		"agy",
 		kiloCommand,
@@ -282,6 +300,8 @@ func TestFromCommand(t *testing.T) {
 		want    registry.Harness
 		wantOK  bool
 	}{
+		{command: "omp", want: registry.HarnessOmp, wantOK: true},
+		{command: "oh-my-pi", want: registry.HarnessOmp, wantOK: true},
 		{command: "/usr/bin/codex", want: registry.HarnessCodex, wantOK: true},
 		{command: "/usr/local/bin/cursor-agent", want: registry.HarnessCursor, wantOK: true},
 		{command: "/opt/bin/copilot", want: registry.HarnessCopilot, wantOK: true},

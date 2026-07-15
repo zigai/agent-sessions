@@ -45,7 +45,6 @@ func (openCodeHarness) InstallPlan(binary string) InstallPlan {
 				Content: renderScriptTemplate(
 					openCodePluginTemplate,
 					openCodeIntegrationID,
-					IntegrationVersion,
 					binary,
 					openCodeIntegrationSource,
 				),

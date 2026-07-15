@@ -44,7 +44,6 @@ func (piHarness) InstallPlan(binary string) InstallPlan {
 			Content: renderScriptTemplate(
 				piExtensionTemplate,
 				piIntegrationID,
-				IntegrationVersion,
 				binary,
 				piIntegrationSourceID,
 			),

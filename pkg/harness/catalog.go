@@ -10,6 +10,7 @@ var adapters = []Adapter{
 	grokAdapter(),
 	gooseAdapter(),
 	piAdapter(),
+	ompAdapter(),
 	openCodeAdapter(),
 	agyAdapter(),
 	kiloAdapter(),

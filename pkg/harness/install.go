@@ -228,11 +228,11 @@ func ShellQuote(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
 }
 
-func renderScriptTemplate(template string, integrationID string, integrationVersion int, binary string, source string) string {
+func renderScriptTemplate(template string, integrationID string, binary string, source string) string {
 	return strings.NewReplacer(
 		"{{MANAGED_MARKER}}", ManagedMarker,
 		"{{INTEGRATION_ID}}", integrationID,
-		"{{INTEGRATION_VERSION}}", strconv.Itoa(integrationVersion),
+		"{{INTEGRATION_VERSION}}", strconv.Itoa(IntegrationVersion),
 		"{{BINARY}}", strconv.Quote(binary),
 		"{{SOURCE}}", strconv.Quote(source),
 	).Replace(template)
