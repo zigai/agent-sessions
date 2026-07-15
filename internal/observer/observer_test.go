@@ -95,3 +95,27 @@ func TestObserverCatalogCorrelatesCurrentClaudeProcess(t *testing.T) {
 		t.Fatalf("missing source evidence: %#v", session.Observations)
 	}
 }
+
+func TestRunWithResultsStreamsEveryCycle(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithCancel(context.Background())
+	results := make([]Result, 0, 1)
+	watcher := New(Options{
+		Store: registry.NewFileStore(filepath.Join(t.TempDir(), "sessions.json")),
+		ProcessList: func(context.Context) ([]processinfo.Process, error) {
+			cancel()
+			return nil, nil
+		},
+		PaneList:    func(context.Context) ([]tmuxctx.Pane, error) { return nil, nil },
+		CatalogList: func(context.Context) ([]CatalogEntry, error) { return nil, nil },
+	})
+	if err := watcher.RunWithResults(ctx, func(result Result) error {
+		results = append(results, result)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("result count = %d, want 1", len(results))
+	}
+}

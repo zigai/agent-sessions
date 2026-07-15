@@ -1388,6 +1388,9 @@ func requireAgyPluginHooks(t *testing.T, dir string) {
 	t.Helper()
 
 	hooksData := readTestFile(t, filepath.Join(dir, "hooks.json"), "reading agy hooks")
+	if !strings.Contains(string(hooksData), testInstallBinary+" --json hook agy") {
+		t.Fatalf("expected agy hooks to request protocol JSON explicitly: %s", hooksData)
+	}
 	hooks := decodeTestJSONObject(t, hooksData, "agy hooks")
 	pluginHooks, hooksOK := hooks[agyPluginName].(map[string]any)
 	if !hooksOK {
@@ -1403,8 +1406,8 @@ func requireAgyPluginMarker(t *testing.T, dir string) {
 	if !strings.Contains(string(marker), managedMarker) {
 		t.Fatalf("expected managed marker, got %q", marker)
 	}
-	if !strings.Contains(string(marker), "AGENT_SESSIONS_INTEGRATION_VERSION=3") {
-		t.Fatalf("expected agy integration version 3 marker, got %q", marker)
+	if !strings.Contains(string(marker), "AGENT_SESSIONS_INTEGRATION_VERSION=4") {
+		t.Fatalf("expected agy integration version 4 marker, got %q", marker)
 	}
 }
 

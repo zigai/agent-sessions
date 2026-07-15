@@ -1,6 +1,11 @@
 package cli
 
 import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -23,6 +28,63 @@ func TestDiffWatchEventsSeparatesPresenceAndActivity(t *testing.T) {
 	}
 	if events[0].PreviousActivity == nil || *events[0].PreviousActivity != registry.ActivityIdle {
 		t.Fatalf("missing previous activity: %#v", events[0])
+	}
+}
+
+func TestWatchJSONModeEmitsJSONLinesOnlyWhenRequested(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "sessions.json")
+	store := registry.NewFileStore(path)
+	activity := registry.ActivityIdle
+	if _, err := store.Observe(context.Background(), registry.Observation{Harness: registry.HarnessCodex, Source: registry.ObservationSourceNative, Evidence: registry.ObservationEvidenceNativeEvent, Identity: registry.ObservationIdentity{SessionID: "watch-json"}, Activity: &activity, ObservedAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &application{storePath: path, outputJSON: true, stdout: &stdout, stderr: &bytes.Buffer{}}
+	ctx, cancel := context.WithCancel(context.Background())
+	ready := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		done <- app.runWatch(ctx, watchOptions{ready: ready})
+	}()
+	<-ready
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(stdout.String()), "\n")
+	if len(lines) != 1 {
+		t.Fatalf("watch JSONL lines = %d: %q", len(lines), stdout.String())
+	}
+	var event watchEvent
+	if err := json.Unmarshal([]byte(lines[0]), &event); err != nil || event.Action != watchActionSnapshot {
+		t.Fatalf("watch JSONL event = %q, %v", lines[0], err)
+	}
+}
+
+func TestWatchDefaultsToHumanTable(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "sessions.json")
+	store := registry.NewFileStore(path)
+	activity := registry.ActivityIdle
+	if _, err := store.Observe(context.Background(), registry.Observation{Harness: registry.HarnessCodex, Source: registry.ObservationSourceNative, Evidence: registry.ObservationEvidenceNativeEvent, Identity: registry.ObservationIdentity{SessionID: "watch-human"}, Activity: &activity, ObservedAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &application{storePath: path, stdout: &stdout, stderr: &bytes.Buffer{}}
+	ctx, cancel := context.WithCancel(context.Background())
+	ready := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		done <- app.runWatch(ctx, watchOptions{ready: ready})
+	}()
+	<-ready
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout.String(), "snapshot") || !strings.Contains(stdout.String(), "watch-human") || strings.HasPrefix(strings.TrimSpace(stdout.String()), "{") {
+		t.Fatalf("watch default output = %q", stdout.String())
 	}
 }
 

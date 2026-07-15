@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -33,7 +34,7 @@ func TestRenderSystemdUnit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "# agent-sessions managed observer service\n# version: 2\n[Unit]\nDescription=Agent Sessions observer\n\n[Service]\nExecStart=\"/tmp/agent sessions\" --store /tmp/state.json observe --interval 3s --grace-period 0s --quiet\nRestart=on-failure\n\n[Install]\nWantedBy=default.target\n"
+	want := "# agent-sessions managed observer service\n# version: 3\n[Unit]\nDescription=Agent Sessions observer\n\n[Service]\nExecStart=\"/tmp/agent sessions\" --store /tmp/state.json monitor run --interval 3s --grace-period 0s --quiet\nRestart=on-failure\n\n[Install]\nWantedBy=default.target\n"
 	if got != want {
 		t.Fatalf("rendered unit = %q, want %q", got, want)
 	}
@@ -121,6 +122,26 @@ func TestStatusManagerStoppedIsRepresented(t *testing.T) {
 	}
 }
 
+func TestStatusReportsRunningStaleService(t *testing.T) {
+	config := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", config)
+	options := Options{Binary: "/bin/agent-sessions", StorePath: "/tmp/store"}
+	path := filepath.Join(config, "systemd", "user", linuxUnitName)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("# "+managedMarker+"\n# version: 2\nstale"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	result, err := New(&recordingExecutor{}).Status(context.Background(), options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Current || !result.Running || result.Message != "stale; running" {
+		t.Fatalf("stale service status = %+v", result)
+	}
+}
+
 func TestUpdateRestartsManagedService(t *testing.T) {
 	config := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", config)
@@ -142,5 +163,69 @@ func TestUpdateRestartsManagedService(t *testing.T) {
 	}
 	if len(executor.calls) != 2 || executor.calls[1][2] != "restart" {
 		t.Fatalf("calls = %#v, want daemon-reload and restart", executor.calls)
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(content), "# version: 3") || !strings.Contains(string(content), " monitor run ") {
+		t.Fatalf("updated service did not migrate command surface: %s", content)
+	}
+}
+
+func TestUpdateCurrentRunningServiceIsIdempotent(t *testing.T) {
+	config := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", config)
+	options := Options{Binary: "/bin/agent-sessions", StorePath: "/tmp/store"}
+	executor := &recordingExecutor{}
+	manager := New(executor)
+	if _, err := manager.Install(context.Background(), options); err != nil {
+		t.Fatal(err)
+	}
+	executor.calls = nil
+	result, err := manager.Update(context.Background(), options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Changed || !result.Installed || !result.Current || !result.Running || result.Message != "already enabled" {
+		t.Fatalf("unexpected idempotent update result: %+v", result)
+	}
+	if len(executor.calls) != 1 || executor.calls[0][1] != "--user" || executor.calls[0][2] != "is-active" {
+		t.Fatalf("manager calls = %#v, want status only", executor.calls)
+	}
+}
+
+func TestUninstallRemovesManagedServiceAndIsIdempotent(t *testing.T) {
+	config := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", config)
+	options := Options{Binary: "/bin/agent-sessions", StorePath: "/tmp/store"}
+	executor := &recordingExecutor{}
+	manager := New(executor)
+	installed, err := manager.Install(context.Background(), options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	executor.calls = nil
+	result, err := manager.Uninstall(context.Background(), options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Changed || result.Installed || result.Message != "uninstalled" {
+		t.Fatalf("unexpected uninstall result: %+v", result)
+	}
+	if _, err := os.Stat(installed.Path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("managed service remains: %v", err)
+	}
+	if len(executor.calls) == 0 {
+		t.Fatal("uninstall did not invoke the service manager")
+	}
+
+	executor.calls = nil
+	result, err = manager.Uninstall(context.Background(), options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Changed || result.Message != "not installed" || len(executor.calls) != 0 {
+		t.Fatalf("second uninstall was not idempotent: %+v calls=%v", result, executor.calls)
 	}
 }

@@ -20,3 +20,15 @@ func TestClassifyArtifactContentAcceptsSourceMetadata(t *testing.T) {
 		t.Fatalf("foreign content classified as %q", status)
 	}
 }
+
+func TestClassifyArtifactContentUsesHarnessGeneration(t *testing.T) {
+	t.Parallel()
+	current := "agent-sessions managed integration\nAGENT_SESSIONS_INTEGRATION_ID=agy\nAGENT_SESSIONS_INTEGRATION_VERSION=4"
+	if status := classifyArtifactContent(current); status != ArtifactCurrent {
+		t.Fatalf("current agy status = %q", status)
+	}
+	stale := "agent-sessions managed integration\nAGENT_SESSIONS_INTEGRATION_ID=agy\nAGENT_SESSIONS_INTEGRATION_VERSION=3"
+	if status := classifyArtifactContent(stale); status != ArtifactStale {
+		t.Fatalf("stale agy status = %q", status)
+	}
+}
