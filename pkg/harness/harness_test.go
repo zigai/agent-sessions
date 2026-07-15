@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/zigai/agent-sessions/pkg/registry"
@@ -42,6 +43,13 @@ func TestResumeCommandFor(t *testing.T) {
 			sessionID:   testSessionID,
 			sessionPath: "",
 			want:        []string{cursorCommand, "--resume", testSessionID},
+		},
+		{
+			name:        "copilot",
+			harness:     registry.HarnessCopilot,
+			sessionID:   testSessionID,
+			sessionPath: "",
+			want:        []string{"copilot", "--resume", testSessionID},
 		},
 		{
 			name:        clineCommand,
@@ -612,28 +620,28 @@ func TestPayloadCompatibleWithHarness(t *testing.T) {
 			want:    false,
 		},
 		{
-			name:    "claude rejects cursor payload",
+			name:    "claude accepts cursor-compatible common payload",
 			harness: registry.HarnessClaude,
-			payload: `{"conversation_id":"cursor-conversation","session_id":"cursor-session","transcript_path":null,"hook_event_name":"sessionEnd","cursor_version":"2026.06.15","workspace_roots":["/repo"]}`,
-			want:    false,
+			payload: `{"conversation_id":"cursor-conversation","session_id":"cursor-session","transcript_path":null,"cwd":"/repo","hook_event_name":"sessionEnd","cursor_version":"2026.06.15","workspace_roots":["/repo"]}`,
+			want:    true,
 		},
 		{
-			name:    "claude rejects codex transcript payload",
+			name:    "claude accepts configurable transcript path",
 			harness: registry.HarnessClaude,
 			payload: `{"session_id":"codex-session","transcript_path":"/home/zigai/.codex/sessions/2026/06/18/rollout.jsonl","cwd":"/repo","hook_event_name":"Stop","model":"gpt-5-codex"}`,
-			want:    false,
+			want:    true,
 		},
 		{
-			name:    "claude rejects null transcript path",
+			name:    "claude accepts null transcript path",
 			harness: registry.HarnessClaude,
 			payload: `{"session_id":"claude-session","transcript_path":null,"cwd":"/repo","hook_event_name":"Stop"}`,
-			want:    false,
+			want:    true,
 		},
 		{
-			name:    "codex rejects claude transcript payload",
+			name:    "codex accepts configurable transcript path",
 			harness: registry.HarnessCodex,
 			payload: `{"session_id":"claude-session","transcript_path":"/home/zigai/.claude/projects/-repo/claude-session.jsonl","cwd":"/repo","hook_event_name":"SessionStart","model":"claude-sonnet-4-6"}`,
-			want:    false,
+			want:    true,
 		},
 		{
 			name:    "cursor rejects payload without cursor common fields",
@@ -851,4 +859,78 @@ func strconvQuoteForTest(value string) string {
 	}
 
 	return string(data)
+}
+
+func TestOpenCodeAndKiloPluginTemplatesUseCurrentModuleShape(t *testing.T) {
+	t.Parallel()
+
+	for name, template := range map[string]string{
+		"opencode": openCodePluginTemplate,
+		"kilo":     kiloPluginTemplate,
+	} {
+		t.Run(name, func(t *testing.T) {
+			if !strings.Contains(template, "async function AgentSessionsPlugin(ctx: any)") {
+				t.Fatal("expected per-context plugin factory")
+			}
+			if !strings.Contains(template, `export default { id: "agent-sessions-state", server: AgentSessionsPlugin }`) {
+				t.Fatal("expected native default plugin export")
+			}
+			if !strings.Contains(template, `["properties", "status", "type"]`) {
+				t.Fatal("expected nested session status handling")
+			}
+			if !strings.Contains(template, `case "session.idle":`) {
+				t.Fatal("expected deprecated idle event compatibility")
+			}
+			if !strings.Contains(template, `child.on("error", () => {});`) {
+				t.Fatal("expected asynchronous child error handling")
+			}
+		})
+	}
+}
+
+func TestNativeHarnessConfigOverrides(t *testing.T) {
+	t.Setenv("OPENCODE_CONFIG_DIR", "/tmp/opencode-config")
+	t.Setenv("OPENCODE_CONFIG", "/tmp/ignored/config.json")
+	if got := openCodeConfigDir(); got != "/tmp/opencode-config" {
+		t.Fatalf("expected OPENCODE_CONFIG_DIR to win, got %q", got)
+	}
+
+	t.Setenv("KILO_CONFIG_DIR", "/tmp/kilo-config")
+	t.Setenv("XDG_CONFIG_HOME", "/tmp/ignored-xdg")
+	if got := kiloConfigDir(); got != "/tmp/kilo-config" {
+		t.Fatalf("expected KILO_CONFIG_DIR to win, got %q", got)
+	}
+
+	t.Setenv("PI_CODING_AGENT_DIR", "")
+	t.Setenv("PI_CONFIG_DIR", "/tmp/omp")
+	t.Setenv("PI_PROFILE", "legacy")
+	t.Setenv("OMP_PROFILE", "")
+	if got := ompAgentDir(); got != "/tmp/omp/agent" {
+		t.Fatalf("expected explicit empty OMP_PROFILE to select default, got %q", got)
+	}
+
+	t.Setenv("CLINE_SESSION_DATA_DIR", "/tmp/cline-sessions")
+	if got := clineSessionPath("session-1"); got != "/tmp/cline-sessions/session-1/session-1.messages.json" {
+		t.Fatalf("expected CLINE_SESSION_DATA_DIR override, got %q", got)
+	}
+}
+
+func TestGooseMatchersOmitInvalidWildcard(t *testing.T) {
+	hooks, ok := gooseHookConfig()["hooks"].(map[string]any)
+	if !ok {
+		t.Fatal("expected Goose hooks map")
+	}
+	for _, event := range []string{HookEventPreToolUse, "PostToolUse", "BeforeShellExecution"} {
+		groups, ok := hooks[event].([]any)
+		if !ok || len(groups) != 1 {
+			t.Fatalf("expected one %s hook group, got %#v", event, hooks[event])
+		}
+		group, ok := groups[0].(map[string]any)
+		if !ok {
+			t.Fatalf("expected %s hook group object", event)
+		}
+		if _, ok := group["matcher"]; ok {
+			t.Fatalf("expected %s matcher to be omitted", event)
+		}
+	}
 }

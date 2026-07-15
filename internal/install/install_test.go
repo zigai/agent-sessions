@@ -72,6 +72,11 @@ func TestInstallCodexMergesHooks(t *testing.T) {
 	if !hasUserPrompt {
 		t.Fatal("expected UserPromptSubmit hook")
 	}
+	for _, event := range []string{"PostToolUse", "PreCompact", "PostCompact", "SubagentStart", "SubagentStop"} {
+		if _, ok := hooks[event]; !ok {
+			t.Fatalf("expected %s hook", event)
+		}
+	}
 }
 
 func TestInstallCodexReplacesManagedHooks(t *testing.T) {
@@ -140,7 +145,23 @@ func requireClaudeHookEvents(t *testing.T, config map[string]any) {
 	if !hooksOK {
 		t.Fatal("expected hooks object")
 	}
-	for _, event := range []string{hookEventSessionStart, "UserPromptSubmit", "Notification", hookEventStop, "SessionEnd"} {
+	for _, event := range []string{
+		hookEventSessionStart,
+		"UserPromptSubmit",
+		"PreToolUse",
+		"PostToolUse",
+		"PostToolUseFailure",
+		"PermissionRequest",
+		"PermissionDenied",
+		"Notification",
+		"SubagentStart",
+		"SubagentStop",
+		"PreCompact",
+		"PostCompact",
+		hookEventStop,
+		"StopFailure",
+		"SessionEnd",
+	} {
 		if _, ok := hooks[event]; !ok {
 			t.Fatalf("expected %s hook", event)
 		}
@@ -413,6 +434,10 @@ func TestInstallClineWritesHookFiles(t *testing.T) {
 		"PreToolUse.sh",
 		"PostToolUse.sh",
 		"TaskComplete.sh",
+		"TaskCancel.sh",
+		"TaskError.sh",
+		"PreCompact.sh",
+		"SessionShutdown.sh",
 	} {
 		text := string(readTestFile(t, filepath.Join(hooksDir, name), "reading cline hook "+name))
 		requireTextContainsAll(t, text, []string{
@@ -775,7 +800,7 @@ func TestInstallKiloWritesPlugin(t *testing.T) {
 		`"AGENT_SESSIONS_INTEGRATION_VERSION=3"`,
 		`"--observed-at", observedAt`,
 		`"kilo_status"`,
-		`"agent_sessions_integration", "kilo-plugin"`,
+		`"agent_sessions_integration", source`,
 	}, "kilo snippet")
 }
 
@@ -1049,11 +1074,19 @@ func TestInstallKimiCodeWritesHooks(t *testing.T) {
 	for _, event := range []string{
 		hookEventSessionStart,
 		"UserPromptSubmit",
+		"PreToolUse",
+		"PostToolUse",
+		"PostToolUseFailure",
 		"PermissionRequest",
 		"PermissionResult",
 		hookEventStop,
 		"StopFailure",
 		"Interrupt",
+		"SubagentStart",
+		"SubagentStop",
+		"PreCompact",
+		"PostCompact",
+		"Notification",
 		"SessionEnd",
 	} {
 		if !strings.Contains(text, `event = "`+event+`"`) {
@@ -1062,6 +1095,8 @@ func TestInstallKimiCodeWritesHooks(t *testing.T) {
 	}
 	for _, want := range []string{
 		`matcher = "startup|resume"`,
+		`matcher = "task\\.completed"`,
+		`event = "SessionEnd"` + "\nmatcher = \"exit\"",
 		"--raw-stdin",
 		"--quiet",
 		"agent_sessions_integration=kimi-code-hook",
@@ -1069,8 +1104,10 @@ func TestInstallKimiCodeWritesHooks(t *testing.T) {
 		managedMarker,
 		"--activity idle --event SessionStart",
 		"--activity running --event UserPromptSubmit",
+		"--activity running --event PreToolUse",
 		"--activity waiting --event PermissionRequest",
 		"--activity running --event PermissionResult",
+		"--activity idle --event Notification",
 		"--activity idle --event StopFailure",
 		"--activity idle --event Interrupt",
 		"--presence gone --event SessionEnd",
@@ -1213,7 +1250,21 @@ func TestInstallGrokWritesHooks(t *testing.T) {
 	if !hooksOK {
 		t.Fatal("expected hooks object")
 	}
-	for _, event := range []string{hookEventSessionStart, "UserPromptSubmit", hookEventStop, "SessionEnd", "Notification"} {
+	for _, event := range []string{
+		hookEventSessionStart,
+		"UserPromptSubmit",
+		"PreToolUse",
+		"PostToolUse",
+		"PostToolUseFailure",
+		"PermissionDenied",
+		"SubagentStart",
+		"SubagentStop",
+		"PreCompact",
+		"PostCompact",
+		hookEventStop,
+		"StopFailure",
+		"SessionEnd",
+	} {
 		if _, ok := hooks[event]; !ok {
 			t.Fatalf("expected %s hook", event)
 		}
