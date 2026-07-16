@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/zigai/agent-sessions/pkg/harnessmeta"
+	"github.com/zigai/agent-sessions/v2/pkg/harnessmeta"
 )
 
 type Harness string

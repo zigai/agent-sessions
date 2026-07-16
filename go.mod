@@ -1,4 +1,4 @@
-module github.com/zigai/agent-sessions
+module github.com/zigai/agent-sessions/v2
 
 go 1.25.6
 

@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/zigai/agent-sessions/internal/reportqueue"
-	"github.com/zigai/agent-sessions/pkg/registry"
+	"github.com/zigai/agent-sessions/v2/internal/reportqueue"
+	"github.com/zigai/agent-sessions/v2/pkg/registry"
 )
 
 func TestProcessQueuedObservation(t *testing.T) {

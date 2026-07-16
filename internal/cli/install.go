@@ -8,8 +8,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/zigai/agent-sessions/internal/install"
-	harnesspkg "github.com/zigai/agent-sessions/pkg/harness"
+	"github.com/zigai/agent-sessions/v2/internal/install"
+	harnesspkg "github.com/zigai/agent-sessions/v2/pkg/harness"
 )
 
 func (app *application) newInstallHooksCommand() *cobra.Command {

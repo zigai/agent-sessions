@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/zigai/agent-sessions/pkg/registry"
+	"github.com/zigai/agent-sessions/v2/pkg/registry"
 )
 
 const testSessionID = "abc"

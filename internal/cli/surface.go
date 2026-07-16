@@ -9,10 +9,10 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/zigai/agent-sessions/internal/install"
-	"github.com/zigai/agent-sessions/internal/service"
-	harnesspkg "github.com/zigai/agent-sessions/pkg/harness"
-	"github.com/zigai/agent-sessions/pkg/registry"
+	"github.com/zigai/agent-sessions/v2/internal/install"
+	"github.com/zigai/agent-sessions/v2/internal/service"
+	harnesspkg "github.com/zigai/agent-sessions/v2/pkg/harness"
+	"github.com/zigai/agent-sessions/v2/pkg/registry"
 )
 
 var (

@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/zigai/agent-sessions/pkg/registry"
+	"github.com/zigai/agent-sessions/v2/pkg/registry"
 )
 
 func BenchmarkPrepareReport(b *testing.B) {

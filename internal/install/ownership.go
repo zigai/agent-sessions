@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"strings"
 
-	harnesspkg "github.com/zigai/agent-sessions/pkg/harness"
+	harnesspkg "github.com/zigai/agent-sessions/v2/pkg/harness"
 )
 
 // ArtifactStatus describes whether a managed integration artifact is absent,

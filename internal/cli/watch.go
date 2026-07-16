@@ -12,7 +12,7 @@ import (
 
 	"github.com/fsnotify/fsnotify"
 
-	"github.com/zigai/agent-sessions/pkg/registry"
+	"github.com/zigai/agent-sessions/v2/pkg/registry"
 )
 
 const defaultWatchDebounce = 100 * time.Millisecond

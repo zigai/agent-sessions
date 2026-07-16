@@ -18,9 +18,9 @@ import (
 
 	"github.com/spf13/cobra"
 
-	harnesspkg "github.com/zigai/agent-sessions/pkg/harness"
-	"github.com/zigai/agent-sessions/pkg/registry"
-	"github.com/zigai/agent-sessions/pkg/tmuxctx"
+	harnesspkg "github.com/zigai/agent-sessions/v2/pkg/harness"
+	"github.com/zigai/agent-sessions/v2/pkg/registry"
+	"github.com/zigai/agent-sessions/v2/pkg/tmuxctx"
 )
 
 var (

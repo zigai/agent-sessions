@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/zigai/agent-sessions/pkg/registry"
+	"github.com/zigai/agent-sessions/v2/pkg/registry"
 )
 
 //nolint:gocognit,cyclop // one uniform round trip verifies every managed artifact shape

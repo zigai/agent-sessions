@@ -12,10 +12,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/zigai/agent-sessions/internal/processinfo"
-	"github.com/zigai/agent-sessions/pkg/harness"
-	"github.com/zigai/agent-sessions/pkg/registry"
-	"github.com/zigai/agent-sessions/pkg/tmuxctx"
+	"github.com/zigai/agent-sessions/v2/internal/processinfo"
+	"github.com/zigai/agent-sessions/v2/pkg/harness"
+	"github.com/zigai/agent-sessions/v2/pkg/registry"
+	"github.com/zigai/agent-sessions/v2/pkg/tmuxctx"
 )
 
 const (

@@ -9,10 +9,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/zigai/agent-sessions/internal/observer"
-	"github.com/zigai/agent-sessions/internal/processinfo"
-	"github.com/zigai/agent-sessions/pkg/registry"
-	"github.com/zigai/agent-sessions/pkg/tmuxctx"
+	"github.com/zigai/agent-sessions/v2/internal/observer"
+	"github.com/zigai/agent-sessions/v2/internal/processinfo"
+	"github.com/zigai/agent-sessions/v2/pkg/registry"
+	"github.com/zigai/agent-sessions/v2/pkg/tmuxctx"
 )
 
 func TestQuietLongRunningObserverStreamsRequestedJSONLines(t *testing.T) {

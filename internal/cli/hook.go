@@ -21,10 +21,10 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/zigai/agent-sessions/internal/reportqueue"
-	harnesspkg "github.com/zigai/agent-sessions/pkg/harness"
-	"github.com/zigai/agent-sessions/pkg/registry"
-	"github.com/zigai/agent-sessions/pkg/tmuxctx"
+	"github.com/zigai/agent-sessions/v2/internal/reportqueue"
+	harnesspkg "github.com/zigai/agent-sessions/v2/pkg/harness"
+	"github.com/zigai/agent-sessions/v2/pkg/registry"
+	"github.com/zigai/agent-sessions/v2/pkg/tmuxctx"
 )
 
 var errUnsupportedManagedHook = errors.New("harness does not support managed hooks")

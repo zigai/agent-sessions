@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	harnesspkg "github.com/zigai/agent-sessions/pkg/harness"
-	"github.com/zigai/agent-sessions/pkg/registry"
+	harnesspkg "github.com/zigai/agent-sessions/v2/pkg/harness"
+	"github.com/zigai/agent-sessions/v2/pkg/registry"
 )
 
 var errRemoveFailed = errors.New("one or more integrations failed to remove")

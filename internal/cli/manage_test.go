@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/zigai/agent-sessions/pkg/registry"
+	"github.com/zigai/agent-sessions/v2/pkg/registry"
 )
 
 var errTestSignal = errors.New("signal failed")

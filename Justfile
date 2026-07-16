@@ -48,7 +48,7 @@ clean:
 
 # Build with local development version metadata
 build-dev:
-    go build -ldflags "-X github.com/zigai/agent-sessions/internal/cli.version=dev -X github.com/zigai/agent-sessions/internal/cli.commit=$(git rev-parse --short HEAD) -X github.com/zigai/agent-sessions/internal/cli.date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" -o agent-sessions .
+    go build -ldflags "-X github.com/zigai/agent-sessions/v2/internal/cli.version=dev -X github.com/zigai/agent-sessions/v2/internal/cli.commit=$(git rev-parse --short HEAD) -X github.com/zigai/agent-sessions/v2/internal/cli.date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" -o agent-sessions .
 
 # Run a dry-run release
 release-dry-run:

@@ -12,12 +12,12 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/zigai/agent-sessions/internal/install"
-	"github.com/zigai/agent-sessions/internal/processinfo"
-	"github.com/zigai/agent-sessions/internal/reportqueue"
-	"github.com/zigai/agent-sessions/internal/service"
-	"github.com/zigai/agent-sessions/pkg/harness"
-	"github.com/zigai/agent-sessions/pkg/registry"
+	"github.com/zigai/agent-sessions/v2/internal/install"
+	"github.com/zigai/agent-sessions/v2/internal/processinfo"
+	"github.com/zigai/agent-sessions/v2/internal/reportqueue"
+	"github.com/zigai/agent-sessions/v2/internal/service"
+	"github.com/zigai/agent-sessions/v2/pkg/harness"
+	"github.com/zigai/agent-sessions/v2/pkg/registry"
 )
 
 type doctorStatus string

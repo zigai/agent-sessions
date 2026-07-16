@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/zigai/agent-sessions/pkg/registry"
+	"github.com/zigai/agent-sessions/v2/pkg/registry"
 )
 
 type renderedFileInstall struct {

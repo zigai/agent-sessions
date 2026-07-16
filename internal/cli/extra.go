@@ -8,8 +8,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/zigai/agent-sessions/internal/observer"
-	"github.com/zigai/agent-sessions/internal/service"
+	"github.com/zigai/agent-sessions/v2/internal/observer"
+	"github.com/zigai/agent-sessions/v2/internal/service"
 )
 
 type observeOptions struct {

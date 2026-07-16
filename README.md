@@ -9,7 +9,7 @@ Supported harnesses: `claude`, `codex`, `cursor`, `copilot`, `cline`,
 ## Installation
 
 ```sh
-go install github.com/zigai/agent-sessions@latest
+go install github.com/zigai/agent-sessions/v2@latest
 ```
 
 Prebuilt archives and Linux packages are available from
