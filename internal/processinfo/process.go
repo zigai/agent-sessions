@@ -8,10 +8,12 @@ type Process struct {
 	PID            int
 	PPID           int
 	ProcessGroupID int
+	Foreground     bool
 	StartIdentity  string
 	Executable     string
 	CWD            string
 	TTY            string
+	AgentHint      string
 	Args           []string `json:"-"`
 }
 

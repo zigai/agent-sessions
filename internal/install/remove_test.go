@@ -127,6 +127,7 @@ func TestRemoveRefusesForeignOwnedFile(t *testing.T) {
 }
 
 func TestRemoveAlsoRemovesManagedShimFallback(t *testing.T) {
+	t.Setenv("CODEX_HOME", t.TempDir())
 	state := t.TempDir()
 	t.Setenv(registry.StateDirEnv, state)
 	target := filepath.Join(t.TempDir(), "codex")

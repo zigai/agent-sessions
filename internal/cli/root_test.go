@@ -16,6 +16,7 @@ import (
 
 const expectedSessionSchemaVersion = 2
 
+//nolint:cyclop // assertions independently verify each report dimension
 func TestPrepareReportCarriesIndependentDimensions(t *testing.T) {
 	t.Parallel()
 	app := &application{}
@@ -31,6 +32,9 @@ func TestPrepareReportCarriesIndependentDimensions(t *testing.T) {
 	}
 	if prepared.observation.Presence == nil || *prepared.observation.Presence != registry.PresenceLive || prepared.observation.Activity == nil || *prepared.observation.Activity != registry.ActivityWaiting {
 		t.Fatalf("independent dimensions lost: %#v", prepared.observation)
+	}
+	if prepared.observation.ActivityAuthoritative == nil || *prepared.observation.ActivityAuthoritative {
+		t.Fatalf("Codex hook activity must be stored as a non-authoritative hint: %#v", prepared.observation)
 	}
 	if prepared.observation.Catalog == nil || len(prepared.observation.Catalog.ResumeCommand) != 3 {
 		t.Fatalf("catalog metadata missing: %#v", prepared.observation.Catalog)

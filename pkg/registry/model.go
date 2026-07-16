@@ -68,6 +68,7 @@ const (
 	ObservationSourceProcess ObservationSource = "process"
 	ObservationSourceTmux    ObservationSource = "tmux"
 	ObservationSourceCatalog ObservationSource = "catalog"
+	ObservationSourceScreen  ObservationSource = "screen"
 )
 
 type ObservationEvidence string
@@ -77,6 +78,7 @@ const (
 	ObservationEvidenceProcessPresence ObservationEvidence = "process_presence"
 	ObservationEvidenceTmuxLocation    ObservationEvidence = "tmux_location"
 	ObservationEvidenceCatalogMetadata ObservationEvidence = "catalog_metadata"
+	ObservationEvidenceScreenState     ObservationEvidence = "screen_state"
 )
 
 type NativeLifecycle string
@@ -109,6 +111,7 @@ type ProcessIdentity struct {
 	PID            int    `json:"pid"`
 	PPID           int    `json:"ppid"`
 	ProcessGroupID int    `json:"process_group_id"`
+	Foreground     bool   `json:"foreground"`
 	StartIdentity  string `json:"start_identity"`
 	Executable     string `json:"executable"`
 	CWD            string `json:"cwd"`
@@ -122,15 +125,41 @@ func (p ProcessIdentity) Equal(other ProcessIdentity) bool {
 }
 
 type NativeObservation struct {
-	Event       string            `json:"event,omitempty"`
-	Lifecycle   *NativeLifecycle  `json:"lifecycle,omitempty"`
-	Presence    *Presence         `json:"presence,omitempty"`
-	Activity    *Activity         `json:"activity,omitempty"`
-	SessionID   string            `json:"session_id,omitempty"`
-	SessionPath string            `json:"session_path,omitempty"`
-	ObservedAt  time.Time         `json:"observed_at"`
-	Attributes  map[string]string `json:"attributes,omitempty"`
-	RawPayload  json.RawMessage   `json:"raw_payload,omitempty"`
+	Event                 string            `json:"event,omitempty"`
+	Lifecycle             *NativeLifecycle  `json:"lifecycle,omitempty"`
+	Presence              *Presence         `json:"presence,omitempty"`
+	Activity              *Activity         `json:"activity,omitempty"`
+	ActivityAuthoritative *bool             `json:"activity_authoritative,omitempty"`
+	SessionID             string            `json:"session_id,omitempty"`
+	SessionPath           string            `json:"session_path,omitempty"`
+	ObservedAt            time.Time         `json:"observed_at"`
+	Attributes            map[string]string `json:"attributes,omitempty"`
+	RawPayload            json.RawMessage   `json:"raw_payload,omitempty"`
+	Process               ProcessIdentity   `json:"process,omitzero"`
+}
+
+type ScreenObservation struct {
+	Activity               Activity        `json:"activity"`
+	Authority              string          `json:"authority"`
+	Reason                 string          `json:"reason"`
+	RuleID                 string          `json:"rule_id,omitempty"`
+	ManifestSource         string          `json:"manifest_source,omitempty"`
+	ManifestVersion        int             `json:"manifest_version,omitempty"`
+	FallbackForIntegration string          `json:"fallback_for_integration,omitempty"`
+	FallbackReason         string          `json:"fallback_reason,omitempty"`
+	Process                ProcessIdentity `json:"process"`
+	ObservedAt             time.Time       `json:"observed_at"`
+}
+
+type ActivityDecision struct {
+	Authority       string          `json:"authority"`
+	Reason          string          `json:"reason"`
+	RuleID          string          `json:"rule_id,omitempty"`
+	ManifestSource  string          `json:"manifest_source,omitempty"`
+	ManifestVersion int             `json:"manifest_version,omitempty"`
+	FallbackReason  string          `json:"fallback_reason,omitempty"`
+	Process         ProcessIdentity `json:"process,omitzero"`
+	ObservedAt      time.Time       `json:"observed_at"`
 }
 
 type ProcessObservation struct {
@@ -160,26 +189,28 @@ type Observations struct {
 	Process *ProcessObservation `json:"process,omitempty"`
 	Tmux    *TmuxObservation    `json:"tmux,omitempty"`
 	Catalog *CatalogObservation `json:"catalog,omitempty"`
+	Screen  *ScreenObservation  `json:"screen,omitempty"`
 }
 
 type Session struct {
-	SchemaVersion     int              `json:"schema_version"`
-	ID                string           `json:"id"`
-	Harness           Harness          `json:"harness"`
-	Presence          Presence         `json:"presence"`
-	Activity          *Activity        `json:"activity"`
-	SessionID         string           `json:"session_id,omitempty"`
-	SessionPath       string           `json:"session_path,omitempty"`
-	ResumeCommand     []string         `json:"resume_command,omitempty"`
-	CWD               string           `json:"cwd,omitempty"`
-	ProjectRoot       string           `json:"project_root,omitempty"`
-	Process           *ProcessIdentity `json:"process,omitempty"`
-	Tmux              TmuxContext      `json:"tmux,omitzero"`
-	Observations      Observations     `json:"observations"`
-	CreatedAt         time.Time        `json:"created_at"`
-	UpdatedAt         time.Time        `json:"updated_at"`
-	PresenceChangedAt time.Time        `json:"presence_changed_at"`
-	ActivityChangedAt time.Time        `json:"activity_changed_at"`
+	SchemaVersion     int               `json:"schema_version"`
+	ID                string            `json:"id"`
+	Harness           Harness           `json:"harness"`
+	Presence          Presence          `json:"presence"`
+	Activity          *Activity         `json:"activity"`
+	SessionID         string            `json:"session_id,omitempty"`
+	SessionPath       string            `json:"session_path,omitempty"`
+	ResumeCommand     []string          `json:"resume_command,omitempty"`
+	CWD               string            `json:"cwd,omitempty"`
+	ProjectRoot       string            `json:"project_root,omitempty"`
+	Process           *ProcessIdentity  `json:"process,omitempty"`
+	Tmux              TmuxContext       `json:"tmux,omitzero"`
+	Observations      Observations      `json:"observations"`
+	CreatedAt         time.Time         `json:"created_at"`
+	UpdatedAt         time.Time         `json:"updated_at"`
+	PresenceChangedAt time.Time         `json:"presence_changed_at"`
+	ActivityChangedAt time.Time         `json:"activity_changed_at"`
+	ActivityDecision  *ActivityDecision `json:"activity_decision,omitempty"`
 }
 
 type ObservationIdentity struct {
@@ -196,21 +227,23 @@ type CatalogMetadata struct {
 }
 
 type Observation struct {
-	Source         ObservationSource   `json:"source"`
-	Evidence       ObservationEvidence `json:"evidence"`
-	Harness        Harness             `json:"harness"`
-	Identity       ObservationIdentity `json:"identity"`
-	Lifecycle      *NativeLifecycle    `json:"lifecycle,omitempty"`
-	Presence       *Presence           `json:"presence,omitempty"`
-	Activity       *Activity           `json:"activity,omitempty"`
-	NativeEvent    string              `json:"native_event,omitempty"`
-	ProcessPresent *bool               `json:"process_present,omitempty"`
-	Process        *ProcessIdentity    `json:"process,omitempty"`
-	Tmux           *TmuxContext        `json:"tmux,omitempty"`
-	Catalog        *CatalogMetadata    `json:"catalog,omitempty"`
-	Attributes     map[string]string   `json:"attributes,omitempty"`
-	RawPayload     json.RawMessage     `json:"raw_payload,omitempty"`
-	ObservedAt     time.Time           `json:"observed_at"`
+	Source                ObservationSource   `json:"source"`
+	Evidence              ObservationEvidence `json:"evidence"`
+	Harness               Harness             `json:"harness"`
+	Identity              ObservationIdentity `json:"identity"`
+	Lifecycle             *NativeLifecycle    `json:"lifecycle,omitempty"`
+	Presence              *Presence           `json:"presence,omitempty"`
+	Activity              *Activity           `json:"activity,omitempty"`
+	ActivityAuthoritative *bool               `json:"activity_authoritative,omitempty"`
+	NativeEvent           string              `json:"native_event,omitempty"`
+	ProcessPresent        *bool               `json:"process_present,omitempty"`
+	Process               *ProcessIdentity    `json:"process,omitempty"`
+	Tmux                  *TmuxContext        `json:"tmux,omitempty"`
+	Catalog               *CatalogMetadata    `json:"catalog,omitempty"`
+	Attributes            map[string]string   `json:"attributes,omitempty"`
+	RawPayload            json.RawMessage     `json:"raw_payload,omitempty"`
+	Screen                *ScreenObservation  `json:"screen,omitempty"`
+	ObservedAt            time.Time           `json:"observed_at"`
 }
 
 type Filter struct {
@@ -284,6 +317,8 @@ func NormalizeSource(value string) (ObservationSource, error) {
 		return ObservationSourceTmux, nil
 	case string(ObservationSourceCatalog):
 		return ObservationSourceCatalog, nil
+	case string(ObservationSourceScreen):
+		return ObservationSourceScreen, nil
 	default:
 		return "", fmt.Errorf("%w: %q", ErrUnknownSource, value)
 	}
@@ -299,6 +334,8 @@ func NormalizeEvidence(value string) (ObservationEvidence, error) {
 		return ObservationEvidenceTmuxLocation, nil
 	case string(ObservationEvidenceCatalogMetadata):
 		return ObservationEvidenceCatalogMetadata, nil
+	case string(ObservationEvidenceScreenState):
+		return ObservationEvidenceScreenState, nil
 	default:
 		return "", fmt.Errorf("%w: %q", ErrUnknownEvidence, value)
 	}
@@ -328,13 +365,17 @@ func ValidateObservation(observation Observation) error {
 	if observation.ObservedAt.IsZero() {
 		return fmt.Errorf("%w: observed_at is required", ErrInvalidObservation)
 	}
-	if observation.Source != ObservationSourceNative && observation.Activity != nil {
-		return fmt.Errorf("%w: non-native activity is not accepted", ErrInvalidObservation)
+	if observation.Source != ObservationSourceNative && observation.Source != ObservationSourceScreen && observation.Activity != nil {
+		return fmt.Errorf("%w: activity is not accepted for source %q", ErrInvalidObservation, observation.Source)
+	}
+	if observation.Source != ObservationSourceNative && observation.ActivityAuthoritative != nil {
+		return fmt.Errorf("%w: activity authority is only accepted for native observations", ErrInvalidObservation)
 	}
 	pairOK := (observation.Source == ObservationSourceNative && observation.Evidence == ObservationEvidenceNativeEvent) ||
 		(observation.Source == ObservationSourceProcess && observation.Evidence == ObservationEvidenceProcessPresence) ||
 		(observation.Source == ObservationSourceTmux && observation.Evidence == ObservationEvidenceTmuxLocation) ||
-		(observation.Source == ObservationSourceCatalog && observation.Evidence == ObservationEvidenceCatalogMetadata)
+		(observation.Source == ObservationSourceCatalog && observation.Evidence == ObservationEvidenceCatalogMetadata) ||
+		(observation.Source == ObservationSourceScreen && observation.Evidence == ObservationEvidenceScreenState)
 	if !pairOK {
 		return fmt.Errorf("%w: source %q does not accept evidence %q", ErrInvalidObservation, observation.Source, observation.Evidence)
 	}
@@ -366,6 +407,17 @@ func ValidateObservation(observation Observation) error {
 	}
 	if observation.Source == ObservationSourceCatalog && observation.Catalog == nil {
 		return fmt.Errorf("%w: catalog metadata is required", ErrInvalidObservation)
+	}
+	if observation.Source == ObservationSourceScreen {
+		if observation.Activity == nil || observation.Screen == nil {
+			return fmt.Errorf("%w: screen activity and evidence are required", ErrInvalidObservation)
+		}
+		if observation.Process == nil || !observation.Process.Complete() {
+			return fmt.Errorf("%w: complete process identity is required", ErrInvalidObservation)
+		}
+		if !observation.Screen.Process.Equal(*observation.Process) {
+			return fmt.Errorf("%w: screen process does not match observation process", ErrInvalidObservation)
+		}
 	}
 	if observation.Identity.SessionID == "" && observation.Identity.SessionPath == "" && (observation.Process == nil || !observation.Process.Complete()) {
 		return fmt.Errorf("%w: identity is required", ErrInvalidObservation)

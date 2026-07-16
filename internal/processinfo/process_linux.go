@@ -27,6 +27,7 @@ var (
 	errInvalidProcessState     = errors.New("invalid process state")
 	errInvalidParentProcessID  = errors.New("invalid parent process id")
 	errInvalidProcessGroupID   = errors.New("invalid process group id")
+	errInvalidForegroundGroup  = errors.New("invalid foreground process group id")
 	errInvalidProcessStartTime = errors.New("invalid process start time")
 )
 
@@ -163,6 +164,9 @@ func readLinuxProcess(dir string, pid int, boot string) (Process, error) {
 	if args, err := os.ReadFile(filepath.Join(dir, "cmdline")); err == nil {
 		info.Args = splitLinuxArgs(args)
 	}
+	if environ, err := os.ReadFile(filepath.Join(dir, "environ")); err == nil {
+		info.AgentHint = linuxEnvironmentValue(environ, "AGENT_SESSIONS_AGENT")
+	}
 	return info, nil
 }
 
@@ -176,6 +180,16 @@ func readLinuxLink(path string) string {
 
 func isLinuxTTY(path string) bool {
 	return path == "/dev/tty" || strings.HasPrefix(path, "/dev/pts/") || strings.HasPrefix(path, "/dev/tty")
+}
+
+func linuxEnvironmentValue(data []byte, key string) string {
+	prefix := key + "="
+	for entry := range strings.SplitSeq(string(data), "\x00") {
+		if after, ok := strings.CutPrefix(entry, prefix); ok {
+			return strings.TrimSpace(after)
+		}
+	}
+	return ""
 }
 
 func splitLinuxArgs(data []byte) []string {
@@ -205,10 +219,11 @@ func parseLinuxStat(stat string) (Process, error) {
 	}
 	fields := strings.Fields(stat[closeParen+2:])
 	const (
-		stateIndex = 0
-		ppidIndex  = 1
-		pgrpIndex  = 2
-		startIndex = 19
+		stateIndex  = 0
+		ppidIndex   = 1
+		pgrpIndex   = 2
+		ttpgidIndex = 5
+		startIndex  = 19
 	)
 	if len(fields) <= startIndex {
 		return Process{}, errTruncatedStatRecord
@@ -224,10 +239,14 @@ func parseLinuxStat(stat string) (Process, error) {
 	if err != nil || pgrp < 0 {
 		return Process{}, errInvalidProcessGroupID
 	}
+	ttpgid, err := strconv.Atoi(fields[ttpgidIndex])
+	if err != nil || ttpgid < -1 {
+		return Process{}, errInvalidForegroundGroup
+	}
 	if _, err := strconv.ParseUint(fields[startIndex], 10, 64); err != nil {
 		return Process{}, errInvalidProcessStartTime
 	}
-	return Process{PID: pid, PPID: ppid, ProcessGroupID: pgrp, StartIdentity: fields[startIndex], Executable: "", CWD: "", TTY: "", Args: nil}, nil
+	return Process{PID: pid, PPID: ppid, ProcessGroupID: pgrp, Foreground: ttpgid > 0 && pgrp == ttpgid, StartIdentity: fields[startIndex], Executable: "", CWD: "", TTY: "", Args: nil, AgentHint: ""}, nil
 }
 
 func classifyProcessError(path string, err error) error {

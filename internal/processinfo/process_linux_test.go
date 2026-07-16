@@ -13,13 +13,22 @@ func TestParseLinuxStatHandlesParentheses(t *testing.T) {
 	for len(fields) < 19 {
 		fields = append(fields, "0")
 	}
+	fields[5] = "42"
 	fields = append(fields, "987654")
 	got, err := parseLinuxStat("123 (agent ) worker) " + strings.Join(fields, " "))
 	if err != nil {
 		t.Fatalf("parseLinuxStat returned error: %v", err)
 	}
-	if got.PID != 123 || got.PPID != 41 || got.ProcessGroupID != 42 || got.StartIdentity != "987654" {
+	if got.PID != 123 || got.PPID != 41 || got.ProcessGroupID != 42 || !got.Foreground || got.StartIdentity != "987654" {
 		t.Fatalf("parsed process = %#v", got)
+	}
+}
+
+func TestLinuxEnvironmentValueFindsScopedAgentHint(t *testing.T) {
+	t.Parallel()
+	got := linuxEnvironmentValue([]byte("PATH=/usr/bin\x00AGENT_SESSIONS_AGENT=codex\x00OTHER=value\x00"), "AGENT_SESSIONS_AGENT")
+	if got != "codex" {
+		t.Fatalf("linuxEnvironmentValue = %q, want codex", got)
 	}
 }
 

@@ -20,6 +20,10 @@ const (
 	maxObservedAtFutureSkew = 5 * time.Minute
 )
 
+// IntegrationActivityLease is the maximum age of a matching integration
+// transition before tmux screen evidence becomes authoritative again.
+const IntegrationActivityLease = 30 * time.Second
+
 var (
 	ErrSessionNotFound     = errors.New("session not found")
 	ErrHarnessRequired     = errors.New("harness is required")
@@ -168,6 +172,7 @@ func newSession(id string, harness Harness, now time.Time) Session {
 		UpdatedAt:         now,
 		PresenceChangedAt: time.Time{},
 		ActivityChangedAt: time.Time{},
+		ActivityDecision:  nil,
 	}
 }
 
@@ -200,8 +205,32 @@ func sourceSlotTime(session Session, observation Observation) time.Time {
 		if session.Observations.Catalog != nil {
 			return session.Observations.Catalog.ObservedAt
 		}
+	case ObservationSourceScreen:
+		if session.Observations.Screen != nil {
+			return session.Observations.Screen.ObservedAt
+		}
 	}
 	return time.Time{}
+}
+
+func currentProcessObservationTime(session Session) time.Time {
+	if session.Process == nil {
+		return time.Time{}
+	}
+	var latest time.Time
+	if observation := session.Observations.Native; observation != nil && observation.Process.Equal(*session.Process) {
+		latest = maxTime(latest, observation.ObservedAt)
+	}
+	if observation := session.Observations.Process; observation != nil && observation.Process.Equal(*session.Process) {
+		latest = maxTime(latest, observation.ObservedAt)
+	}
+	if observation := session.Observations.Tmux; observation != nil && observation.Process.Equal(*session.Process) {
+		latest = maxTime(latest, observation.ObservedAt)
+	}
+	if observation := session.Observations.Screen; observation != nil && observation.Process.Equal(*session.Process) {
+		latest = maxTime(latest, observation.ObservedAt)
+	}
+	return latest
 }
 
 func existingSlot(session Session, observation Observation) any {
@@ -214,6 +243,8 @@ func existingSlot(session Session, observation Observation) any {
 		return session.Observations.Tmux
 	case ObservationSourceCatalog:
 		return session.Observations.Catalog
+	case ObservationSourceScreen:
+		return session.Observations.Screen
 	default:
 		return nil
 	}
@@ -230,6 +261,9 @@ func shouldIgnoreNativeAfterGone(session Session, observation Observation, at ti
 }
 
 func applyObservation(session *Session, observation Observation, at, receivedAt time.Time) error {
+	if err := validateIncomingProcessTime(*session, observation, at); err != nil {
+		return err
+	}
 	if previous := sourceSlotTime(*session, observation); !previous.IsZero() {
 		if at.Before(previous) {
 			return fmt.Errorf("%w: %s observation at %s precedes %s", ErrObservationConflict, observation.Source, at, previous)
@@ -247,7 +281,7 @@ func applyObservation(session *Session, observation Observation, at, receivedAt 
 		return err
 	}
 	applyIdentity(session, observation)
-	applyMetadata(session, observation)
+	applyMetadata(session, observation, at)
 	applyPresenceAndActivity(session, observation, at)
 	session.SchemaVersion = storeSchemaVersion
 	session.UpdatedAt = maxTime(session.UpdatedAt, receivedAt)
@@ -258,6 +292,17 @@ func applyObservation(session *Session, observation Observation, at, receivedAt 
 		session.ActivityChangedAt = at
 	}
 	return nil
+}
+
+func validateIncomingProcessTime(session Session, observation Observation, at time.Time) error {
+	if observation.Process == nil || session.Process == nil || session.Process.Equal(*observation.Process) {
+		return nil
+	}
+	currentAt := currentProcessObservationTime(session)
+	if currentAt.IsZero() || !at.Before(currentAt) {
+		return nil
+	}
+	return fmt.Errorf("%w: process identity observation at %s precedes current process at %s", ErrObservationConflict, at, currentAt)
 }
 
 func observationEquivalent(session Session, observation Observation, at time.Time) bool {
@@ -271,30 +316,63 @@ func observationEquivalent(session Session, observation Observation, at time.Tim
 func storeObservation(session *Session, observation Observation, at time.Time) error {
 	switch observation.Source {
 	case ObservationSourceNative:
-		lifecycle := cloneLifecycle(observation.Lifecycle)
-		presence := clonePresence(observation.Presence)
-		activity := cloneActivity(observation.Activity)
-		session.Observations.Native = &NativeObservation{Event: observation.NativeEvent, Lifecycle: lifecycle, Presence: presence, Activity: activity, SessionID: observation.Identity.SessionID, SessionPath: observation.Identity.SessionPath, ObservedAt: at, Attributes: cloneAttributes(observation.Attributes), RawPayload: cloneRaw(observation.RawPayload)}
+		storeNativeObservation(session, observation, at)
 	case ObservationSourceProcess:
-		present := observation.ProcessPresent != nil && *observation.ProcessPresent
-		var process ProcessIdentity
-		if observation.Process != nil {
-			process = *observation.Process
-		}
-		session.Observations.Process = &ProcessObservation{Present: present, Process: process, ObservedAt: at}
+		storeProcessObservation(session, observation, at)
 	case ObservationSourceTmux:
-		if observation.Tmux == nil || observation.Process == nil {
-			return ErrInvalidObservation
-		}
-		session.Observations.Tmux = &TmuxObservation{Process: *observation.Process, Context: *observation.Tmux, ObservedAt: at}
+		return storeTmuxObservation(session, observation, at)
 	case ObservationSourceCatalog:
-		if observation.Catalog == nil {
-			return ErrInvalidObservation
-		}
-		session.Observations.Catalog = &CatalogObservation{SessionID: observation.Identity.SessionID, SessionPath: observation.Identity.SessionPath, ResumeCommand: append([]string(nil), observation.Catalog.ResumeCommand...), CWD: observation.Catalog.CWD, ProjectRoot: observation.Catalog.ProjectRoot, ProcessPID: observation.Catalog.ProcessPID, ObservedAt: at}
+		return storeCatalogObservation(session, observation, at)
+	case ObservationSourceScreen:
+		return storeScreenObservation(session, observation, at)
 	default:
 		return ErrUnknownSource
 	}
+	return nil
+}
+
+func storeNativeObservation(session *Session, observation Observation, at time.Time) {
+	var process ProcessIdentity
+	if observation.Process != nil {
+		process = *observation.Process
+	}
+	session.Observations.Native = &NativeObservation{Event: observation.NativeEvent, Lifecycle: cloneLifecycle(observation.Lifecycle), Presence: clonePresence(observation.Presence), Activity: cloneActivity(observation.Activity), ActivityAuthoritative: cloneBool(observation.ActivityAuthoritative), SessionID: observation.Identity.SessionID, SessionPath: observation.Identity.SessionPath, ObservedAt: at, Attributes: cloneAttributes(observation.Attributes), RawPayload: cloneRaw(observation.RawPayload), Process: process}
+}
+
+func storeProcessObservation(session *Session, observation Observation, at time.Time) {
+	present := observation.ProcessPresent != nil && *observation.ProcessPresent
+	var process ProcessIdentity
+	if observation.Process != nil {
+		process = *observation.Process
+	}
+	session.Observations.Process = &ProcessObservation{Present: present, Process: process, ObservedAt: at}
+}
+
+func storeTmuxObservation(session *Session, observation Observation, at time.Time) error {
+	if observation.Tmux == nil || observation.Process == nil {
+		return ErrInvalidObservation
+	}
+	session.Observations.Tmux = &TmuxObservation{Process: *observation.Process, Context: *observation.Tmux, ObservedAt: at}
+	return nil
+}
+
+func storeCatalogObservation(session *Session, observation Observation, at time.Time) error {
+	if observation.Catalog == nil {
+		return ErrInvalidObservation
+	}
+	session.Observations.Catalog = &CatalogObservation{SessionID: observation.Identity.SessionID, SessionPath: observation.Identity.SessionPath, ResumeCommand: append([]string(nil), observation.Catalog.ResumeCommand...), CWD: observation.Catalog.CWD, ProjectRoot: observation.Catalog.ProjectRoot, ProcessPID: observation.Catalog.ProcessPID, ObservedAt: at}
+	return nil
+}
+
+func storeScreenObservation(session *Session, observation Observation, at time.Time) error {
+	if observation.Screen == nil || observation.Process == nil || observation.Activity == nil {
+		return ErrInvalidObservation
+	}
+	screen := *observation.Screen
+	screen.Activity = *observation.Activity
+	screen.Process = *observation.Process
+	screen.ObservedAt = at
+	session.Observations.Screen = &screen
 	return nil
 }
 
@@ -323,9 +401,14 @@ func applyIdentity(session *Session, observation Observation) {
 	}
 }
 
-func applyMetadata(session *Session, observation Observation) {
+func applyMetadata(session *Session, observation Observation, at time.Time) {
 	if observation.Process != nil && observation.Process.Complete() {
 		process := *observation.Process
+		if session.Process != nil && !session.Process.Equal(process) {
+			session.Activity = activityPtr(ActivityUnknown)
+			session.ActivityDecision = &ActivityDecision{Authority: "process", Reason: "process_replaced", RuleID: "", ManifestSource: "", ManifestVersion: 0, FallbackReason: "", Process: process, ObservedAt: at}
+			session.Observations.Screen = nil
+		}
 		session.Process = &process
 		if process.CWD != "" {
 			session.CWD = process.CWD
@@ -390,8 +473,9 @@ func applyPresenceAndActivity(session *Session, observation Observation, at time
 				}
 			}
 		}
-		if native.Activity != nil && session.Presence != PresenceGone && at.After(session.PresenceChangedAt) {
+		if native.Activity != nil && activityIsAuthoritative(observation) && session.Presence != PresenceGone && at.After(session.PresenceChangedAt) {
 			session.Activity = cloneActivity(native.Activity)
+			session.ActivityDecision = &ActivityDecision{Authority: "hook", Reason: native.Event, RuleID: "", ManifestSource: "", ManifestVersion: 0, FallbackReason: "", Process: native.Process, ObservedAt: at}
 		}
 	case ObservationSourceProcess:
 		process := session.Observations.Process
@@ -408,9 +492,40 @@ func applyPresenceAndActivity(session *Session, observation Observation, at time
 			return
 		}
 		setGone(session, at)
+	case ObservationSourceScreen:
+		screen := session.Observations.Screen
+		if screen == nil || observation.Process == nil || session.Presence == PresenceGone || !screen.Process.Equal(*observation.Process) {
+			return
+		}
+		if screenFallbackSuperseded(*session, *screen) {
+			return
+		}
+		session.Activity = activityPtr(screen.Activity)
+		session.ActivityDecision = &ActivityDecision{Authority: screen.Authority, Reason: screen.Reason, RuleID: screen.RuleID, ManifestSource: screen.ManifestSource, ManifestVersion: screen.ManifestVersion, FallbackReason: screen.FallbackReason, Process: screen.Process, ObservedAt: at}
 	case ObservationSourceTmux, ObservationSourceCatalog:
 		return
 	}
+}
+
+func activityIsAuthoritative(observation Observation) bool {
+	return observation.ActivityAuthoritative == nil || *observation.ActivityAuthoritative
+}
+
+func screenFallbackSuperseded(session Session, screen ScreenObservation) bool {
+	if screen.FallbackForIntegration == "" || session.Observations.Native == nil {
+		return false
+	}
+	native := session.Observations.Native
+	if native.Attributes["agent_sessions_integration"] != screen.FallbackForIntegration || !native.Process.Equal(screen.Process) || native.Activity == nil || *native.Activity == ActivityUnknown {
+		return false
+	}
+	if native.Presence != nil && *native.Presence == PresenceGone {
+		return false
+	}
+	if screen.ObservedAt.Sub(native.ObservedAt) > IntegrationActivityLease {
+		return false
+	}
+	return native.Lifecycle == nil || *native.Lifecycle != NativeLifecycleEnd
 }
 
 func nativeEndAfter(session *Session, _ time.Time) bool {
@@ -423,6 +538,11 @@ func setGone(session *Session, at time.Time) {
 		session.PresenceChangedAt = at
 	}
 	session.Activity = nil
+	var process ProcessIdentity
+	if session.Process != nil {
+		process = *session.Process
+	}
+	session.ActivityDecision = &ActivityDecision{Authority: "process", Reason: "process_gone", RuleID: "", ManifestSource: "", ManifestVersion: 0, FallbackReason: "", Process: process, ObservedAt: at}
 }
 
 //nolint:cyclop // matching evaluates process, native identity, and catalog evidence in precedence order
@@ -480,6 +600,14 @@ func cloneLifecycle(value *NativeLifecycle) *NativeLifecycle {
 }
 
 func clonePresence(value *Presence) *Presence {
+	if value == nil {
+		return nil
+	}
+	clone := *value
+	return &clone
+}
+
+func cloneBool(value *bool) *bool {
 	if value == nil {
 		return nil
 	}

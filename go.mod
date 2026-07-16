@@ -5,6 +5,7 @@ go 1.25.6
 require (
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/go-playground/validator/v10 v10.30.3
+	github.com/pelletier/go-toml/v2 v2.2.4
 	github.com/spf13/cobra v1.10.2
 	golang.org/x/sys v0.45.0
 )

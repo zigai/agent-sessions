@@ -18,6 +18,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/zigai/agent-sessions/v2/internal/agentstate"
 	"github.com/zigai/agent-sessions/v2/internal/processinfo"
 	harnesspkg "github.com/zigai/agent-sessions/v2/pkg/harness"
 	"github.com/zigai/agent-sessions/v2/pkg/registry"
@@ -103,6 +104,8 @@ func NewRootCommand(stdout io.Writer, stderr io.Writer) *cobra.Command {
 		inCommandGroup(app.newListCommand(), sessionsGroupID),
 		inCommandGroup(app.newWatchCommand(), sessionsGroupID),
 		inCommandGroup(app.newShowCommand(), sessionsGroupID),
+		inCommandGroup(app.newExplainCommand(), sessionsGroupID),
+		inCommandGroup(app.newDetectCommand(), sessionsGroupID),
 		inCommandGroup(app.newStopCommand(), sessionsGroupID),
 		inCommandGroup(app.newSetupCommand(), setupGroupID),
 		inCommandGroup(app.newIntegrationsCommand(), setupGroupID),
@@ -360,6 +363,10 @@ func (app *application) prepareReport(stdin io.Reader, options reportOptions, ru
 	}
 	identity := registry.ObservationIdentity{SessionID: options.sessionID, SessionPath: options.sessionPath}
 	observation := registry.Observation{Source: registry.ObservationSourceNative, Evidence: registry.ObservationEvidenceNativeEvent, Harness: harness, Identity: identity, NativeEvent: options.event, Attributes: attrs, RawPayload: rawPayload, ObservedAt: observedAt}
+	if agentstate.PolicyFor(harness).Primary == agentstate.AuthorityScreen {
+		authoritative := false
+		observation.ActivityAuthoritative = &authoritative
+	}
 	observation.Process = reportProcessIdentity(harness, runtime.processes)
 	if strings.EqualFold(options.evidence, "process") {
 		if options.pid <= 0 || options.startIdentity == "" {
@@ -449,6 +456,7 @@ func reportProcessIdentity(harness registry.Harness, processes []processinfo.Pro
 			PID:            process.PID,
 			PPID:           process.PPID,
 			ProcessGroupID: process.ProcessGroupID,
+			Foreground:     process.Foreground,
 			StartIdentity:  process.StartIdentity,
 			Executable:     process.Executable,
 			CWD:            process.CWD,

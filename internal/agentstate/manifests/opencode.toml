@@ -1,0 +1,32 @@
+version = 1
+agent = "opencode"
+
+[[rules]]
+id = "permission_prompt"
+state = "waiting"
+priority = 300
+region = "bottom:30"
+all = ["permission"]
+any = ["allow", "approve", "deny", "reject"]
+
+[[rules]]
+id = "question_prompt"
+state = "waiting"
+priority = 250
+region = "bottom:30"
+any = ["Question requires input", "Select an option", "Waiting for input"]
+
+[[rules]]
+id = "working_interruptible"
+state = "running"
+priority = 200
+region = "bottom:20"
+any = ["esc to interrupt", "ctrl+c to interrupt"]
+
+[[rules]]
+id = "input_prompt"
+state = "idle"
+priority = 100
+region = "bottom:12"
+any = ["Ask anything", "Type a message", "Send a message"]
+none = ["esc to interrupt", "permission"]

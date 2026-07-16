@@ -48,7 +48,7 @@ func List(ctx context.Context) ([]Process, error) {
 		return processes, nil
 	}
 
-	psOutput, err := exec.CommandContext(ctx, "/bin/ps", "-o", "pid=,ppid=,pgid=,tty=,comm=,args=", "-p", strings.Join(pids, ",")).Output()
+	psOutput, err := exec.CommandContext(ctx, "/bin/ps", "-o", "pid=,ppid=,pgid=,tpgid=,tty=,comm=,args=", "-p", strings.Join(pids, ",")).Output()
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return nil, ctxErr
@@ -66,6 +66,7 @@ func List(ctx context.Context) ([]Process, error) {
 		}
 		processes[i].PPID = row.PPID
 		processes[i].ProcessGroupID = row.ProcessGroupID
+		processes[i].Foreground = row.Foreground
 		if row.Executable != "" {
 			processes[i].Executable = row.Executable
 		}
@@ -106,6 +107,7 @@ type darwinPSRow struct {
 	PID            int
 	PPID           int
 	ProcessGroupID int
+	Foreground     bool
 	TTY            string
 	Executable     string
 	Args           []string
@@ -118,7 +120,7 @@ func parseDarwinPS(output string) (map[int]darwinPSRow, error) {
 			continue
 		}
 		fields := strings.Fields(line)
-		if len(fields) < 5 {
+		if len(fields) < 6 {
 			return nil, errors.New("truncated ps record")
 		}
 		pid, err := strconv.Atoi(fields[0])
@@ -133,8 +135,12 @@ func parseDarwinPS(output string) (map[int]darwinPSRow, error) {
 		if err != nil || pgid < 0 {
 			return nil, errors.New("invalid ps process group id")
 		}
-		args := append([]string(nil), fields[5:]...)
-		rows[pid] = darwinPSRow{PID: pid, PPID: ppid, ProcessGroupID: pgid, TTY: fields[3], Executable: fields[4], Args: args}
+		tpgid, err := strconv.Atoi(fields[3])
+		if err != nil || tpgid < -1 {
+			return nil, errors.New("invalid ps foreground process group id")
+		}
+		args := append([]string(nil), fields[6:]...)
+		rows[pid] = darwinPSRow{PID: pid, PPID: ppid, ProcessGroupID: pgid, Foreground: tpgid > 0 && pgid == tpgid, TTY: fields[4], Executable: fields[5], Args: args}
 	}
 	return rows, nil
 }

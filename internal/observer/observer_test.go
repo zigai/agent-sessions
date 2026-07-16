@@ -60,6 +60,45 @@ func TestObserverDefaultMissingRequiresTwoSnapshots(t *testing.T) {
 	}
 }
 
+func TestObserverRestartMarksMissingStoredProcessGone(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "sessions.json")
+	at := time.Now().UTC().Add(-time.Minute)
+	process := processinfo.Process{PID: 1234, PPID: 1, ProcessGroupID: 1234, StartIdentity: "boot:A", Executable: "/usr/bin/codex", CWD: "/work", TTY: "/dev/pts/1"}
+	processes := []processinfo.Process{process}
+	options := Options{
+		StorePath: path,
+		Now:       func() time.Time { return at },
+		ProcessList: func(context.Context) ([]processinfo.Process, error) {
+			return processes, nil
+		},
+		PaneList:    func(context.Context) ([]tmuxctx.Pane, error) { return nil, nil },
+		CatalogList: func(context.Context) ([]CatalogEntry, error) { return nil, nil },
+		HealthPath:  path + ".health",
+	}
+	if _, err := New(options).RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	processes = nil
+	at = at.Add(time.Second)
+	result, err := New(options).RunOnce(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Gone != 1 {
+		t.Fatalf("restart result gone = %d, want 1: %#v", result.Gone, result)
+	}
+
+	sessions, err := registry.NewFileStore(path).List(context.Background(), registry.Filter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 1 || sessions[0].Presence != registry.PresenceGone || sessions[0].Activity != nil || sessions[0].ActivityDecision == nil || sessions[0].ActivityDecision.Reason != "process_gone" || sessions[0].ActivityDecision.Process.StartIdentity != process.StartIdentity {
+		t.Fatalf("sessions after restart: %#v", sessions)
+	}
+}
+
 func TestResolveHarnessIgnoresLaterArguments(t *testing.T) {
 	t.Parallel()
 	process := processinfo.Process{Executable: "/usr/bin/tmux", Args: []string{"/usr/bin/tmux", "new-session", "-s", "agent-test", "/tmp/codex"}}

@@ -1,0 +1,25 @@
+version = 1
+agent = "codex"
+
+[[rules]]
+id = "permission_prompt"
+state = "waiting"
+priority = 300
+region = "bottom:30"
+any = ["Would you like to run the following command?", "Do you want to continue?", "Press enter to confirm or esc to cancel", "Allow command"]
+
+[[rules]]
+id = "working_interruptible"
+state = "running"
+priority = 200
+region = "bottom:20"
+any = ["esc to interrupt", "ctrl+c to interrupt"]
+
+[[rules]]
+id = "input_prompt"
+state = "idle"
+priority = 100
+region = "bottom:12"
+all = ["›"]
+any = ["context left", "? for shortcuts", "type your message"]
+none = ["esc to interrupt"]

@@ -7,11 +7,13 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"strings"
 	"text/tabwriter"
 	"time"
 
 	"github.com/spf13/cobra"
 
+	"github.com/zigai/agent-sessions/v2/internal/agentstate"
 	"github.com/zigai/agent-sessions/v2/internal/install"
 	"github.com/zigai/agent-sessions/v2/internal/processinfo"
 	"github.com/zigai/agent-sessions/v2/internal/reportqueue"
@@ -29,7 +31,7 @@ const (
 )
 
 const (
-	doctorCheckCapacity    = 9
+	doctorCheckCapacity    = 10
 	serviceDefaultInterval = 3 * time.Second
 )
 
@@ -162,6 +164,7 @@ func (app *application) runDoctor(ctx context.Context, includeAll bool) doctorRe
 		add("observer.service", doctorOK, "managed observer service is running")
 	}
 	app.addObserverReconciliationCheck(&result, store.Path())
+	app.addDetectionManifestCheck(&result)
 
 	queue := reportqueue.New(store.Path())
 	queueStatus, queueErr := queue.Status(ctx)
@@ -242,6 +245,26 @@ func (app *application) addObserverReconciliationCheck(result *doctorResult, sto
 		return
 	}
 	result.Checks = append(result.Checks, doctorCheck{Name: "observer.reconciliation", Status: doctorOK, Message: "last successful reconciliation at " + health.LastSuccessAt.Format(time.RFC3339)})
+}
+
+func (app *application) addDetectionManifestCheck(result *doctorResult) {
+	loader := agentstate.Loader{}
+	var warnings []string
+	for _, harnessID := range []registry.Harness{registry.HarnessCodex, registry.HarnessClaude, registry.HarnessOpenCode, registry.HarnessPi} {
+		manifest, err := loader.Load(harnessID)
+		if err != nil {
+			result.Checks = append(result.Checks, doctorCheck{Name: "detection.manifests", Status: doctorError, Message: err.Error()})
+			return
+		}
+		if manifest.Warning != "" {
+			warnings = append(warnings, manifest.Warning)
+		}
+	}
+	if len(warnings) > 0 {
+		result.Checks = append(result.Checks, doctorCheck{Name: "detection.manifests", Status: doctorWarning, Message: strings.Join(warnings, "; ")})
+		return
+	}
+	result.Checks = append(result.Checks, doctorCheck{Name: "detection.manifests", Status: doctorOK, Message: "Codex, Claude, OpenCode, and Pi manifests are valid"})
 }
 
 func (app *application) integrationStatus(id registry.Harness) (doctorStatus, string, bool) {

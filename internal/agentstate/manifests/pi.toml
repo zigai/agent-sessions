@@ -1,0 +1,31 @@
+version = 1
+agent = "pi"
+
+[[rules]]
+id = "permission_prompt"
+state = "waiting"
+priority = 300
+region = "bottom:30"
+any = ["Allow this command?", "Approve this action?", "Permission required", "Waiting for your approval"]
+
+[[rules]]
+id = "question_prompt"
+state = "waiting"
+priority = 250
+region = "bottom:30"
+any = ["Waiting for input", "Select an option", "Answer the question"]
+
+[[rules]]
+id = "working_interruptible"
+state = "running"
+priority = 200
+region = "bottom:20"
+any = ["esc to interrupt", "ctrl+c to interrupt"]
+
+[[rules]]
+id = "input_prompt"
+state = "idle"
+priority = 100
+region = "bottom:12"
+any = ["Type a message", "Enter to send", "shift+enter for newline"]
+none = ["esc to interrupt"]
