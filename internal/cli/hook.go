@@ -15,7 +15,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"strings"
 	"time"
 
@@ -97,6 +96,9 @@ func (app *application) runManagedHook(
 	if !ok {
 		return fmt.Errorf("%w: %s", errUnsupportedManagedHook, harness)
 	}
+	if result.ReportOK {
+		result.Report.Process = reportProcessIdentity(harness, reportProcessAncestors(ctx, 0))
+	}
 
 	if options.queue {
 		app.queueManagedHook(ctx, result, data, parentArgs)
@@ -123,12 +125,7 @@ func (app *application) queueManagedHook(
 	}
 	storePath := app.store().Path()
 	queue := reportqueue.New(storePath)
-	tmuxEnv := tmuxctx.Env{TMUX: os.Getenv("TMUX"), TMUXPane: os.Getenv("TMUX_PANE")}
-	minimalTmux := tmuxctx.ContextFromEnv(tmuxEnv)
-	cachedTmux := minimalTmux
-	if cached, ok := queue.LookupTmuxContext(minimalTmux, now, 0); ok {
-		cachedTmux = cached
-	}
+	runtime, cachedTmux := queuedReportRuntime(queue, now, parentArgs)
 	_, err := queue.Enqueue(ctx, reportqueue.Envelope{
 		Version:       reportqueue.EnvelopeVersion,
 		CreatedAt:     now,
@@ -137,16 +134,8 @@ func (app *application) queueManagedHook(
 		Report:        reportqueue.ReportFromRegistry(observation),
 		RawPayloadSet: len(observation.RawPayload) > 0,
 		Stdin:         []byte(strings.TrimSpace(string(stdin))),
-		Runtime: reportqueue.RuntimeContext{
-			CWD:        defaultCWD(),
-			ParentArgs: parentArgs,
-			Env: map[string]string{
-				"TMUX":      tmuxEnv.TMUX,
-				"TMUX_PANE": tmuxEnv.TMUXPane,
-				"PWD":       os.Getenv("PWD"),
-			},
-		},
-		CachedTmux: cachedTmux,
+		Runtime:       runtime,
+		CachedTmux:    cachedTmux,
 	}, reportqueue.EnqueueOptions{Now: func() time.Time { return now }})
 	if err != nil {
 		app.warnf("warning: queueing managed hook report failed: %v\n", err)

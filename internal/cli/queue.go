@@ -152,7 +152,10 @@ func (app *application) queuedReportTmux(ctx context.Context, q reportqueue.Queu
 }
 func (app *application) kickQueueDrainer(ctx context.Context, p string) { kickQueueDrainer(ctx, p) }
 func (app *application) runQueuedReport(ctx context.Context, stdin io.Reader, o reportOptions) error {
-	p, e := app.prepareReport(stdin, o, reportRuntimeContext{defaultObservedAt: time.Now().UTC()})
+	p, e := app.prepareReport(stdin, o, reportRuntimeContext{
+		processes:         reportProcessAncestors(ctx, o.pid),
+		defaultObservedAt: time.Now().UTC(),
+	})
 	if e != nil {
 		return e
 	}
@@ -164,7 +167,18 @@ func (app *application) runQueuedReport(ctx context.Context, stdin io.Reader, o 
 	}
 	now := time.Now().UTC()
 	q := reportqueue.New(app.store().Path())
-	if _, e = q.Enqueue(ctx, reportqueue.Envelope{Version: reportqueue.EnvelopeVersion, CreatedAt: now, StorePath: app.store().Path(), Kind: reportqueue.KindReport, Report: reportqueue.ReportFromRegistry(p.observation), RawPayloadSet: len(p.observation.RawPayload) > 0, Stdin: p.stdin}, reportqueue.EnqueueOptions{Now: func() time.Time { return now }}); e != nil {
+	runtime, cachedTmux := queuedReportRuntime(q, now, nil)
+	if _, e = q.Enqueue(ctx, reportqueue.Envelope{
+		Version:       reportqueue.EnvelopeVersion,
+		CreatedAt:     now,
+		StorePath:     app.store().Path(),
+		Kind:          reportqueue.KindReport,
+		Report:        reportqueue.ReportFromRegistry(p.observation),
+		RawPayloadSet: len(p.observation.RawPayload) > 0,
+		Stdin:         p.stdin,
+		Runtime:       runtime,
+		CachedTmux:    cachedTmux,
+	}, reportqueue.EnqueueOptions{Now: func() time.Time { return now }}); e != nil {
 		return fmt.Errorf("queueing report: %w", e)
 	}
 	app.kickQueueDrainer(ctx, app.store().Path())
@@ -175,6 +189,25 @@ func (app *application) runQueuedReport(ctx context.Context, stdin io.Reader, o 
 		return nil
 	}
 	return app.writef("queued\n")
+}
+
+func queuedReportRuntime(q reportqueue.Queue, now time.Time, parentArgs []string) (reportqueue.RuntimeContext, registry.TmuxContext) {
+	tmuxEnv := tmuxctx.Env{TMUX: os.Getenv("TMUX"), TMUXPane: os.Getenv("TMUX_PANE")}
+	minimalTmux := tmuxctx.ContextFromEnv(tmuxEnv)
+	cachedTmux := minimalTmux
+	if cached, ok := q.LookupTmuxContext(minimalTmux, now, 0); ok {
+		cachedTmux = cached
+	}
+	runtime := reportqueue.RuntimeContext{
+		CWD:        defaultCWD(),
+		ParentArgs: append([]string(nil), parentArgs...),
+		Env: map[string]string{
+			"TMUX":      tmuxEnv.TMUX,
+			"TMUX_PANE": tmuxEnv.TMUXPane,
+			"PWD":       os.Getenv("PWD"),
+		},
+	}
+	return runtime, cachedTmux
 }
 
 func kickQueueDrainer(ctx context.Context, p string) {

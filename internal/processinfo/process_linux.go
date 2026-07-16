@@ -39,13 +39,9 @@ func List(ctx context.Context) ([]Process, error) {
 		return nil, fmt.Errorf("process listing context: %w", err)
 	}
 
-	bootID, err := os.ReadFile(filepath.Join(procRoot, "sys/kernel/random/boot_id"))
+	boot, err := linuxBootIdentity()
 	if err != nil {
-		return nil, classifyProcessError(filepath.Join(procRoot, "sys/kernel/random/boot_id"), err)
-	}
-	boot := strings.TrimSpace(string(bootID))
-	if boot == "" {
-		return nil, &TableError{Path: filepath.Join(procRoot, "sys/kernel/random/boot_id"), Err: errEmptyBootIdentity}
+		return nil, err
 	}
 
 	entries, err := os.ReadDir(procRoot)
@@ -91,6 +87,57 @@ func List(ctx context.Context) ([]Process, error) {
 		processes = append(processes, process)
 	}
 	return processes, nil
+}
+
+// Find returns the current-user process identified by pid. A false found
+// result means the process does not exist or belongs to another user.
+func Find(ctx context.Context, pid int) (Process, bool, error) {
+	var zero Process
+	if err := ctx.Err(); err != nil {
+		return zero, false, fmt.Errorf("finding process context: %w", err)
+	}
+	if pid <= 0 {
+		return zero, false, nil
+	}
+
+	boot, err := linuxBootIdentity()
+	if err != nil {
+		return zero, false, err
+	}
+	dir := filepath.Join(procRoot, strconv.Itoa(pid))
+	info, err := os.Stat(dir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return zero, false, nil
+		}
+		return zero, false, classifyProcessError(dir, err)
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || int(stat.Uid) != os.Geteuid() {
+		return zero, false, nil
+	}
+
+	process, err := readLinuxProcess(dir, pid, boot)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return zero, false, nil
+		}
+		return zero, false, err
+	}
+	return process, true, nil
+}
+
+func linuxBootIdentity() (string, error) {
+	path := filepath.Join(procRoot, "sys/kernel/random/boot_id")
+	bootID, err := os.ReadFile(path)
+	if err != nil {
+		return "", classifyProcessError(path, err)
+	}
+	boot := strings.TrimSpace(string(bootID))
+	if boot == "" {
+		return "", &TableError{Path: path, Err: errEmptyBootIdentity}
+	}
+	return boot, nil
 }
 
 func readLinuxProcess(dir string, pid int, boot string) (Process, error) {

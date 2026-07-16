@@ -24,4 +24,15 @@ func TestCurrentProcessInfo(t *testing.T) {
 	if command == "" {
 		t.Fatal("expected current process command name")
 	}
+
+	process, found, err := Find(ctx, pid)
+	if err != nil {
+		t.Fatalf("finding current process returned error: %v", err)
+	}
+	if !found {
+		t.Fatal("current process was not found")
+	}
+	if process.PID != pid || process.StartIdentity == "" || process.Executable == "" {
+		t.Fatalf("current process = %#v, want complete identity", process)
+	}
 }

@@ -324,18 +324,20 @@ func applyIdentity(session *Session, observation Observation) {
 }
 
 func applyMetadata(session *Session, observation Observation) {
-	if observation.Source == ObservationSourceProcess && observation.Process != nil && observation.Process.Complete() {
+	if observation.Process != nil && observation.Process.Complete() {
 		process := *observation.Process
 		session.Process = &process
 		if process.CWD != "" {
 			session.CWD = process.CWD
 		}
-		return
+		if observation.Source == ObservationSourceProcess {
+			return
+		}
 	}
 	if (observation.Source == ObservationSourceNative || observation.Source == ObservationSourceCatalog) && observation.Catalog != nil {
 		applyCatalogMetadata(session, observation.Catalog)
 	}
-	if observation.Source == ObservationSourceTmux && observation.Tmux != nil {
+	if observation.Tmux != nil {
 		session.Tmux = *observation.Tmux
 		if session.CWD == "" {
 			session.CWD = observation.Tmux.PaneCurrentPath
@@ -423,37 +425,49 @@ func setGone(session *Session, at time.Time) {
 	session.Activity = nil
 }
 
-//nolint:gocognit,cyclop // matching checks strong identity before deterministic fallback keys
+//nolint:cyclop // matching evaluates process, native identity, and catalog evidence in precedence order
 func findMatchingSession(sessions map[string]Session, observation Observation) string {
-	ids := make([]string, 0)
+	if observation.Process != nil && observation.Process.Complete() {
+		if id := firstMatchingSessionID(sessions, observation.Harness, func(session Session) bool {
+			return session.Process != nil && session.Process.Equal(*observation.Process)
+		}); id != "" {
+			return id
+		}
+	}
+	if observation.Identity.SessionID != "" {
+		if id := firstMatchingSessionID(sessions, observation.Harness, func(session Session) bool {
+			return session.SessionID == observation.Identity.SessionID
+		}); id != "" {
+			return id
+		}
+	}
+	if observation.Identity.SessionPath != "" {
+		cleanPath := filepath.Clean(observation.Identity.SessionPath)
+		if id := firstMatchingSessionID(sessions, observation.Harness, func(session Session) bool {
+			return session.SessionPath != "" && filepath.Clean(session.SessionPath) == cleanPath
+		}); id != "" {
+			return id
+		}
+	}
+	if observation.Source == ObservationSourceCatalog && observation.Catalog != nil && observation.Catalog.ProcessPID > 0 {
+		return firstMatchingSessionID(sessions, observation.Harness, func(session Session) bool {
+			return session.Process != nil && session.Process.PID == observation.Catalog.ProcessPID
+		})
+	}
+	return ""
+}
+
+func firstMatchingSessionID(sessions map[string]Session, harness Harness, match func(Session) bool) string {
+	ids := make([]string, 0, 1)
 	for id, session := range sessions {
-		if session.Harness != observation.Harness {
-			continue
-		}
-		if observation.Identity.SessionID != "" {
-			if session.SessionID == observation.Identity.SessionID {
-				ids = append(ids, id)
-			}
-			continue
-		}
-		if observation.Identity.SessionPath != "" {
-			if session.SessionPath != "" && filepath.Clean(session.SessionPath) == filepath.Clean(observation.Identity.SessionPath) {
-				ids = append(ids, id)
-			}
-			continue
-		}
-		if observation.Process != nil && observation.Process.Complete() && session.Process != nil && session.Process.Equal(*observation.Process) {
-			ids = append(ids, id)
-			continue
-		}
-		if observation.Source == ObservationSourceCatalog && observation.Catalog != nil && observation.Catalog.ProcessPID > 0 && session.Process != nil && session.Process.PID == observation.Catalog.ProcessPID {
+		if session.Harness == harness && match(session) {
 			ids = append(ids, id)
 		}
 	}
-	sort.Strings(ids)
 	if len(ids) == 0 {
 		return ""
 	}
+	sort.Strings(ids)
 	return ids[0]
 }
 

@@ -18,6 +18,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/zigai/agent-sessions/v2/internal/processinfo"
 	harnesspkg "github.com/zigai/agent-sessions/v2/pkg/harness"
 	"github.com/zigai/agent-sessions/v2/pkg/registry"
 	"github.com/zigai/agent-sessions/v2/pkg/tmuxctx"
@@ -47,22 +48,24 @@ var (
 )
 
 const (
-	tabPadding            = 2
-	registryIDShortLength = 8
-	reportCommandName     = "report"
-	listCommandName       = "list"
-	statusCommandName     = "status"
-	installCommandName    = "install"
-	integrationsCommand   = "integrations"
-	monitorCommand        = "monitor"
-	registryCommandName   = "registry"
-	hookCommandName       = "hook"
-	agyHookCommandName    = "agy-hook"
-	listSortUpdated       = "updated"
-	hoursPerDay           = 24
-	sessionsGroupID       = "sessions"
-	setupGroupID          = "setup"
-	systemGroupID         = "system"
+	tabPadding                       = 2
+	registryIDShortLength            = 8
+	reportProcessArgumentPrefixCount = 4
+	reportProcessAncestorLimit       = 16
+	reportCommandName                = "report"
+	listCommandName                  = "list"
+	statusCommandName                = "status"
+	installCommandName               = "install"
+	integrationsCommand              = "integrations"
+	monitorCommand                   = "monitor"
+	registryCommandName              = "registry"
+	hookCommandName                  = "hook"
+	agyHookCommandName               = "agy-hook"
+	listSortUpdated                  = "updated"
+	hoursPerDay                      = 24
+	sessionsGroupID                  = "sessions"
+	setupGroupID                     = "setup"
+	systemGroupID                    = "system"
 )
 
 type application struct {
@@ -214,6 +217,7 @@ type preparedReport struct {
 }
 type reportRuntimeContext struct {
 	tmux              registry.TmuxContext
+	processes         []processinfo.Process
 	defaultObservedAt time.Time
 }
 
@@ -282,7 +286,10 @@ func (app *application) runReport(ctx context.Context, stdin io.Reader, options 
 	if options.queue {
 		return app.runQueuedReport(ctx, stdin, options)
 	}
-	prepared, err := app.prepareReport(stdin, options, reportRuntimeContext{tmux: reportTmuxContext(ctx, options.noTmux)})
+	prepared, err := app.prepareReport(stdin, options, reportRuntimeContext{
+		tmux:      reportTmuxContext(ctx, options.noTmux),
+		processes: reportProcessAncestors(ctx, options.pid),
+	})
 	if err != nil {
 		return err
 	}
@@ -353,6 +360,7 @@ func (app *application) prepareReport(stdin io.Reader, options reportOptions, ru
 	}
 	identity := registry.ObservationIdentity{SessionID: options.sessionID, SessionPath: options.sessionPath}
 	observation := registry.Observation{Source: registry.ObservationSourceNative, Evidence: registry.ObservationEvidenceNativeEvent, Harness: harness, Identity: identity, NativeEvent: options.event, Attributes: attrs, RawPayload: rawPayload, ObservedAt: observedAt}
+	observation.Process = reportProcessIdentity(harness, runtime.processes)
 	if strings.EqualFold(options.evidence, "process") {
 		if options.pid <= 0 || options.startIdentity == "" {
 			return preparedReport{}, errProcessEvidenceIdentity
@@ -365,6 +373,10 @@ func (app *application) prepareReport(stdin io.Reader, options reportOptions, ru
 		observation.NativeEvent = ""
 		observation.ProcessPresent = &present
 		observation.Process = &registry.ProcessIdentity{PID: options.pid, PPID: options.ppid, ProcessGroupID: options.processGroupID, StartIdentity: options.startIdentity, Executable: options.executable, CWD: options.cwd, TTY: options.tty}
+	}
+	if observation.Source == registry.ObservationSourceNative && !runtime.tmux.Empty() {
+		tmux := runtime.tmux
+		observation.Tmux = &tmux
 	}
 	if observation.Source == registry.ObservationSourceNative && presence != "" {
 		observation.Presence = &presence
@@ -407,6 +419,55 @@ func reportTmuxContext(ctx context.Context, noTmux bool) registry.TmuxContext {
 		return registry.TmuxContext{}
 	}
 	return t
+}
+
+func reportProcessAncestors(ctx context.Context, pid int) []processinfo.Process {
+	if pid <= 0 {
+		pid = os.Getppid()
+	}
+	var processes []processinfo.Process
+	for range reportProcessAncestorLimit {
+		process, found, err := processinfo.Find(ctx, pid)
+		if err != nil || !found {
+			break
+		}
+		processes = append(processes, process)
+		if process.PPID <= 0 || process.PPID == process.PID {
+			break
+		}
+		pid = process.PPID
+	}
+	return processes
+}
+
+func reportProcessIdentity(harness registry.Harness, processes []processinfo.Process) *registry.ProcessIdentity {
+	for _, process := range processes {
+		if !reportProcessMatchesHarness(process, harness) {
+			continue
+		}
+		return &registry.ProcessIdentity{
+			PID:            process.PID,
+			PPID:           process.PPID,
+			ProcessGroupID: process.ProcessGroupID,
+			StartIdentity:  process.StartIdentity,
+			Executable:     process.Executable,
+			CWD:            process.CWD,
+			TTY:            process.TTY,
+		}
+	}
+	return nil
+}
+
+func reportProcessMatchesHarness(process processinfo.Process, expected registry.Harness) bool {
+	if harness, ok := harnesspkg.FromCommand(process.Executable); ok {
+		return harness == expected
+	}
+	for _, arg := range process.Args[:min(reportProcessArgumentPrefixCount, len(process.Args))] {
+		if harness, ok := harnesspkg.FromCommand(arg); ok {
+			return harness == expected
+		}
+	}
+	return false
 }
 
 func parentProcessArgs(ctx context.Context) []string { return processArgs(ctx, os.Getppid()) }

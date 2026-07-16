@@ -24,6 +24,81 @@ func TestIdentityReconciliationPrefersSessionPath(t *testing.T) {
 	}
 }
 
+func TestNativeProcessIdentityReconcilesWithLiveTmuxSession(t *testing.T) {
+	t.Parallel()
+	store := NewFileStore(filepath.Join(t.TempDir(), "sessions.json"))
+	ctx := context.Background()
+	at := time.Now().UTC().Add(-time.Minute)
+	path := "/tmp/pi-session.json"
+	process := &ProcessIdentity{PID: 42, PPID: 10, ProcessGroupID: 42, StartIdentity: "boot:42", Executable: "/usr/bin/node", CWD: "/work", TTY: "/dev/pts/4"}
+	idle := ActivityIdle
+	identityOnly, err := store.Observe(ctx, Observation{
+		Source: ObservationSourceNative, Evidence: ObservationEvidenceNativeEvent,
+		Harness: HarnessPi, Identity: ObservationIdentity{SessionPath: path},
+		NativeEvent: "session_start", Activity: &idle, ObservedAt: at,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	live, err := store.Observe(ctx, Observation{
+		Source: ObservationSourceProcess, Evidence: ObservationEvidenceProcessPresence,
+		Harness: HarnessPi, ProcessPresent: boolPtr(true), Process: process, ObservedAt: at.Add(time.Second),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmux := &TmuxContext{Inside: true, SessionName: "sesh", PaneID: "%81", PaneTTY: "/dev/pts/4"}
+	if _, err := store.Observe(ctx, Observation{
+		Source: ObservationSourceTmux, Evidence: ObservationEvidenceTmuxLocation,
+		Harness: HarnessPi, Process: process, Tmux: tmux, ObservedAt: at.Add(2 * time.Second),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	running := ActivityRunning
+	reconciled, err := store.Observe(ctx, Observation{
+		Source: ObservationSourceNative, Evidence: ObservationEvidenceNativeEvent,
+		Harness: HarnessPi, Identity: ObservationIdentity{SessionPath: path}, Process: process,
+		NativeEvent: "agent_start", Activity: &running, ObservedAt: at.Add(3 * time.Second),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reconciled.ID != live.ID || reconciled.ID == identityOnly.ID {
+		t.Fatalf("native report reconciled to %q, want live process record %q (identity-only %q)", reconciled.ID, live.ID, identityOnly.ID)
+	}
+	if reconciled.Presence != PresenceLive || reconciled.Activity == nil || *reconciled.Activity != ActivityRunning || reconciled.SessionPath != path || reconciled.Tmux.PaneID != "%81" {
+		t.Fatalf("reconciled session lost identity, activity, or tmux location: %#v", reconciled)
+	}
+}
+
+func TestNativeProcessIdentitySeedsObserverReconciliation(t *testing.T) {
+	t.Parallel()
+	store := NewFileStore(filepath.Join(t.TempDir(), "sessions.json"))
+	ctx := context.Background()
+	at := time.Now().UTC().Add(-time.Minute)
+	process := &ProcessIdentity{PID: 42, StartIdentity: "boot:42"}
+	tmux := &TmuxContext{Inside: true, SessionName: "dev", PaneID: "%4"}
+	activity := ActivityRunning
+	native, err := store.Observe(ctx, Observation{
+		Source: ObservationSourceNative, Evidence: ObservationEvidenceNativeEvent,
+		Harness: HarnessPi, Identity: ObservationIdentity{SessionPath: "/tmp/pi-session.json"},
+		Process: process, Tmux: tmux, NativeEvent: "agent_start", Activity: &activity, ObservedAt: at,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	observed, err := store.Observe(ctx, Observation{
+		Source: ObservationSourceProcess, Evidence: ObservationEvidenceProcessPresence,
+		Harness: HarnessPi, ProcessPresent: boolPtr(true), Process: process, ObservedAt: at.Add(time.Second),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if observed.ID != native.ID || observed.Presence != PresenceLive || observed.Activity == nil || *observed.Activity != ActivityRunning || observed.Tmux.PaneID != "%4" {
+		t.Fatalf("observer did not reconcile with native process identity: native=%#v observed=%#v", native, observed)
+	}
+}
+
 func TestCatalogOnlyCreationIsClaudeCurrentOnly(t *testing.T) {
 	t.Parallel()
 	store := NewFileStore(filepath.Join(t.TempDir(), "sessions.json"))

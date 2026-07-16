@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/zigai/agent-sessions/v2/internal/processinfo"
 	"github.com/zigai/agent-sessions/v2/pkg/registry"
 )
 
@@ -21,7 +22,10 @@ func TestPrepareReportCarriesIndependentDimensions(t *testing.T) {
 	prepared, err := app.prepareReport(strings.NewReader(`{"session_id":"session-1","cwd":"/work","hook_event_name":"PermissionRequest","model":"gpt-5"}`), reportOptions{
 		harness: "codex", presence: "live", activity: "waiting", sessionID: "session-1", event: "permission_prompt",
 		cwd: "/work", projectRoot: "/work", resumeCommand: []string{"codex", "resume", "session-1"}, rawStdin: true,
-	}, reportRuntimeContext{defaultObservedAt: time.Date(2026, 7, 13, 12, 0, 0, 0, time.UTC)})
+	}, reportRuntimeContext{
+		tmux:              registry.TmuxContext{Inside: true, SessionName: "dev", PaneID: "%4"},
+		defaultObservedAt: time.Date(2026, 7, 13, 12, 0, 0, 0, time.UTC),
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -31,8 +35,38 @@ func TestPrepareReportCarriesIndependentDimensions(t *testing.T) {
 	if prepared.observation.Catalog == nil || len(prepared.observation.Catalog.ResumeCommand) != 3 {
 		t.Fatalf("catalog metadata missing: %#v", prepared.observation.Catalog)
 	}
+	if prepared.observation.Tmux == nil || prepared.observation.Tmux.SessionName != "dev" || prepared.observation.Tmux.PaneID != "%4" {
+		t.Fatalf("tmux context missing: %#v", prepared.observation.Tmux)
+	}
 	if string(prepared.stdin) == "" {
 		t.Fatal("raw stdin was not preserved")
+	}
+}
+
+func TestPrepareReportAttachesMatchingAgentProcess(t *testing.T) {
+	t.Parallel()
+	app := &application{}
+	agent := processinfo.Process{
+		PID:            42,
+		PPID:           10,
+		ProcessGroupID: 42,
+		StartIdentity:  "boot:42",
+		Executable:     "/usr/bin/node",
+		CWD:            "/work",
+		TTY:            "/dev/pts/4",
+		Args:           []string{"pi"},
+	}
+	prepared, err := app.prepareReport(nil, reportOptions{
+		harness: "pi", activity: "running", sessionPath: "/tmp/session.json",
+	}, reportRuntimeContext{processes: []processinfo.Process{
+		{PID: 50, PPID: 42, StartIdentity: "boot:50", Executable: "/bin/sh", Args: []string{"sh"}},
+		agent,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prepared.observation.Process == nil || prepared.observation.Process.PID != agent.PID || prepared.observation.Process.StartIdentity != agent.StartIdentity {
+		t.Fatalf("report process identity = %#v, want agent process %#v", prepared.observation.Process, agent)
 	}
 }
 

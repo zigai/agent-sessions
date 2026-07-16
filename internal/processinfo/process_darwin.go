@@ -83,6 +83,25 @@ func List(ctx context.Context) ([]Process, error) {
 	return processes, nil
 }
 
+// Find returns the current-user process identified by pid. A false found
+// result means the process does not exist or belongs to another user.
+func Find(ctx context.Context, pid int) (Process, bool, error) {
+	var zero Process
+	if pid <= 0 {
+		return zero, false, nil
+	}
+	processes, err := List(ctx)
+	if err != nil {
+		return zero, false, err
+	}
+	for _, process := range processes {
+		if process.PID == pid {
+			return process, true, nil
+		}
+	}
+	return zero, false, nil
+}
+
 type darwinPSRow struct {
 	PID            int
 	PPID           int
