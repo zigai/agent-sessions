@@ -654,9 +654,6 @@ func normalizedListOptions(options listOptions) (listOptions, error) {
 	if options.sortSet && strings.TrimSpace(options.sortBy) == "" {
 		return options, fmt.Errorf("%w: empty value", errInvalidListSort)
 	}
-	if !options.sortSet && !options.descSet {
-		options.desc = true
-	}
 	return options, nil
 }
 

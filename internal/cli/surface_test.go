@@ -255,7 +255,7 @@ func TestRegistryPathAndResetCommands(t *testing.T) {
 	}
 }
 
-func TestListDefaultsToNewestFirstWithUsefulLabelsAndShortIDs(t *testing.T) {
+func TestListDefaultsToLatestUpdateLastWithUsefulLabelsAndShortIDs(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "sessions.json")
 	store := registry.NewFileStore(path)
 	old := observeTestSession(t, store, "older-session", time.Now().Add(-time.Hour))
@@ -268,8 +268,8 @@ func TestListDefaultsToNewestFirstWithUsefulLabelsAndShortIDs(t *testing.T) {
 		t.Fatal(err)
 	}
 	output := stdout.String()
-	if strings.Index(output, "newer-session") > strings.Index(output, "older-session") {
-		t.Fatalf("list is not newest first:\n%s", output)
+	if strings.Index(output, "older-session") > strings.Index(output, "newer-session") {
+		t.Fatalf("list does not put the latest update last:\n%s", output)
 	}
 	if !strings.Contains(output, "SESSION") || strings.Contains(output, old.ID) || strings.Contains(output, newer.ID) {
 		t.Fatalf("list did not use a label and abbreviated IDs:\n%s", output)
@@ -282,7 +282,7 @@ func TestListDefaultsToNewestFirstWithUsefulLabelsAndShortIDs(t *testing.T) {
 		t.Fatal(err)
 	}
 	var sessions []registry.Session
-	if err := json.Unmarshal(stdout.Bytes(), &sessions); err != nil || len(sessions) != 2 || sessions[0].ID != newer.ID {
+	if err := json.Unmarshal(stdout.Bytes(), &sessions); err != nil || len(sessions) != 2 || sessions[0].ID != old.ID || sessions[1].ID != newer.ID {
 		t.Fatalf("list JSON = %q, %v", stdout.String(), err)
 	}
 }
