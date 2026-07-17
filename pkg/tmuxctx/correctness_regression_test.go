@@ -4,9 +4,8 @@ package tmuxctx
 
 import (
 	"context"
-	"fmt"
-	"os"
 	"os/exec"
+	"path/filepath"
 	"testing"
 )
 
@@ -28,32 +27,32 @@ func TestTmuxFormatWithRealTmuxEscapedFields(t *testing.T) {
 		t.Skip("tmux not installed")
 	}
 
-	socketName := fmt.Sprintf("agent-sessions-test-%d", os.Getpid())
+	socket := filepath.Join(t.TempDir(), "tmux.sock")
 	weirdValue := "value with spaces 'quote $dollar back\\slash\tand-tab"
 	ctx := context.Background()
 	defer func() {
-		_ = exec.CommandContext(ctx, "tmux", "-L", socketName, "kill-server").Run()
+		_ = exec.CommandContext(ctx, "tmux", "-S", socket, "kill-server").Run()
 	}()
 
 	if output, err := exec.CommandContext(
 		ctx,
 		"tmux",
-		"-L",
-		socketName,
+		"-S",
+		socket,
 		"new-session",
 		"-d",
 	).CombinedOutput(); err != nil {
 		t.Fatalf("starting tmux session: %v: %s", err, output)
 	}
-	if output, err := exec.CommandContext(ctx, "tmux", "-L", socketName, "set-option", "-gq", "@agent_sessions_weird", weirdValue).CombinedOutput(); err != nil {
+	if output, err := exec.CommandContext(ctx, "tmux", "-S", socket, "set-option", "-gq", "@agent_sessions_weird", weirdValue).CombinedOutput(); err != nil {
 		t.Fatalf("setting tmux option: %v: %s", err, output)
 	}
 
 	output, err := exec.CommandContext(
 		ctx,
 		"tmux",
-		"-L",
-		socketName,
+		"-S",
+		socket,
 		"display-message",
 		"-p",
 		"-F",

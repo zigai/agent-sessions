@@ -114,6 +114,23 @@ func TestCurrentDisplayMessageArgsWithoutPane(t *testing.T) {
 	}
 }
 
+func TestSendInterruptTargetsCustomServer(t *testing.T) {
+	t.Parallel()
+
+	var got []string
+	err := sendInterrupt(context.Background(), "-L:custom", "%12", func(_ context.Context, _ Env, args ...string) (string, error) {
+		got = append([]string(nil), args...)
+		return "", nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"-L", "custom", "send-keys", "-t", "%12", "C-c"}
+	if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
+		t.Fatalf("interrupt argv = %#v, want %#v", got, want)
+	}
+}
+
 func TestParseListPanes(t *testing.T) {
 	t.Parallel()
 

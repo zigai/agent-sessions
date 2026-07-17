@@ -213,10 +213,25 @@ func listPanesFormat() string {
 }
 
 func SendInterrupt(ctx context.Context, paneID string) error {
+	return SendInterruptTo(ctx, "", paneID)
+}
+
+// SendInterruptTo sends an interrupt to a pane on the identified tmux server.
+func SendInterruptTo(ctx context.Context, serverIdentity, paneID string) error {
+	return sendInterrupt(ctx, serverIdentity, paneID, runTmuxWithEnv)
+}
+
+func sendInterrupt(ctx context.Context, serverIdentity, paneID string, run CommandRunner) error {
 	if strings.TrimSpace(paneID) == "" {
 		return errMissingTmuxPaneID
 	}
-	_, err := runTmux(ctx, "send-keys", "-t", paneID, "C-c")
+	serverArgs, err := serverArgsForIdentity(serverIdentity)
+	if err != nil {
+		return err
+	}
+	args := append([]string{}, serverArgs...)
+	args = append(args, "send-keys", "-t", paneID, "C-c")
+	_, err = run(ctx, Env{TMUX: os.Getenv("TMUX"), TMUXPane: os.Getenv("TMUX_PANE")}, args...)
 	if err != nil {
 		return err
 	}
@@ -502,10 +517,6 @@ func parsePositiveInt(value string) int {
 	}
 
 	return parsed
-}
-
-func runTmux(ctx context.Context, args ...string) (string, error) {
-	return runTmuxWithEnv(ctx, Env{TMUX: os.Getenv("TMUX"), TMUXPane: os.Getenv("TMUX_PANE")}, args...)
 }
 
 func runTmuxWithEnv(ctx context.Context, env Env, args ...string) (string, error) {
