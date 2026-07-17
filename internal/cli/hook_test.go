@@ -54,3 +54,18 @@ func TestManagedHookGeneratedCommandUsesFastPath(t *testing.T) {
 		t.Fatalf("expected protocol JSON, got %q", stdout.String())
 	}
 }
+
+func TestManagedHookRejectsOversizedPayload(t *testing.T) {
+	t.Parallel()
+
+	app := &application{storePath: filepath.Join(t.TempDir(), "sessions.json"), outputJSON: true, stdout: &bytes.Buffer{}, stderr: &bytes.Buffer{}}
+	err := app.runManagedHook(
+		context.Background(),
+		strings.NewReader(strings.Repeat("x", maxPayloadInputBytes+1)),
+		"agy",
+		managedHookOptions{event: "PreInvocation"},
+	)
+	if !errors.Is(err, errPayloadInputTooLarge) {
+		t.Fatalf("error = %v, want %v", err, errPayloadInputTooLarge)
+	}
+}

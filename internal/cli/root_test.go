@@ -83,12 +83,96 @@ func TestPrepareReportProcessEvidenceRequiresCompleteIdentity(t *testing.T) {
 	}
 }
 
+func TestShimProcessReportsInferIdentityAndTransitionState(t *testing.T) {
+	t.Parallel()
+
+	process := processinfo.Process{PID: 42, PPID: 10, ProcessGroupID: 42, StartIdentity: "boot:42", Executable: "/bin/sh", CWD: "/work", TTY: "/dev/pts/4"}
+	store := registry.NewFileStore(filepath.Join(t.TempDir(), "sessions.json"))
+	base := time.Date(2026, 7, 17, 12, 0, 0, 0, time.UTC)
+	var sessionID string
+	for index, test := range []struct {
+		name     string
+		presence string
+		present  bool
+	}{
+		{name: "start", presence: "live", present: true},
+		{name: "exit", presence: "gone", present: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			sessionID = requireShimProcessTransition(
+				t, store, process, test.name, test.presence, test.present,
+				base.Add(time.Duration(index)*time.Second), sessionID,
+			)
+		})
+	}
+}
+
+func requireShimProcessTransition(
+	t *testing.T,
+	store *registry.FileStore,
+	process processinfo.Process,
+	name, presence string,
+	present bool,
+	observedAt time.Time,
+	previousSessionID string,
+) string {
+	t.Helper()
+	app := &application{}
+	prepared, err := app.prepareReport(nil, reportOptions{
+		harness: "droid", presence: presence, evidence: "process", pid: process.PID, event: "process." + name,
+	}, reportRuntimeContext{processes: []processinfo.Process{process}, defaultObservedAt: observedAt})
+	if err != nil {
+		t.Fatal(err)
+	}
+	observation := prepared.observation
+	requireShimObservation(t, observation, process, present)
+	session, err := store.Observe(context.Background(), observation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if previousSessionID != "" && session.ID != previousSessionID {
+		t.Fatalf("shim transitions split sessions: start=%q next=%q", previousSessionID, session.ID)
+	}
+	wantPresence := registry.PresenceLive
+	if !present {
+		wantPresence = registry.PresenceGone
+	}
+	if session.Presence != wantPresence {
+		t.Fatalf("session presence = %q, want %q", session.Presence, wantPresence)
+	}
+	return session.ID
+}
+
+func requireShimObservation(t *testing.T, observation registry.Observation, process processinfo.Process, present bool) {
+	t.Helper()
+	if observation.Source != registry.ObservationSourceProcess || observation.Process == nil || !observation.Process.Complete() || observation.Process.StartIdentity != process.StartIdentity {
+		t.Fatalf("shim process identity = %#v", observation.Process)
+	}
+	if observation.ProcessPresent == nil || *observation.ProcessPresent != present {
+		t.Fatalf("process presence = %#v, want %v", observation.ProcessPresent, present)
+	}
+}
+
 func TestPrepareReportRejectsConflictingStdinModes(t *testing.T) {
 	t.Parallel()
 	app := &application{}
 	_, err := app.prepareReport(strings.NewReader(`{}`), reportOptions{harness: "codex", rawStdin: true, rawDefaultsOnly: true}, reportRuntimeContext{})
 	if !errors.Is(err, errConflictingReportStdin) {
 		t.Fatalf("stdin mode error = %v", err)
+	}
+}
+
+func TestPrepareReportRejectsOversizedPayload(t *testing.T) {
+	t.Parallel()
+
+	app := &application{}
+	_, err := app.prepareReport(
+		strings.NewReader(strings.Repeat("x", maxPayloadInputBytes+1)),
+		reportOptions{harness: "codex", rawStdin: true},
+		reportRuntimeContext{},
+	)
+	if !errors.Is(err, errPayloadInputTooLarge) {
+		t.Fatalf("error = %v, want %v", err, errPayloadInputTooLarge)
 	}
 }
 

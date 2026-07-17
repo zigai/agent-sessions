@@ -38,7 +38,7 @@ type manageStopAllOptions struct {
 }
 type sessionStopSignaler interface {
 	ValidateStopTarget(ctx context.Context, session registry.Session, target stopTarget) (stopTargetValidation, error)
-	SendTmuxInterrupt(ctx context.Context, paneID string) error
+	SendTmuxInterrupt(ctx context.Context, serverIdentity, paneID string) error
 	SendProcessInterrupt(pid int) error
 }
 type (
@@ -50,8 +50,8 @@ type (
 )
 
 type stopTarget struct {
-	Method, Target string
-	PID            int
+	Method, Target, ServerIdentity string
+	PID                            int
 }
 type manageStopAllResult struct {
 	Stoppable, Stopped, Skipped, Failed int
@@ -91,8 +91,8 @@ func (defaultSessionStopSignaler) ValidateStopTarget(ctx context.Context, s regi
 	}
 }
 
-func (defaultSessionStopSignaler) SendTmuxInterrupt(ctx context.Context, p string) error {
-	if err := tmuxctx.SendInterrupt(ctx, p); err != nil {
+func (defaultSessionStopSignaler) SendTmuxInterrupt(ctx context.Context, serverIdentity, paneID string) error {
+	if err := tmuxctx.SendInterruptTo(ctx, serverIdentity, paneID); err != nil {
 		return fmt.Errorf("send tmux interrupt: %w", err)
 	}
 	return nil
@@ -248,16 +248,24 @@ func validateTmuxStopTarget(ctx context.Context, s registry.Session) (stopTarget
 	if e != nil {
 		return stopTargetValidation{}, fmt.Errorf("list tmux panes: %w", e)
 	}
+	return tmuxStopTargetValidation(s, panes), nil
+}
+
+func tmuxStopTargetValidation(session registry.Session, panes []tmuxctx.Pane) stopTargetValidation {
+	paneIDFound := false
 	for _, p := range panes {
-		if p.Tmux.PaneID != s.Tmux.PaneID {
+		if p.Tmux.PaneID != session.Tmux.PaneID {
 			continue
 		}
-		if !tmuxTargetMatchesSession(s.Tmux, p.Tmux) {
-			return stopTargetValidation{Reason: "tmux pane identity changed"}, nil
+		paneIDFound = true
+		if tmuxTargetMatchesSession(session.Tmux, p.Tmux) {
+			return stopTargetValidation{OK: true}
 		}
-		return stopTargetValidation{OK: true}, nil
 	}
-	return stopTargetValidation{Reason: "tmux pane no longer exists"}, nil
+	if paneIDFound {
+		return stopTargetValidation{Reason: "tmux pane identity changed"}
+	}
+	return stopTargetValidation{Reason: "tmux pane no longer exists"}
 }
 
 func validateProcessStopTarget(ctx context.Context, s registry.Session) (stopTargetValidation, error) {
@@ -303,7 +311,7 @@ func harnessCommandMatches(h registry.Harness, c string) bool {
 
 func stopTargetForSession(s registry.Session) (stopTarget, bool) {
 	if s.Tmux.PaneID != "" {
-		return stopTarget{Method: "tmux-interrupt", Target: s.Tmux.PaneID}, true
+		return stopTarget{Method: "tmux-interrupt", Target: s.Tmux.PaneID, ServerIdentity: s.Tmux.ServerSocket}, true
 	}
 	if s.Process != nil && s.Process.PID > 0 {
 		return stopTarget{Method: "pid-interrupt", Target: strconv.Itoa(s.Process.PID), PID: s.Process.PID}, true
@@ -314,7 +322,7 @@ func stopTargetForSession(s registry.Session) (stopTarget, bool) {
 func sendStopSignal(ctx context.Context, s sessionStopSignaler, t stopTarget) error {
 	switch t.Method {
 	case "tmux-interrupt":
-		if err := s.SendTmuxInterrupt(ctx, t.Target); err != nil {
+		if err := s.SendTmuxInterrupt(ctx, t.ServerIdentity, t.Target); err != nil {
 			return fmt.Errorf("send tmux interrupt: %w", err)
 		}
 		return nil

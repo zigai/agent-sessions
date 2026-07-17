@@ -85,7 +85,7 @@ func (app *application) runManagedHook(
 		return fmt.Errorf("normalizing hook harness: %w", err)
 	}
 
-	data, err := io.ReadAll(stdin)
+	data, err := readPayloadInput(stdin)
 	if err != nil {
 		return fmt.Errorf("reading hook payload: %w", err)
 	}

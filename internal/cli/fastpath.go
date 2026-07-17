@@ -149,6 +149,9 @@ func parseFastReportOptions(args []string) (reportOptions, bool, error) {
 		case "--observed-at":
 			v, e = need()
 			s.o.observedAt = v
+		case "--evidence":
+			v, e = need()
+			s.o.evidence = v
 		case "--attribute":
 			v, e = need()
 			s.o.attributes = append(s.o.attributes, v)
@@ -206,6 +209,9 @@ func parseFastReportOptions(args []string) (reportOptions, bool, error) {
 		return s.o, true, fmt.Errorf("%w: accepts one harness", errFastPathTooManyReportArgs)
 	}
 	if len(s.positionals) == 1 {
+		if s.o.harness != "" {
+			return s.o, true, fmt.Errorf("%w: harness already set", errUnexpectedReportArg)
+		}
 		s.o.harness = s.positionals[0]
 	}
 	if s.cwdChanged {

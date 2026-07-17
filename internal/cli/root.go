@@ -369,17 +369,21 @@ func (app *application) prepareReport(stdin io.Reader, options reportOptions, ru
 	}
 	observation.Process = reportProcessIdentity(harness, runtime.processes)
 	if strings.EqualFold(options.evidence, "process") {
-		if options.pid <= 0 || options.startIdentity == "" {
+		if options.pid <= 0 {
 			return preparedReport{}, errProcessEvidenceIdentity
 		}
 		if activity != "" {
 			return preparedReport{}, errProcessEvidenceActivity
 		}
+		process := processEvidenceIdentity(options, runtime.processes)
+		if process == nil || !process.Complete() {
+			return preparedReport{}, errProcessEvidenceIdentity
+		}
 		present := presence != registry.PresenceGone
 		observation.Source, observation.Evidence = registry.ObservationSourceProcess, registry.ObservationEvidenceProcessPresence
 		observation.NativeEvent = ""
 		observation.ProcessPresent = &present
-		observation.Process = &registry.ProcessIdentity{PID: options.pid, PPID: options.ppid, ProcessGroupID: options.processGroupID, StartIdentity: options.startIdentity, Executable: options.executable, CWD: options.cwd, TTY: options.tty}
+		observation.Process = process
 	}
 	if observation.Source == registry.ObservationSourceNative && !runtime.tmux.Empty() {
 		tmux := runtime.tmux
@@ -398,6 +402,28 @@ func (app *application) prepareReport(stdin io.Reader, options reportOptions, ru
 		observation.Catalog = &registry.CatalogMetadata{ResumeCommand: append([]string(nil), options.resumeCommand...), CWD: options.cwd, ProjectRoot: options.projectRoot}
 	}
 	return preparedReport{harness: harness, observation: observation, stdin: stdinData}, nil
+}
+
+func processEvidenceIdentity(options reportOptions, processes []processinfo.Process) *registry.ProcessIdentity {
+	if options.startIdentity != "" {
+		return &registry.ProcessIdentity{PID: options.pid, PPID: options.ppid, ProcessGroupID: options.processGroupID, StartIdentity: options.startIdentity, Executable: options.executable, CWD: options.cwd, TTY: options.tty}
+	}
+	for _, process := range processes {
+		if process.PID != options.pid {
+			continue
+		}
+		return &registry.ProcessIdentity{
+			PID:            process.PID,
+			PPID:           process.PPID,
+			ProcessGroupID: process.ProcessGroupID,
+			Foreground:     process.Foreground,
+			StartIdentity:  process.StartIdentity,
+			Executable:     process.Executable,
+			CWD:            process.CWD,
+			TTY:            process.TTY,
+		}
+	}
+	return nil
 }
 
 func appReportActivity(session registry.Session) string {
@@ -952,7 +978,7 @@ func readStdinPayloadData(stdin io.Reader, storeRaw, defaultsOnly bool) (json.Ra
 	if !storeRaw && !defaultsOnly {
 		return nil, nil, nil, nil
 	}
-	d, err := io.ReadAll(stdin)
+	d, err := readPayloadInput(stdin)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("read stdin payload: %w", err)
 	}

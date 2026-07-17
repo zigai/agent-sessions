@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/zigai/agent-sessions/v2/pkg/registry"
+	"github.com/zigai/agent-sessions/v2/pkg/tmuxctx"
 )
 
 var errTestSignal = errors.New("signal failed")
@@ -16,13 +17,15 @@ type recordingStopSignaler struct {
 	sendErr     error
 	pids        []int
 	panes       []string
+	servers     []string
 }
 
 func (signaler *recordingStopSignaler) ValidateStopTarget(context.Context, registry.Session, stopTarget) (stopTargetValidation, error) {
 	return signaler.validation, signaler.validateErr
 }
 
-func (signaler *recordingStopSignaler) SendTmuxInterrupt(_ context.Context, paneID string) error {
+func (signaler *recordingStopSignaler) SendTmuxInterrupt(_ context.Context, serverIdentity, paneID string) error {
+	signaler.servers = append(signaler.servers, serverIdentity)
 	signaler.panes = append(signaler.panes, paneID)
 	return signaler.sendErr
 }
@@ -38,7 +41,7 @@ func TestRunManageStopSessionsStopsUniqueValidatedLiveTargets(t *testing.T) {
 	app := &application{}
 	sessions := []registry.Session{
 		{ID: "a", Harness: registry.HarnessCodex, Presence: registry.PresenceLive, Process: &registry.ProcessIdentity{PID: 101}},
-		{ID: "b", Harness: registry.HarnessClaude, Presence: registry.PresenceLive, Tmux: registry.TmuxContext{PaneID: "%2"}},
+		{ID: "b", Harness: registry.HarnessClaude, Presence: registry.PresenceLive, Tmux: registry.TmuxContext{ServerSocket: "-L:custom", PaneID: "%2"}},
 		{ID: "c", Harness: registry.HarnessCodex, Presence: registry.PresenceLive, Process: &registry.ProcessIdentity{PID: 101}},
 		{ID: "d", Harness: registry.HarnessCodex, Presence: registry.PresenceGone, Process: &registry.ProcessIdentity{PID: 202}},
 	}
@@ -51,6 +54,22 @@ func TestRunManageStopSessionsStopsUniqueValidatedLiveTargets(t *testing.T) {
 	}
 	if len(signaler.pids) != 1 || signaler.pids[0] != 101 || len(signaler.panes) != 1 || signaler.panes[0] != "%2" {
 		t.Fatalf("signals: pids=%v panes=%v", signaler.pids, signaler.panes)
+	}
+	if len(signaler.servers) != 1 || signaler.servers[0] != "-L:custom" {
+		t.Fatalf("tmux server identities = %v", signaler.servers)
+	}
+}
+
+func TestTmuxStopTargetValidationChecksEveryServer(t *testing.T) {
+	t.Parallel()
+
+	session := registry.Session{Tmux: registry.TmuxContext{ServerSocket: "/tmp/correct", PaneID: "%1", PanePID: 42}}
+	panes := []tmuxctx.Pane{
+		{Tmux: registry.TmuxContext{ServerSocket: "/tmp/wrong", PaneID: "%1", PanePID: 41}},
+		{Tmux: registry.TmuxContext{ServerSocket: "/tmp/correct", PaneID: "%1", PanePID: 42}},
+	}
+	if validation := tmuxStopTargetValidation(session, panes); !validation.OK {
+		t.Fatalf("matching pane on later server was rejected: %#v", validation)
 	}
 }
 
