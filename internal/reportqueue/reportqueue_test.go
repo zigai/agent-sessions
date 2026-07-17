@@ -1,10 +1,12 @@
 package reportqueue
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -48,6 +50,52 @@ func TestQueueEnqueueDrainSuccess(t *testing.T) {
 	}
 	requireNoQueueFiles(t, queue.pendingDir(), "pending")
 	requireNoQueueFiles(t, queue.processingDir(), "processing")
+}
+
+func TestQueueEnqueueRejectsUnsafeID(t *testing.T) {
+	t.Parallel()
+
+	for _, id := range []string{".", "..", "../escaped", `..\escaped`, "nested/item", `nested\item`} {
+		t.Run(id, func(t *testing.T) {
+			storePath := filepath.Join(t.TempDir(), "state.json")
+			queue := New(storePath)
+			envelope := testEnvelope(storePath, "abc", registry.ActivityRunning, time.Now().UTC())
+			envelope.ID = id
+
+			_, err := queue.Enqueue(context.Background(), envelope, EnqueueOptions{})
+			if !errors.Is(err, errEnvelopeID) {
+				t.Fatalf("Enqueue() error = %v, want %v", err, errEnvelopeID)
+			}
+			if _, statErr := os.Stat(filepath.Join(queue.Root(), "escaped.json")); !errors.Is(statErr, os.ErrNotExist) {
+				t.Fatalf("unsafe queue item escaped pending directory: %v", statErr)
+			}
+		})
+	}
+}
+
+func TestQueueEnqueueDoesNotOverwriteDuplicateID(t *testing.T) {
+	t.Parallel()
+
+	storePath := filepath.Join(t.TempDir(), "state.json")
+	queue := New(storePath)
+	now := time.Now().UTC()
+	first := testEnvelope(storePath, "first", registry.ActivityRunning, now)
+	first.ID = "duplicate"
+	result := enqueueTestEnvelope(t, queue, first, now)
+
+	second := testEnvelope(storePath, "second", registry.ActivityWaiting, now.Add(time.Second))
+	second.ID = first.ID
+	if _, err := queue.Enqueue(context.Background(), second, EnqueueOptions{}); !errors.Is(err, os.ErrExist) {
+		t.Fatalf("duplicate Enqueue() error = %v, want os.ErrExist", err)
+	}
+
+	stored, err := readEnvelope(result.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Report.Identity.SessionID != "first" {
+		t.Fatalf("duplicate enqueue replaced pending item: %#v", stored.Report.Identity)
+	}
 }
 
 func TestQueueDrainRescansPendingBeforeUnlock(t *testing.T) {
@@ -110,6 +158,38 @@ func TestQueueDrainRetriesTransientError(t *testing.T) {
 	requireQueueStatus(t, queue, 1, 0, 0)
 }
 
+func TestQueueRetrySaturatesCorruptAttemptCounter(t *testing.T) {
+	t.Parallel()
+
+	storePath := filepath.Join(t.TempDir(), "state.json")
+	queue := New(storePath)
+	now := time.Now().UTC()
+	envelope := testEnvelope(storePath, "abc", registry.ActivityRunning, now)
+	envelope.Attempt = math.MaxInt
+	enqueueTestEnvelope(t, queue, envelope, now)
+
+	result, err := queue.Drain(context.Background(), testDrainOptions(now, func(context.Context, Envelope) error {
+		return errTemporaryStoreFailure
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Retried != 1 {
+		t.Fatalf("Drain() result = %#v, want one retry", result)
+	}
+	pending := globQueueFiles(t, queue.pendingDir())
+	if len(pending) != 1 {
+		t.Fatalf("pending items = %#v, want one", pending)
+	}
+	retried, err := readEnvelope(pending[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retried.Attempt != math.MaxInt || !retried.NextAttemptAt.Equal(now.Add(time.Minute)) {
+		t.Fatalf("retry metadata overflowed: attempt=%d next=%s", retried.Attempt, retried.NextAttemptAt)
+	}
+}
+
 func TestQueueDrainPermanentErrorMovesDead(t *testing.T) {
 	storePath := filepath.Join(t.TempDir(), "state.json")
 	queue := New(storePath)
@@ -130,6 +210,63 @@ func TestQueueDrainPermanentErrorMovesDead(t *testing.T) {
 	}
 	if dead := globQueueFiles(t, queue.deadDir()); len(dead) != 1 {
 		t.Fatalf("expected one dead item, got %#v", dead)
+	}
+}
+
+func TestQueueDrainDeadLettersOversizedItemWithoutProcessing(t *testing.T) {
+	t.Parallel()
+
+	queue := New(filepath.Join(t.TempDir(), "state.json"))
+	if err := ensureQueueDirs(queue); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(queue.pendingDir(), "oversized.json")
+	if err := os.WriteFile(path, bytes.Repeat([]byte{'x'}, maxQueueFileBytes+1), fileMode); err != nil {
+		t.Fatal(err)
+	}
+	processed := false
+	result, err := queue.Drain(context.Background(), testDrainOptions(time.Now().UTC(), func(context.Context, Envelope) error {
+		processed = true
+		return nil
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if processed || result.Dead != 1 || result.Processed != 0 {
+		t.Fatalf("oversized item reached processor: result=%#v processed=%v", result, processed)
+	}
+	dead, globErr := filepath.Glob(filepath.Join(queue.deadDir(), "*.invalid"))
+	if globErr != nil {
+		t.Fatal(globErr)
+	}
+	if len(dead) != 1 {
+		t.Fatalf("oversized item was not dead-lettered: %#v", dead)
+	}
+}
+
+func TestQueueDrainDeadLettersMismatchedEnvelopeID(t *testing.T) {
+	t.Parallel()
+
+	storePath := filepath.Join(t.TempDir(), "state.json")
+	queue := New(storePath)
+	if err := ensureQueueDirs(queue); err != nil {
+		t.Fatal(err)
+	}
+	envelope := testEnvelope(storePath, "session", registry.ActivityRunning, time.Now().UTC())
+	envelope.ID = "content-id"
+	if err := writeJSONAtomic(filepath.Join(queue.pendingDir(), "filename-id.json"), envelope); err != nil {
+		t.Fatal(err)
+	}
+	processed := false
+	result, err := queue.Drain(context.Background(), testDrainOptions(time.Now().UTC(), func(context.Context, Envelope) error {
+		processed = true
+		return nil
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if processed || result.Dead != 1 || result.Processed != 0 {
+		t.Fatalf("mismatched item reached processor: result=%#v processed=%v", result, processed)
 	}
 }
 
@@ -466,11 +603,13 @@ func TestQueueStatusReportsBacklog(t *testing.T) {
 	}
 	now := time.Now().UTC()
 	deferred := testEnvelope("", "deferred", registry.ActivityRunning, now)
+	deferred.ID = "deferred"
 	deferred.NextAttemptAt = now.Add(time.Minute)
 	if err := writeJSONAtomic(filepath.Join(queue.pendingDir(), "deferred.json"), deferred); err != nil {
 		t.Fatalf("write deferred envelope: %v", err)
 	}
 	stale := testEnvelope("", "stale", registry.ActivityRunning, now.Add(time.Second))
+	stale.ID = "stale"
 	stale.Attempt = 2
 	stale.ProcessingStartedAt = now.Add(-defaultLeaseTimeout - time.Second)
 	stale.WorkerPID = 99999999

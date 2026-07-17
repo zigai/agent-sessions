@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -286,7 +287,9 @@ func (q Queue) pendingItems() ([]string, error) {
 }
 
 func (q Queue) claim(path string, envelope Envelope, now time.Time) (string, Envelope, error) {
-	envelope.Attempt++
+	if envelope.Attempt < math.MaxInt {
+		envelope.Attempt++
+	}
 	envelope.ProcessingStartedAt = now
 	envelope.WorkerPID = os.Getpid()
 	envelope.LastError = ""
@@ -341,12 +344,10 @@ func retryDelay(attempt int) time.Duration {
 	if attempt < 1 {
 		attempt = 1
 	}
-	delay := time.Duration(attempt) * time.Second
-	if delay > time.Minute {
+	if attempt >= int(time.Minute/time.Second) {
 		return time.Minute
 	}
-
-	return delay
+	return time.Duration(attempt) * time.Second
 }
 
 func isPermanent(err error) bool {

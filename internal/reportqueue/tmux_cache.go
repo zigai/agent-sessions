@@ -157,7 +157,7 @@ func emptyTmuxContext() registry.TmuxContext {
 
 func readGenericJSON[T any](path string) (T, error) {
 	var value T
-	data, err := os.ReadFile(path)
+	data, err := readQueueFile(path)
 	if err != nil {
 		return value, fmt.Errorf("reading %s: %w", path, err)
 	}

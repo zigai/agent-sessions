@@ -42,8 +42,11 @@ func (q Queue) Enqueue(ctx context.Context, envelope Envelope, options EnqueueOp
 	if envelope.ID == "" {
 		envelope.ID = NewEnvelopeID(envelope.CreatedAt)
 	}
+	if err := validateEnvelopeID(envelope.ID); err != nil {
+		return EnqueueResult{}, err
+	}
 	path := filepath.Join(q.pendingDir(), envelope.ID+".json")
-	if err := writeJSONAtomic(path, envelope); err != nil {
+	if err := writeJSONExclusive(path, envelope); err != nil {
 		return EnqueueResult{}, fmt.Errorf("enqueueing report: %w", err)
 	}
 
