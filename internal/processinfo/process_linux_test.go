@@ -4,6 +4,7 @@ package processinfo
 
 import (
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -56,4 +57,23 @@ func TestListCurrentUser(t *testing.T) {
 	if current.StartIdentity == "" || !strings.Contains(current.StartIdentity, ":") {
 		t.Fatalf("current process identity = %q", current.StartIdentity)
 	}
+}
+
+func FuzzParseLinuxStat(f *testing.F) {
+	f.Add("123 (agent) S 1 123 0 0 0 123 0 0 0 0 0 0 0 0 0 0 0 0 987654")
+	f.Add("123 (agent ) worker) S 1 123 0 0 0 123 0 0 0 0 0 0 0 0 0 0 0 0 987654")
+	f.Add("not a stat record")
+
+	f.Fuzz(func(t *testing.T, stat string) {
+		process, err := parseLinuxStat(stat)
+		if err != nil {
+			return
+		}
+		if process.PID <= 0 || process.PPID < 0 || process.ProcessGroupID < 0 {
+			t.Fatalf("invalid process fields accepted: %#v", process)
+		}
+		if _, err := strconv.ParseUint(process.StartIdentity, 10, 64); err != nil {
+			t.Fatalf("invalid start identity accepted: %q", process.StartIdentity)
+		}
+	})
 }
