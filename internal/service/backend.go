@@ -9,5 +9,5 @@ type backend interface {
 	load(ctx context.Context, executor CommandExecutor) error
 	restart(ctx context.Context, executor CommandExecutor) error
 	unload(ctx context.Context, executor CommandExecutor) error
-	running(ctx context.Context, executor CommandExecutor) (bool, string)
+	running(ctx context.Context, executor CommandExecutor) (bool, string, error)
 }

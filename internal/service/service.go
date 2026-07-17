@@ -222,7 +222,10 @@ func (s *Service) Status(ctx context.Context, options Options) (Result, error) {
 	if !isManaged(string(content)) {
 		return result, fmt.Errorf("%w: %s", ErrForeign, result.Path)
 	}
-	running, message := backend.running(ctx, s.executor)
+	running, message, err := backend.running(ctx, s.executor)
+	if err != nil {
+		return result, err
+	}
 	result.Running, result.Message = running, message
 	if !result.Current {
 		result.Message = "stale; " + result.Message
@@ -250,7 +253,10 @@ func (s *Service) apply(ctx context.Context, options Options, update bool) (Resu
 	result.Installed = installed
 	result.Current = installed && string(content) == backend.content()
 	if installed && result.Current {
-		running, _ := backend.running(ctx, s.executor)
+		running, _, err := backend.running(ctx, s.executor)
+		if err != nil {
+			return result, err
+		}
 		if running {
 			result.Running = true
 			result.Message = "already enabled"

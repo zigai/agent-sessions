@@ -107,15 +107,15 @@ func (b *linuxBackend) unload(ctx context.Context, executor CommandExecutor) err
 	return nil
 }
 
-func (b *linuxBackend) running(ctx context.Context, executor CommandExecutor) (bool, string) {
+func (b *linuxBackend) running(ctx context.Context, executor CommandExecutor) (bool, string, error) {
 	_, err := executor.Run(ctx, "systemctl", "--user", "is-active", "--quiet", linuxUnitName)
 	if err == nil {
-		return true, "running"
+		return true, "running", nil
 	}
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-		return false, err.Error()
+		return false, "", fmt.Errorf("checking systemd service status: %w", err)
 	}
-	return false, "not running"
+	return false, "not running", nil
 }
 
 func systemdArg(value string) string {

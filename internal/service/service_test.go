@@ -122,6 +122,21 @@ func TestStatusManagerStoppedIsRepresented(t *testing.T) {
 	}
 }
 
+func TestStatusPropagatesManagerCancellation(t *testing.T) {
+	config := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", config)
+	options := Options{Binary: "/bin/agent-sessions", StorePath: "/tmp/store"}
+	manager := New(&recordingExecutor{})
+	if _, err := manager.Install(context.Background(), options); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := New(&recordingExecutor{err: context.Canceled}).Status(context.Background(), options)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Status() error = %v, want context.Canceled", err)
+	}
+}
+
 func TestStatusReportsRunningStaleService(t *testing.T) {
 	config := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", config)

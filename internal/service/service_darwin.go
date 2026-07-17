@@ -104,15 +104,15 @@ func (b *darwinBackend) unload(ctx context.Context, executor CommandExecutor) er
 	return nil
 }
 
-func (b *darwinBackend) running(ctx context.Context, executor CommandExecutor) (bool, string) {
+func (b *darwinBackend) running(ctx context.Context, executor CommandExecutor) (bool, string, error) {
 	_, err := executor.Run(ctx, "launchctl", "print", b.domain+"/"+darwinLabel)
 	if err == nil {
-		return true, "running"
+		return true, "running", nil
 	}
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-		return false, err.Error()
+		return false, "", fmt.Errorf("checking launchd service status: %w", err)
 	}
-	return false, "not running"
+	return false, "not running", nil
 }
 
 func xmlEscape(value string) string {
