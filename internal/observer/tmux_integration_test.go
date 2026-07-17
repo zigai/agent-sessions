@@ -24,9 +24,9 @@ func TestRealTmuxBottomScreenDetectionForFourAgents(t *testing.T) {
 	if _, err := exec.LookPath("tmux"); err != nil {
 		t.Skip("tmux is not installed")
 	}
-	name := fmt.Sprintf("agent-sessions-detect-%d", os.Getpid())
+	socket := filepath.Join(t.TempDir(), "tmux.sock")
 	ctx := context.Background()
-	defer func() { _ = exec.CommandContext(context.Background(), "tmux", "-L", name, "kill-server").Run() }()
+	defer func() { _ = exec.CommandContext(context.Background(), "tmux", "-S", socket, "kill-server").Run() }()
 
 	tests := []struct {
 		harness registry.Harness
@@ -50,10 +50,10 @@ func TestRealTmuxBottomScreenDetectionForFourAgents(t *testing.T) {
 		if err := os.Chmod(script, 0o700); err != nil {
 			t.Fatal(err)
 		}
-		if output, err := exec.CommandContext(ctx, "tmux", "-L", name, "-f", "/dev/null", "new-session", "-d", "-s", sessionName, script).CombinedOutput(); err != nil {
+		if output, err := exec.CommandContext(ctx, "tmux", "-S", socket, "-f", "/dev/null", "new-session", "-d", "-s", sessionName, script).CombinedOutput(); err != nil {
 			t.Fatalf("start tmux session %s: %v: %s", sessionName, err, output)
 		}
-		output, err := exec.CommandContext(ctx, "tmux", "-L", name, "display-message", "-p", "-t", sessionName, "-F", "#{pane_id}|#{pane_tty}|#{pane_pid}").Output()
+		output, err := exec.CommandContext(ctx, "tmux", "-S", socket, "display-message", "-p", "-t", sessionName, "-F", "#{pane_id}|#{pane_tty}|#{pane_pid}").Output()
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -67,8 +67,8 @@ func TestRealTmuxBottomScreenDetectionForFourAgents(t *testing.T) {
 		}
 		processPID := 5000 + index
 		processes = append(processes, processinfo.Process{PID: processPID, PPID: panePID, ProcessGroupID: processPID, Foreground: true, StartIdentity: "test:" + sessionName, Executable: "/usr/bin/" + sessionName, CWD: "/tmp", TTY: fields[1], Args: []string{sessionName}})
-		tmux := registry.TmuxContext{Inside: true, ServerSocket: "-L:" + name, SessionID: "$" + strconv.Itoa(index+1), SessionName: sessionName, WindowID: "@" + strconv.Itoa(index+1), WindowIndex: "0", WindowName: sessionName, PaneID: fields[0], PaneIndex: "0", PaneCurrentPath: "/tmp", PanePID: panePID, PaneTTY: fields[1]}
-		pane := tmuxctx.Pane{Tmux: tmux, ServerIdentity: "-L:" + name, PanePID: panePID, PaneTTY: fields[1]}
+		tmux := registry.TmuxContext{Inside: true, ServerSocket: socket, SessionID: "$" + strconv.Itoa(index+1), SessionName: sessionName, WindowID: "@" + strconv.Itoa(index+1), WindowIndex: "0", WindowName: sessionName, PaneID: fields[0], PaneIndex: "0", PaneCurrentPath: "/tmp", PanePID: panePID, PaneTTY: fields[1]}
+		pane := tmuxctx.Pane{Tmux: tmux, ServerIdentity: socket, PanePID: panePID, PaneTTY: fields[1]}
 		panes = append(panes, pane)
 		deadline := time.Now().Add(2 * time.Second)
 		for {

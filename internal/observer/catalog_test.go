@@ -2,6 +2,10 @@ package observer
 
 import (
 	"context"
+	"errors"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -38,5 +42,27 @@ func TestDefaultCatalogListEmptyWithoutConfiguration(t *testing.T) {
 	}
 	if entries != nil {
 		t.Fatalf("expected nil catalog, got %#v", entries)
+	}
+}
+
+func TestDecodeCatalogRejectsNull(t *testing.T) {
+	t.Parallel()
+
+	if _, err := decodeCatalog([]byte("null")); !errors.Is(err, errCatalogSessionsType) {
+		t.Fatalf("decodeCatalog() error = %v, want %v", err, errCatalogSessionsType)
+	}
+}
+
+func TestDefaultCatalogListRejectsOversizedFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "catalog.json")
+	if err := os.WriteFile(path, []byte(strings.Repeat("x", maxCatalogBytes+1)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(catalogJSONEnv, "")
+	t.Setenv(catalogFileEnv, path)
+
+	_, err := DefaultCatalogList(context.Background())
+	if !errors.Is(err, errCatalogTooLarge) {
+		t.Fatalf("DefaultCatalogList() error = %v, want %v", err, errCatalogTooLarge)
 	}
 }
