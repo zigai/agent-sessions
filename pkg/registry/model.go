@@ -359,6 +359,33 @@ func ValidateObservation(observation Observation) error {
 	if observation.Harness == "" {
 		return fmt.Errorf("%w: harness is required", ErrInvalidObservation)
 	}
+	if normalized, err := NormalizeHarness(string(observation.Harness)); err != nil || normalized != observation.Harness {
+		return fmt.Errorf("%w: harness %q is not canonical", ErrInvalidObservation, observation.Harness)
+	}
+	if observation.Lifecycle != nil {
+		if normalized, err := NormalizeLifecycle(string(*observation.Lifecycle)); err != nil || normalized != *observation.Lifecycle {
+			return fmt.Errorf("%w: lifecycle %q is invalid", ErrInvalidObservation, *observation.Lifecycle)
+		}
+	}
+	if observation.Presence != nil {
+		if normalized, err := NormalizePresence(string(*observation.Presence)); err != nil || normalized == "" || normalized != *observation.Presence {
+			return fmt.Errorf("%w: presence %q is invalid", ErrInvalidObservation, *observation.Presence)
+		}
+	}
+	if observation.Activity != nil {
+		if normalized, err := NormalizeActivity(string(*observation.Activity)); err != nil || normalized == "" || normalized != *observation.Activity {
+			return fmt.Errorf("%w: activity %q is invalid", ErrInvalidObservation, *observation.Activity)
+		}
+	}
+	if observation.Process != nil && (!observation.Process.Complete() || observation.Process.PPID < 0 || observation.Process.ProcessGroupID < 0) {
+		return fmt.Errorf("%w: process identity is invalid", ErrInvalidObservation)
+	}
+	if observation.Tmux != nil && observation.Tmux.PanePID < 0 {
+		return fmt.Errorf("%w: tmux pane pid is invalid", ErrInvalidObservation)
+	}
+	if observation.Catalog != nil && observation.Catalog.ProcessPID < 0 {
+		return fmt.Errorf("%w: catalog process pid is invalid", ErrInvalidObservation)
+	}
 	if observation.Source == "" || observation.Evidence == "" {
 		return fmt.Errorf("%w: source and evidence are required", ErrInvalidObservation)
 	}

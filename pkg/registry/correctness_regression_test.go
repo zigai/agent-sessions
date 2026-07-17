@@ -99,25 +99,4 @@ func TestNativeProcessIdentitySeedsObserverReconciliation(t *testing.T) {
 	}
 }
 
-func TestCatalogOnlyCreationIsClaudeCurrentOnly(t *testing.T) {
-	t.Parallel()
-	store := NewFileStore(filepath.Join(t.TempDir(), "sessions.json"))
-	at := time.Now().UTC().Add(-time.Minute)
-	old := &CatalogMetadata{Current: false, CWD: "/history"}
-	if _, err := store.ObserveBatch(context.Background(), []Observation{{Source: ObservationSourceCatalog, Evidence: ObservationEvidenceCatalogMetadata, Harness: HarnessGoose, Identity: ObservationIdentity{SessionID: "old"}, Catalog: old, ObservedAt: at}}); err != nil {
-		t.Fatal(err)
-	}
-	if sessions, err := store.List(context.Background(), Filter{}); err != nil || len(sessions) != 0 {
-		t.Fatalf("historical catalog created record: %#v %v", sessions, err)
-	}
-	current := &CatalogMetadata{Current: true, CWD: "/work"}
-	created, err := store.Observe(context.Background(), Observation{Source: ObservationSourceCatalog, Evidence: ObservationEvidenceCatalogMetadata, Harness: HarnessClaude, Identity: ObservationIdentity{SessionID: "current"}, Catalog: current, ObservedAt: at.Add(time.Second)})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if created.Presence != PresenceUnknown || created.Activity == nil || *created.Activity != ActivityUnknown {
-		t.Fatalf("unexpected catalog-only record: %#v", created)
-	}
-}
-
 func boolPtr(value bool) *bool { return &value }

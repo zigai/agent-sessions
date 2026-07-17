@@ -3,9 +3,6 @@ package registry
 import (
 	"context"
 	"encoding/json"
-	"errors"
-	"fmt"
-	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -101,24 +98,4 @@ func TestV2CatalogCreationPolicyAndJSON(t *testing.T) {
 	if wire["schema_version"] != float64(storeSchemaVersion) {
 		t.Fatalf("schema version: %s", data)
 	}
-}
-
-func TestV2StoreRejectsV1Header(t *testing.T) {
-	t.Parallel()
-	path := filepath.Join(t.TempDir(), "sessions.json")
-	if err := osWriteFile(path, []byte(`{"version":1,"sessions":{}}`)); err != nil {
-		t.Fatal(err)
-	}
-	_, err := NewFileStore(path).List(context.Background(), Filter{})
-	var unsupported *UnsupportedSchemaError
-	if !errors.As(err, &unsupported) {
-		t.Fatalf("expected unsupported schema, got %v", err)
-	}
-}
-
-func osWriteFile(path string, data []byte) error {
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		return fmt.Errorf("write test store: %w", err)
-	}
-	return nil
 }

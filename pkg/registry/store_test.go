@@ -6,6 +6,8 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
+	"sync"
 	"testing"
 	"time"
 )
@@ -33,6 +35,45 @@ func TestStoreBatchIsAtomicOnSourceConflict(t *testing.T) {
 	}
 	if session.Activity == nil || *session.Activity != ActivityIdle {
 		t.Fatalf("failed batch partially committed: %#v", session)
+	}
+}
+
+func TestStoreConcurrentWritersPreserveEverySession(t *testing.T) {
+	t.Parallel()
+
+	const writerCount = 32
+	store := NewFileStore(filepath.Join(t.TempDir(), "sessions.json"))
+	start := make(chan struct{})
+	errs := make(chan error, writerCount)
+	var writers sync.WaitGroup
+	writers.Add(writerCount)
+	for index := range writerCount {
+		go func() {
+			defer writers.Done()
+			<-start
+			_, err := store.Observe(context.Background(), Observation{
+				Source: ObservationSourceNative, Evidence: ObservationEvidenceNativeEvent,
+				Harness: HarnessCodex, Identity: ObservationIdentity{SessionID: "concurrent-" + strconv.Itoa(index)},
+				NativeEvent: "start", ObservedAt: time.Now().UTC(),
+			})
+			errs <- err
+		}()
+	}
+	close(start)
+	writers.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	sessions, err := store.List(context.Background(), Filter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != writerCount {
+		t.Fatalf("sessions = %d, want %d; concurrent writes lost data", len(sessions), writerCount)
 	}
 }
 
@@ -109,4 +150,183 @@ func TestStoreRejectsSchemaV1(t *testing.T) {
 	if !errors.As(err, &unsupported) {
 		t.Fatalf("expected unsupported schema, got %v", err)
 	}
+}
+
+func TestStoreGCUsesInclusiveAgeBoundary(t *testing.T) {
+	t.Parallel()
+
+	base := time.Date(2026, 7, 17, 12, 0, 0, 0, time.UTC)
+	threshold := 10 * time.Minute
+	store := NewFileStore(filepath.Join(t.TempDir(), "sessions.json"))
+	store.SetNowForTest(func() time.Time { return base })
+	presence := PresenceGone
+	for _, observation := range []Observation{
+		{Source: ObservationSourceNative, Evidence: ObservationEvidenceNativeEvent, Harness: HarnessCodex, Identity: ObservationIdentity{SessionID: "at-threshold"}, Presence: &presence, ObservedAt: base.Add(-threshold)},
+		{Source: ObservationSourceNative, Evidence: ObservationEvidenceNativeEvent, Harness: HarnessCodex, Identity: ObservationIdentity{SessionID: "one-nanosecond-newer"}, Presence: &presence, ObservedAt: base.Add(-threshold).Add(time.Nanosecond)},
+	} {
+		if _, err := store.Observe(context.Background(), observation); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	result, err := store.GC(context.Background(), threshold)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Deleted != 1 || result.Remaining != 1 {
+		t.Fatalf("GC() result = %#v, want one deleted and one remaining", result)
+	}
+	sessions, err := store.List(context.Background(), Filter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 1 || sessions[0].SessionID != "one-nanosecond-newer" {
+		t.Fatalf("GC() deleted wrong boundary session: %#v", sessions)
+	}
+}
+
+func TestSummariesCountIndependentPresenceAndActivity(t *testing.T) {
+	t.Parallel()
+
+	activity := func(value Activity) *Activity { return &value }
+	sessions := []Session{
+		{Presence: PresenceLive, Activity: activity(ActivityRunning), Tmux: TmuxContext{SessionID: "$1", SessionName: "work"}},
+		{Presence: PresenceLive, Activity: activity(ActivityWaiting), Tmux: TmuxContext{SessionID: "$1", SessionName: "work"}},
+		{Presence: PresenceLive, Activity: activity(ActivityIdle), Tmux: TmuxContext{SessionID: "$1", SessionName: "work"}},
+		{Presence: PresenceGone, Activity: nil, Tmux: TmuxContext{SessionID: "$1", SessionName: "work"}},
+		{Presence: PresenceUnknown, Activity: activity(ActivityUnknown)},
+	}
+	summaries := summariesForSessions(sessions)
+	if len(summaries) != 2 {
+		t.Fatalf("summaries = %#v, want work and unknown groups", summaries)
+	}
+	work := summaries[0]
+	if work.Total != 4 || work.Live != 3 || work.Gone != 1 || work.Running != 1 || work.Waiting != 1 || work.Idle != 1 || work.ActivityUnknown != 0 {
+		t.Fatalf("work summary = %#v", work)
+	}
+	unknown := summaries[1]
+	if unknown.Total != 1 || unknown.PresenceUnknown != 1 || unknown.ActivityUnknown != 1 {
+		t.Fatalf("unknown summary = %#v", unknown)
+	}
+}
+
+func TestValidateObservationRejectsCorruptBoundaryValues(t *testing.T) {
+	t.Parallel()
+
+	base := Observation{
+		Source: ObservationSourceNative, Evidence: ObservationEvidenceNativeEvent,
+		Harness: HarnessCodex, Identity: ObservationIdentity{SessionID: "session"},
+		NativeEvent: "start", ObservedAt: time.Now().UTC(),
+	}
+	tests := []struct {
+		name   string
+		mutate func(*Observation)
+	}{
+		{name: "unknown harness", mutate: func(observation *Observation) { observation.Harness = Harness("unknown") }},
+		{name: "noncanonical harness", mutate: func(observation *Observation) { observation.Harness = Harness("claude-code") }},
+		{name: "invalid lifecycle", mutate: func(observation *Observation) { value := NativeLifecycle("restart"); observation.Lifecycle = &value }},
+		{name: "invalid presence", mutate: func(observation *Observation) { value := Presence("present"); observation.Presence = &value }},
+		{name: "invalid activity", mutate: func(observation *Observation) { value := Activity("busy"); observation.Activity = &value }},
+		{name: "incomplete process", mutate: func(observation *Observation) { observation.Process = &ProcessIdentity{PID: 42} }},
+		{name: "negative parent pid", mutate: func(observation *Observation) {
+			observation.Process = &ProcessIdentity{PID: 42, PPID: -1, StartIdentity: "boot:42"}
+		}},
+		{name: "negative tmux pid", mutate: func(observation *Observation) { observation.Tmux = &TmuxContext{PanePID: -1} }},
+		{name: "negative catalog pid", mutate: func(observation *Observation) { observation.Catalog = &CatalogMetadata{ProcessPID: -1} }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			observation := base
+			test.mutate(&observation)
+			if err := ValidateObservation(observation); !errors.Is(err, ErrInvalidObservation) {
+				t.Fatalf("ValidateObservation() error = %v, want %v", err, ErrInvalidObservation)
+			}
+		})
+	}
+}
+
+func TestStoreRejectsCorruptPersistedSessionState(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		mutate func(*snapshot)
+	}{
+		{name: "mismatched map key", mutate: corruptSnapshotMapKey},
+		{name: "invalid activity", mutate: corruptSnapshotActivity},
+		{name: "incomplete process", mutate: corruptSnapshotProcess},
+		{name: "zero observation timestamp", mutate: corruptSnapshotObservationTime},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store := writeCorruptTestStore(t, test.mutate)
+			_, err := store.List(context.Background(), Filter{})
+			if !errors.Is(err, ErrCorruptStore) {
+				t.Fatalf("List() error = %v, want %v", err, ErrCorruptStore)
+			}
+		})
+	}
+}
+
+func writeCorruptTestStore(t *testing.T, mutate func(*snapshot)) *FileStore {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "sessions.json")
+	store := NewFileStore(path)
+	_, err := store.Observe(context.Background(), Observation{
+		Source: ObservationSourceNative, Evidence: ObservationEvidenceNativeEvent,
+		Harness: HarnessCodex, Identity: ObservationIdentity{SessionID: "session"},
+		NativeEvent: "start", ObservedAt: time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var snap snapshot
+	if err := json.Unmarshal(data, &snap); err != nil {
+		t.Fatal(err)
+	}
+	mutate(&snap)
+	data, err = json.Marshal(snap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return store
+}
+
+func corruptSnapshotMapKey(snap *snapshot) {
+	id, session := onlyStoredSession(snap.Sessions)
+	delete(snap.Sessions, id)
+	snap.Sessions["different-id"] = session
+}
+
+func corruptSnapshotActivity(snap *snapshot) {
+	id, session := onlyStoredSession(snap.Sessions)
+	activity := Activity("busy")
+	session.Activity = &activity
+	snap.Sessions[id] = session
+}
+
+func corruptSnapshotProcess(snap *snapshot) {
+	id, session := onlyStoredSession(snap.Sessions)
+	session.Process = &ProcessIdentity{PID: 42}
+	snap.Sessions[id] = session
+}
+
+func corruptSnapshotObservationTime(snap *snapshot) {
+	id, session := onlyStoredSession(snap.Sessions)
+	session.Observations.Native.ObservedAt = time.Time{}
+	snap.Sessions[id] = session
+}
+
+func onlyStoredSession(sessions map[string]Session) (string, Session) {
+	for id, session := range sessions {
+		return id, session
+	}
+	return "", Session{}
 }
