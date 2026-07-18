@@ -13,11 +13,15 @@ import (
 	"time"
 )
 
-var errInactive = errors.New("inactive")
+var (
+	errInactive           = errors.New("inactive")
+	errManagerTestFailure = errors.New("manager test failure")
+)
 
 type recordingExecutor struct {
-	calls [][]string
-	err   error
+	calls  [][]string
+	err    error
+	failAt int
 }
 
 func (r *recordingExecutor) Run(_ context.Context, name string, args ...string) ([]byte, error) {
@@ -25,6 +29,9 @@ func (r *recordingExecutor) Run(_ context.Context, name string, args ...string) 
 	r.calls = append(r.calls, call)
 	if r.err != nil {
 		return nil, r.err
+	}
+	if r.failAt > 0 && len(r.calls) == r.failAt {
+		return nil, errManagerTestFailure
 	}
 	return nil, nil
 }
@@ -37,6 +44,16 @@ func TestRenderSystemdUnit(t *testing.T) {
 	want := "# agent-sessions managed observer service\n# version: 3\n[Unit]\nDescription=Agent Sessions observer\n\n[Service]\nExecStart=\"/tmp/agent sessions\" --store /tmp/state.json monitor run --interval 3s --grace-period 0s --quiet\nRestart=on-failure\n\n[Install]\nWantedBy=default.target\n"
 	if got != want {
 		t.Fatalf("rendered unit = %q, want %q", got, want)
+	}
+}
+
+func TestRenderSystemdUnitEscapesLiteralPercentSigns(t *testing.T) {
+	got, err := RenderSystemdUnit(Options{Binary: "/tmp/%h/agent-sessions", StorePath: "/tmp/%u/state.json", Interval: 3 * time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got, "ExecStart=/tmp/%%h/agent-sessions --store /tmp/%%u/state.json ") {
+		t.Fatalf("systemd specifiers were not escaped: %s", got)
 	}
 }
 
@@ -210,6 +227,86 @@ func TestUpdateCurrentRunningServiceIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestUpdateManagerFailureRestoresRetryableDefinition(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		failAt int
+	}{{name: "reload", failAt: 1}, {name: "restart", failAt: 2}} {
+		t.Run(test.name, func(t *testing.T) {
+			requireRetryableUpdateAfterManagerFailure(t, test.failAt)
+		})
+	}
+}
+
+func requireRetryableUpdateAfterManagerFailure(t *testing.T, failAt int) {
+	t.Helper()
+	config := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", config)
+	path := filepath.Join(config, "systemd", "user", linuxUnitName)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	previous := []byte("# " + managedMarker + "\n# version: 2\nstale\n")
+	//nolint:gosec // The fixture mirrors systemd's intentionally world-readable user-unit mode.
+	if err := os.WriteFile(path, previous, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	executor := &recordingExecutor{failAt: failAt}
+	manager := New(executor)
+	options := Options{Binary: "/bin/agent-sessions", StorePath: "/tmp/store"}
+	if _, err := manager.Update(context.Background(), options); !errors.Is(err, errManagerTestFailure) {
+		t.Fatalf("Update() error = %v, want manager failure", err)
+	}
+	restored, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(restored) != string(previous) {
+		t.Fatalf("service definition after rollback = %q, want %q", restored, previous)
+	}
+	executor.calls = nil
+	executor.failAt = 0
+	result, err := manager.Update(context.Background(), options)
+	if err != nil {
+		t.Fatalf("retry Update() error = %v", err)
+	}
+	if !result.Changed || !result.Current {
+		t.Fatalf("retry result = %#v", result)
+	}
+}
+
+func TestInstallManagerFailureRemovesPublishedDefinition(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		failAt int
+	}{{name: "reload", failAt: 1}, {name: "load", failAt: 2}} {
+		t.Run(test.name, func(t *testing.T) {
+			requireRetryableInstallAfterManagerFailure(t, test.failAt)
+		})
+	}
+}
+
+func requireRetryableInstallAfterManagerFailure(t *testing.T, failAt int) {
+	t.Helper()
+	config := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", config)
+	executor := &recordingExecutor{failAt: failAt}
+	manager := New(executor)
+	options := Options{Binary: "/bin/agent-sessions", StorePath: "/tmp/store"}
+	result, err := manager.Install(context.Background(), options)
+	if !errors.Is(err, errManagerTestFailure) {
+		t.Fatalf("Install() error = %v, want manager failure", err)
+	}
+	if _, statErr := os.Stat(result.Path); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("failed install definition remains: %v", statErr)
+	}
+	executor.calls = nil
+	executor.failAt = 0
+	if _, err := manager.Install(context.Background(), options); err != nil {
+		t.Fatalf("retry Install() error = %v", err)
+	}
+}
+
 func TestUninstallRemovesManagedServiceAndIsIdempotent(t *testing.T) {
 	config := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", config)
@@ -242,5 +339,34 @@ func TestUninstallRemovesManagedServiceAndIsIdempotent(t *testing.T) {
 	}
 	if result.Changed || result.Message != "not installed" || len(executor.calls) != 0 {
 		t.Fatalf("second uninstall was not idempotent: %+v calls=%v", result, executor.calls)
+	}
+}
+
+func TestUninstallReloadFailureRestoresRetryableDefinition(t *testing.T) {
+	config := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", config)
+	executor := &recordingExecutor{}
+	manager := New(executor)
+	options := Options{Binary: "/bin/agent-sessions", StorePath: "/tmp/store"}
+	installed, err := manager.Install(context.Background(), options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	executor.calls = nil
+	executor.failAt = 2
+	if _, err := manager.Uninstall(context.Background(), options); !errors.Is(err, errManagerTestFailure) {
+		t.Fatalf("Uninstall() error = %v, want manager failure", err)
+	}
+	if _, err := os.Stat(installed.Path); err != nil {
+		t.Fatalf("service definition was not restored: %v", err)
+	}
+	executor.calls = nil
+	executor.failAt = 0
+	result, err := manager.Uninstall(context.Background(), options)
+	if err != nil {
+		t.Fatalf("retry Uninstall() error = %v", err)
+	}
+	if !result.Changed || result.Installed {
+		t.Fatalf("retry uninstall result = %#v", result)
 	}
 }

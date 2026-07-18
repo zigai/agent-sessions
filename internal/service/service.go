@@ -18,16 +18,16 @@ const (
 	managedMarker        = ManagedMarker
 	defaultInterval      = 3 * time.Second
 	serviceDirectoryMode = 0o755
+	serviceRollbackTime  = 10 * time.Second
 )
 
 var (
-	ErrForeign             = errors.New("service path contains foreign content")
-	ErrUnsupported         = errors.New("observer service is unsupported on this platform")
-	errUnsupportedExecutor = errors.New("unsupported command executor")
-	errBinaryRequired      = errors.New("binary is required")
-	errStorePathRequired   = errors.New("store path is required")
-	errIntervalPositive    = errors.New("interval must be positive")
-	errGraceNonnegative    = errors.New("grace period must be nonnegative")
+	ErrForeign           = errors.New("service path contains foreign content")
+	ErrUnsupported       = errors.New("observer service is unsupported on this platform")
+	errBinaryRequired    = errors.New("binary is required")
+	errStorePathRequired = errors.New("store path is required")
+	errIntervalPositive  = errors.New("interval must be positive")
+	errGraceNonnegative  = errors.New("grace period must be nonnegative")
 )
 
 // Options controls the managed observer service.
@@ -85,61 +85,13 @@ func (osCommandExecutor) Run(ctx context.Context, name string, args ...string) (
 	return output, nil
 }
 
-type errorExecutor struct{ err error }
-
-func (e errorExecutor) Run(context.Context, string, ...string) ([]byte, error) { return nil, e.err }
-
-// New constructs a service using an injected command executor. It also accepts
-// the common error-only Run forms to keep command fakes small.
-func New(executor any) *Service {
+// New constructs a service using an injected command executor.
+func New(executor CommandExecutor) *Service {
 	if executor == nil {
 		return &Service{executor: osCommandExecutor{}}
 	}
-	if runner, ok := executor.(CommandExecutor); ok {
-		return &Service{executor: runner}
-	}
-	if runner, ok := executor.(func(context.Context, string, ...string) ([]byte, error)); ok {
-		return &Service{executor: CommandFunc(runner)}
-	}
-	if runner, ok := executor.(interface {
-		Run(ctx context.Context, name string, args ...string) error
-	}); ok {
-		return &Service{executor: errorOnlyContextRunner{runner: runner}}
-	}
-	if runner, ok := executor.(interface {
-		Run(name string, args ...string) error
-	}); ok {
-		return &Service{executor: errorOnlyRunner{runner: runner}}
-	}
-	return &Service{executor: errorExecutor{err: fmt.Errorf("%T: %w", executor, errUnsupportedExecutor)}}
-}
 
-type errorOnlyContextRunner struct {
-	runner interface {
-		Run(ctx context.Context, name string, args ...string) error
-	}
-}
-
-func (e errorOnlyContextRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
-	err := e.runner.Run(ctx, name, args...)
-	if err != nil {
-		return nil, fmt.Errorf("run %s: %w", name, err)
-	}
-	return nil, nil
-}
-
-type errorOnlyRunner struct {
-	runner interface {
-		Run(name string, args ...string) error
-	}
-}
-
-func (e errorOnlyRunner) Run(_ context.Context, name string, args ...string) ([]byte, error) {
-	err := e.runner.Run(name, args...)
-	if err != nil {
-		return nil, fmt.Errorf("run %s: %w", name, err)
-	}
-	return nil, nil
+	return &Service{executor: executor}
 }
 
 var defaultService = New(nil)
@@ -194,10 +146,12 @@ func (s *Service) Uninstall(ctx context.Context, options Options) (Result, error
 		return result, err
 	}
 	if err := os.Remove(result.Path); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return result, fmt.Errorf("remove managed service: %w", err)
+		cause := fmt.Errorf("remove managed service: %w", err)
+
+		return result, s.rollbackDefinition(ctx, backend, result.Path, content, true, cause)
 	}
 	if err := backend.reload(ctx, s.executor); err != nil {
-		return result, err
+		return result, s.rollbackDefinition(ctx, backend, result.Path, content, true, err)
 	}
 	result.Installed, result.Current, result.Changed, result.Message = false, false, true, "uninstalled"
 	return result, nil
@@ -285,23 +239,62 @@ func (s *Service) apply(ctx context.Context, options Options, update bool) (Resu
 		return result, nil
 	}
 	if err := writeAtomic(result.Path, []byte(backend.content()), 0o644); err != nil {
-		return result, err
+		return result, s.rollbackDefinition(ctx, backend, result.Path, content, installed, err)
 	}
 	if err := backend.reload(ctx, s.executor); err != nil {
-		return result, err
+		return result, s.rollbackDefinition(ctx, backend, result.Path, content, installed, err)
 	}
 	if installed {
 		if err := backend.restart(ctx, s.executor); err != nil {
-			return result, err
+			return result, s.rollbackDefinition(ctx, backend, result.Path, content, true, err)
 		}
 	} else if err := backend.load(ctx, s.executor); err != nil {
-		return result, err
+		return result, s.rollbackDefinition(ctx, backend, result.Path, content, false, err)
 	}
 	result.Installed, result.Current, result.Running, result.Changed, result.Message = true, true, true, true, "installed"
 	if installed {
 		result.Message = "updated"
 	}
 	return result, nil
+}
+
+func (s *Service) rollbackDefinition(
+	ctx context.Context,
+	backend backend,
+	path string,
+	previous []byte,
+	previouslyInstalled bool,
+	cause error,
+) error {
+	rollbackCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), serviceRollbackTime)
+	defer cancel()
+
+	failures := []error{cause}
+	if previouslyInstalled {
+		if err := writeAtomic(path, previous, 0o644); err != nil {
+			return errors.Join(cause, fmt.Errorf("restoring service definition: %w", err))
+		}
+		if err := backend.reload(rollbackCtx, s.executor); err != nil {
+			failures = append(failures, fmt.Errorf("reloading restored service definition: %w", err))
+		}
+		if err := backend.restart(rollbackCtx, s.executor); err != nil {
+			failures = append(failures, fmt.Errorf("restarting restored service: %w", err))
+		}
+
+		return errors.Join(failures...)
+	}
+
+	if err := backend.unload(rollbackCtx, s.executor); err != nil {
+		failures = append(failures, fmt.Errorf("unloading failed service installation: %w", err))
+	}
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		failures = append(failures, fmt.Errorf("removing failed service definition: %w", err))
+	}
+	if err := backend.reload(rollbackCtx, s.executor); err != nil {
+		failures = append(failures, fmt.Errorf("reloading manager after service rollback: %w", err))
+	}
+
+	return errors.Join(failures...)
 }
 
 func writeAtomic(path string, content []byte, mode os.FileMode) error {
