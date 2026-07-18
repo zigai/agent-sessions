@@ -31,6 +31,20 @@ func TestDiffWatchEventsSeparatesPresenceAndActivity(t *testing.T) {
 	}
 }
 
+func TestDiffWatchEventsReportsMultiplexerLocationChanges(t *testing.T) {
+	t.Parallel()
+	at := time.Now().UTC()
+	activity := registry.ActivityIdle
+	old := registry.Session{ID: "s", Harness: registry.HarnessCodex, Presence: registry.PresenceLive, Activity: &activity, UpdatedAt: at}
+	next := old
+	next.Multiplexer = registry.MultiplexerContext{Kind: registry.MultiplexerZellij, SessionName: "work", PaneID: "terminal_7"}
+	next.UpdatedAt = at.Add(time.Second)
+	events := diffWatchEvents(map[string]registry.Session{"s": old}, map[string]registry.Session{"s": next}, at.Add(2*time.Second))
+	if len(events) != 1 || events[0].Action != watchActionLocationChanged || events[0].Multiplexer != "zellij:work:terminal_7" {
+		t.Fatalf("multiplexer location events = %#v", events)
+	}
+}
+
 func TestWatchJSONModeEmitsJSONLinesOnlyWhenRequested(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "sessions.json")
 	store := registry.NewFileStore(path)

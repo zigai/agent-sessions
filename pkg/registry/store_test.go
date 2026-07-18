@@ -139,6 +139,31 @@ func TestStorePersistsSchemaV2Envelope(t *testing.T) {
 	}
 }
 
+func TestStorePersistsNativeMultiplexerLocation(t *testing.T) {
+	t.Parallel()
+	store := NewFileStore(filepath.Join(t.TempDir(), "sessions.json"))
+	at := time.Now().UTC().Add(-time.Minute)
+	process := &ProcessIdentity{PID: 42, PPID: 1, ProcessGroupID: 42, StartIdentity: "boot:42", Executable: "/usr/bin/codex", CWD: "/repo"}
+	present := true
+	if _, err := store.Observe(context.Background(), Observation{
+		Source: ObservationSourceProcess, Evidence: ObservationEvidenceProcessPresence, Harness: HarnessCodex,
+		ProcessPresent: &present, Process: process, ObservedAt: at,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	location := &MultiplexerContext{Kind: MultiplexerZellij, SessionName: "work", TabID: "3", PaneID: "terminal_7", PaneCurrentPath: "/repo"}
+	session, err := store.Observe(context.Background(), Observation{
+		Source: ObservationSourceMultiplexer, Evidence: ObservationEvidenceMultiplexerLocation, Harness: HarnessCodex,
+		Process: process, Multiplexer: location, ObservedAt: at.Add(time.Second),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if session.Multiplexer != *location || !session.Tmux.Empty() || session.Observations.Multiplexer == nil || session.Observations.Multiplexer.Context != *location {
+		t.Fatalf("stored session = %#v", session)
+	}
+}
+
 func TestStoreResetRecoversMalformedState(t *testing.T) {
 	t.Parallel()
 
@@ -231,6 +256,18 @@ func TestSummariesCountIndependentPresenceAndActivity(t *testing.T) {
 	unknown := summaries[1]
 	if unknown.Total != 1 || unknown.PresenceUnknown != 1 || unknown.ActivityUnknown != 1 {
 		t.Fatalf("unknown summary = %#v", unknown)
+	}
+}
+
+func TestSummariesGroupNativeMultiplexerSessions(t *testing.T) {
+	t.Parallel()
+	activity := ActivityWaiting
+	summaries := summariesForSessions([]Session{{
+		Presence: PresenceLive, Activity: &activity,
+		Multiplexer: MultiplexerContext{Kind: MultiplexerZellij, SessionName: "work", PaneID: "terminal_7"},
+	}})
+	if len(summaries) != 1 || summaries[0].MultiplexerKind != MultiplexerZellij || summaries[0].MultiplexerSessionName != "work" || summaries[0].Total != 1 || summaries[0].Waiting != 1 {
+		t.Fatalf("multiplexer summaries = %#v", summaries)
 	}
 }
 

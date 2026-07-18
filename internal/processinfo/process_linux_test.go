@@ -4,6 +4,7 @@ package processinfo
 
 import (
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -30,6 +31,24 @@ func TestLinuxEnvironmentValueFindsScopedAgentHint(t *testing.T) {
 	got := linuxEnvironmentValue([]byte("PATH=/usr/bin\x00AGENT_SESSIONS_AGENT=codex\x00OTHER=value\x00"), "AGENT_SESSIONS_AGENT")
 	if got != "codex" {
 		t.Fatalf("linuxEnvironmentValue = %q, want codex", got)
+	}
+}
+
+func TestReadLinuxProcessCapturesMultiplexerIdentity(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "stat"), []byte("123 (codex) S 1 42 42 0 0 0 0 0 0 0 0 0 0 0 0 0 0 987654 0 0"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "environ"), []byte("ZELLIJ_SESSION_NAME=work\x00ZELLIJ_PANE_ID=7\x00"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	process, err := readLinuxProcess(dir, 123, "boot")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if process.MultiplexerKind != "zellij" || process.MultiplexerSession != "work" || process.MultiplexerPane != "7" {
+		t.Fatalf("multiplexer identity = %#v", process)
 	}
 }
 

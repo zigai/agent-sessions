@@ -47,6 +47,32 @@ func TestProcessQueuedObservation(t *testing.T) {
 	}
 }
 
+func TestProcessQueuedObservationRestoresZellijRuntimeContext(t *testing.T) {
+	t.Parallel()
+	storePath := filepath.Join(t.TempDir(), "sessions.json")
+	app := &application{storePath: storePath}
+	at := time.Now().UTC().Add(-time.Minute)
+	envelope := reportqueue.Envelope{
+		Version: reportqueue.EnvelopeVersion, CreatedAt: at, StorePath: storePath, Kind: reportqueue.KindReport,
+		Report: reportqueue.ReportFromRegistry(registry.Observation{
+			Source: registry.ObservationSourceNative, Evidence: registry.ObservationEvidenceNativeEvent,
+			Harness: registry.HarnessCodex, NativeEvent: "turn_complete",
+			Identity: registry.ObservationIdentity{SessionID: "queued-zellij"}, ObservedAt: at,
+		}),
+		Runtime: reportqueue.RuntimeContext{Env: map[string]string{"ZELLIJ_SESSION_NAME": "work", "ZELLIJ_PANE_ID": "7"}},
+	}
+	if err := app.processQueuedReport(context.Background(), reportqueue.New(storePath), envelope); err != nil {
+		t.Fatal(err)
+	}
+	sessions, err := app.store().List(context.Background(), registry.Filter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 1 || sessions[0].Multiplexer.Kind != registry.MultiplexerZellij || sessions[0].Multiplexer.SessionName != "work" || sessions[0].Multiplexer.PaneID != "terminal_7" {
+		t.Fatalf("queued zellij session = %#v", sessions)
+	}
+}
+
 func TestQueuedReportEnvelopePreservesNoTmux(t *testing.T) {
 	t.Parallel()
 

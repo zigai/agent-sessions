@@ -307,6 +307,34 @@ func TestListDefaultsToLatestUpdateLastWithUsefulLabelsAndShortIDs(t *testing.T)
 	}
 }
 
+func TestListDisplaysAndFiltersZellijLocation(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "sessions.json")
+	store := registry.NewFileStore(path)
+	location := &registry.MultiplexerContext{
+		Kind: registry.MultiplexerZellij, SessionName: "work", TabName: "agents", PaneID: "terminal_7",
+	}
+	if _, err := store.Observe(context.Background(), registry.Observation{
+		Source: registry.ObservationSourceNative, Evidence: registry.ObservationEvidenceNativeEvent,
+		Harness: registry.HarnessCodex, Identity: registry.ObservationIdentity{SessionID: "zellij-session"},
+		NativeEvent: "turn_complete", Multiplexer: location, ObservedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	root := NewRootCommand(&stdout, &bytes.Buffer{})
+	root.SetArgs([]string{"--store", path, "list", "--multiplexer-session", "work"})
+	if err := root.ExecuteContext(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	output := stdout.String()
+	for _, expected := range []string{"MULTIPLEXER", "zellij", "work", "agents", "terminal_7"} {
+		if !strings.Contains(output, expected) {
+			t.Fatalf("list output missing %q:\n%s", expected, output)
+		}
+	}
+}
+
 func TestAbbreviatedRegistryIDsExpandCollidingPrefixes(t *testing.T) {
 	t.Parallel()
 	sessions := []registry.Session{{ID: "codex-12345678aaaa"}, {ID: "codex-12345678bbbb"}, {ID: "claude-12345678cccc"}}

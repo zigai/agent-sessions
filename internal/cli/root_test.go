@@ -47,6 +47,20 @@ func TestPrepareReportCarriesIndependentDimensions(t *testing.T) {
 	}
 }
 
+func TestPrepareReportIncludesNativeMultiplexerContext(t *testing.T) {
+	t.Parallel()
+	location := registry.MultiplexerContext{Kind: registry.MultiplexerZellij, SessionName: "work", PaneID: "terminal_7"}
+	prepared, err := (&application{}).prepareReport(nil, reportOptions{
+		harness: "codex", sessionID: "session", event: "turn_complete",
+	}, reportRuntimeContext{multiplexer: location, defaultObservedAt: time.Now().UTC()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prepared.observation.Multiplexer == nil || *prepared.observation.Multiplexer != location {
+		t.Fatalf("multiplexer context = %#v", prepared.observation.Multiplexer)
+	}
+}
+
 func TestPrepareReportCarriesNativeLifecycle(t *testing.T) {
 	t.Parallel()
 
