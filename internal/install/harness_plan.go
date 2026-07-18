@@ -1,6 +1,7 @@
 package install
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,7 +16,7 @@ import (
 	"github.com/zigai/agent-sessions/v2/pkg/registry"
 )
 
-func installHarnessAdapter(options Options) (Result, error) {
+func installHarnessAdapter(ctx context.Context, options Options) (Result, error) {
 	adapter, ok := harnesspkg.Find(options.Harness)
 	if !ok {
 		return Result{}, fmt.Errorf("%w: %q", errUnsupportedHarness, options.Harness)
@@ -32,8 +33,11 @@ func installHarnessAdapter(options Options) (Result, error) {
 	}
 
 	for _, action := range plan.Actions {
-		result, handled, err := installPlanAction(options, definition.ID, action)
+		result, handled, err := installPlanAction(ctx, options, definition.ID, action)
 		if handled {
+			if err == nil && definition.ID == registry.HarnessCodex && result.Changed && !options.DryRun {
+				result.NextStep = codexHookTrustNextStep
+			}
 			return result, err
 		}
 	}
@@ -51,7 +55,7 @@ func installPlanHasShim(plan harnesspkg.InstallPlan) bool {
 	return false
 }
 
-func installPlanAction(options Options, harness registry.Harness, action harnesspkg.InstallAction) (Result, bool, error) {
+func installPlanAction(ctx context.Context, options Options, harness registry.Harness, action harnesspkg.InstallAction) (Result, bool, error) {
 	switch typed := action.(type) {
 	case harnesspkg.JSONCommandHooksAction:
 		result, err := installJSONCommandHooks(options, harness, typed.Plan)
@@ -74,7 +78,7 @@ func installPlanAction(options Options, harness registry.Harness, action harness
 
 		return result, true, err
 	case harnesspkg.PluginDirectoryAction:
-		result, err := installPluginDirectory(options, harness, typed.Plan)
+		result, err := installPluginDirectory(ctx, options, harness, typed.Plan)
 
 		return result, true, err
 	case harnesspkg.ShimAction:
@@ -288,12 +292,13 @@ func installManagedTextBlock(
 	}
 
 	return Result{
-		Harness: string(harness),
-		Path:    plan.Path,
-		Changed: changed,
-		Message: installMessage(label, changed, options.DryRun),
-		Snippet: next,
-		Error:   "",
+		Harness:  string(harness),
+		Path:     plan.Path,
+		Changed:  changed,
+		Message:  installMessage(label, changed, options.DryRun),
+		NextStep: "",
+		Snippet:  next,
+		Error:    "",
 	}, nil
 }
 
@@ -423,12 +428,13 @@ func installRenderedFilesPlan(
 	}
 
 	return Result{
-		Harness: string(harness),
-		Path:    plan.Dir,
-		Changed: changed,
-		Message: installMessage(label, changed, options.DryRun),
-		Snippet: renderedFilesSnippet(files, plan.SnippetOrder),
-		Error:   "",
+		Harness:  string(harness),
+		Path:     plan.Dir,
+		Changed:  changed,
+		Message:  installMessage(label, changed, options.DryRun),
+		NextStep: "",
+		Snippet:  renderedFilesSnippet(files, plan.SnippetOrder),
+		Error:    "",
 	}, nil
 }
 
@@ -504,6 +510,7 @@ func renderedFilesSnippet(files map[string]string, snippetOrder []string) string
 
 //nolint:cyclop // plugin installation coordinates staged files, manifests, rollback, and ownership
 func installPluginDirectory(
+	ctx context.Context,
 	options Options,
 	harness registry.Harness,
 	plan harnesspkg.PluginDirectoryInstallPlan,
@@ -522,11 +529,15 @@ func installPluginDirectory(
 	if err != nil {
 		return Result{}, err
 	}
+	obsoleteFiles, err := managedObsoleteFiles(plan.ObsoleteFiles)
+	if err != nil {
+		return Result{}, err
+	}
 	if plan.OpenClaw != nil {
-		return installOpenClawPlugin(options, harness, plan, plugin, pluginChanged)
+		return installOpenClawPlugin(ctx, options, harness, plan, plugin, pluginChanged)
 	}
 	if plan.Hermes != nil {
-		return installHermesPlugin(options, harness, plan, plugin, pluginChanged)
+		return installHermesPlugin(ctx, options, harness, plan, plugin, pluginChanged)
 	}
 
 	manifest, manifestChanged, err := plannedImportManifest(plan.ImportManifest, time.Now().UTC())
@@ -541,7 +552,7 @@ func installPluginDirectory(
 			return Result{}, err
 		}
 	}
-	changed := pluginChanged || manifestChanged || legacyCleanup
+	changed := pluginChanged || manifestChanged || legacyCleanup || len(obsoleteFiles) > 0
 
 	if changed && !options.DryRun {
 		var postStage func() error
@@ -553,17 +564,21 @@ func installPluginDirectory(
 		if err := writePluginDirectoryChanges(plugin, plan.ImportManifest, manifest, pluginChanged, manifestChanged, postStage); err != nil {
 			return Result{}, err
 		}
+		if err := removeManagedObsoleteFiles(obsoleteFiles); err != nil {
+			return Result{}, err
+		}
 	}
 
 	label := installLabel(plan.Label, harness, "plugin")
 
 	return Result{
-		Harness: string(harness),
-		Path:    plugin.dir,
-		Changed: changed,
-		Message: installMessage(label, changed, options.DryRun),
-		Snippet: plugin.snippet(),
-		Error:   "",
+		Harness:  string(harness),
+		Path:     plugin.dir,
+		Changed:  changed,
+		Message:  installMessage(label, changed, options.DryRun),
+		NextStep: "",
+		Snippet:  plugin.snippet(),
+		Error:    "",
 	}, nil
 }
 
@@ -577,6 +592,7 @@ func writePluginDirectoryChanges(
 ) error {
 	var rollback func() error
 	var commit func() error
+	var rollbackManifest func() error
 	if pluginChanged {
 		var err error
 		rollback, commit, err = plugin.installStaged()
@@ -586,13 +602,18 @@ func writePluginDirectoryChanges(
 	}
 
 	if importPlan != nil && manifestChanged {
-		if err := writeImportManifest(importPlan.Path, manifest); err != nil {
+		var err error
+		rollbackManifest, err = prepareImportManifestRollback(importPlan.Path)
+		if err != nil {
 			return rollbackPluginDirectory(rollback, err)
+		}
+		if err := writeImportManifest(importPlan.Path, manifest); err != nil {
+			return rollbackPluginDirectoryAndManifest(rollback, rollbackManifest, err)
 		}
 	}
 	if len(postStages) > 0 && postStages[0] != nil {
 		if err := postStages[0](); err != nil {
-			return rollbackPluginDirectory(rollback, err)
+			return rollbackPluginDirectoryAndManifest(rollback, rollbackManifest, err)
 		}
 	}
 
@@ -601,6 +622,47 @@ func writePluginDirectoryChanges(
 	}
 
 	return commit()
+}
+
+func prepareImportManifestRollback(path string) (func() error, error) {
+	previous, err := os.ReadFile(path)
+	existed := err == nil
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, fmt.Errorf("reading import manifest rollback state: %w", err)
+	}
+
+	return func() error {
+		if existed {
+			return writeFileAtomic(path, previous, "creating import manifest rollback directory", "restoring import manifest")
+		}
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("removing newly created import manifest: %w", err)
+		}
+		if _, err := os.Stat(filepath.Dir(path)); err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return nil
+			}
+
+			return fmt.Errorf("checking import manifest directory: %w", err)
+		}
+
+		return syncDir(filepath.Dir(path))
+	}, nil
+}
+
+func rollbackPluginDirectoryAndManifest(rollbackPlugin, rollbackManifest func() error, cause error) error {
+	if rollbackPlugin != nil {
+		if err := rollbackPlugin(); err != nil {
+			cause = errors.Join(cause, fmt.Errorf("rolling back plugin directory: %w", err))
+		}
+	}
+	if rollbackManifest != nil {
+		if err := rollbackManifest(); err != nil {
+			cause = errors.Join(cause, fmt.Errorf("rolling back import manifest: %w", err))
+		}
+	}
+
+	return cause
 }
 
 func rollbackPluginDirectory(rollback func() error, cause error) error {
@@ -737,6 +799,10 @@ func writeImportManifest(path string, manifest importManifest) error {
 }
 
 func writeFileAtomic(path string, data []byte, createDirError string, writeError string) error {
+	return writeFileAtomicMode(path, data, 0o600, createDirError, writeError)
+}
+
+func writeFileAtomicMode(path string, data []byte, mode os.FileMode, createDirError string, writeError string) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("%s: %w", createDirError, err)
@@ -756,7 +822,7 @@ func writeFileAtomic(path string, data []byte, createDirError string, writeError
 		_ = os.Remove(tempPath)
 	}()
 
-	if err := temp.Chmod(0o600); err != nil {
+	if err := temp.Chmod(mode); err != nil {
 		return fmt.Errorf("setting temp file permissions: %w", err)
 	}
 	if _, err := temp.Write(data); err != nil {

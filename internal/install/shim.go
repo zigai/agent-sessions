@@ -11,6 +11,8 @@ import (
 	"github.com/zigai/agent-sessions/v2/pkg/registry"
 )
 
+const shimFileMode = 0o700
+
 var errRecursiveShimTarget = errors.New("target binary resolves to managed shim")
 
 func installShim(options Options, harness registry.Harness) (Result, error) {
@@ -22,22 +24,19 @@ func installShim(options Options, harness registry.Harness) (Result, error) {
 	}
 	script := shimScript(options.Binary, string(harness), target)
 
-	changed, err := fileNeedsUpdate(path, script, options.Force)
+	contentChanged, err := fileNeedsUpdate(path, script, options.Force)
 	if err != nil {
 		return Result{}, err
 	}
+	modeChanged, err := shimModeNeedsUpdate(path)
+	if err != nil {
+		return Result{}, err
+	}
+	changed := contentChanged || modeChanged
 
 	if changed && !options.DryRun {
-		if err := os.MkdirAll(dir, 0o700); err != nil {
-			return Result{}, fmt.Errorf("creating shim directory: %w", err)
-		}
-
-		if err := os.WriteFile(path, []byte(script), 0o600); err != nil {
-			return Result{}, fmt.Errorf("writing shim: %w", err)
-		}
-
-		if err := os.Chmod(path, 0o700); err != nil {
-			return Result{}, fmt.Errorf("making shim executable: %w", err)
+		if err := writeShimChanges(path, script, contentChanged); err != nil {
+			return Result{}, err
 		}
 	}
 
@@ -51,13 +50,54 @@ func installShim(options Options, harness registry.Harness) (Result, error) {
 	}
 
 	return Result{
-		Harness: string(harness),
-		Path:    path,
-		Changed: changed,
-		Message: message,
-		Snippet: script,
-		Error:   "",
+		Harness:  string(harness),
+		Path:     path,
+		Changed:  changed,
+		Message:  message,
+		NextStep: "",
+		Snippet:  script,
+		Error:    "",
 	}, nil
+}
+
+func writeShimChanges(path string, script string, contentChanged bool) error {
+	if contentChanged {
+		return writeFileAtomicMode(path, []byte(script), shimFileMode, "creating shim directory", "writing shim")
+	}
+	if err := os.Chmod(path, shimFileMode); err != nil {
+		return fmt.Errorf("making shim executable: %w", err)
+	}
+
+	return nil
+}
+
+func shimModeNeedsUpdate(path string) (bool, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return true, nil
+		}
+
+		return false, fmt.Errorf("checking shim mode: %w", err)
+	}
+
+	return info.Mode().Perm() != shimFileMode, nil
+}
+
+func classifyShimArtifact(path string) (ArtifactStatus, error) {
+	status, err := ClassifyArtifact(path)
+	if err != nil || status != ArtifactCurrent {
+		return status, err
+	}
+	modeChanged, err := shimModeNeedsUpdate(path)
+	if err != nil {
+		return "", err
+	}
+	if modeChanged {
+		return ArtifactStale, nil
+	}
+
+	return status, nil
 }
 
 func resolveShimTarget(target string, harness string, shimDir string, shimPath string) (string, error) {

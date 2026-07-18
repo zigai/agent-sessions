@@ -1,6 +1,7 @@
 package install
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,6 +17,14 @@ var errRemoveFailed = errors.New("one or more integrations failed to remove")
 
 // Remove deletes only artifacts owned by agent-sessions for one harness.
 func Remove(options Options) (Result, error) {
+	return RemoveContext(context.Background(), options)
+}
+
+// RemoveContext removes one integration while honoring caller cancellation.
+func RemoveContext(ctx context.Context, options Options) (Result, error) {
+	if err := ctx.Err(); err != nil {
+		return Result{}, fmt.Errorf("remove integration context: %w", err)
+	}
 	adapter, ok := harnesspkg.Find(options.Harness)
 	if !ok {
 		return Result{}, fmt.Errorf("%w: %q", errUnsupportedHarness, options.Harness)
@@ -35,7 +44,7 @@ func Remove(options Options) (Result, error) {
 	if shimStatus == ArtifactForeign {
 		return Result{}, fmt.Errorf("%w: %s", errForeignFile, shimPath)
 	}
-	result, err := removeNativeIntegration(options, installer.InstallPlan(options.Binary))
+	result, err := removeNativeIntegration(ctx, options, installer.InstallPlan(options.Binary))
 	if err != nil {
 		return result, err
 	}
@@ -53,9 +62,9 @@ func Remove(options Options) (Result, error) {
 	return result, nil
 }
 
-func removeNativeIntegration(options Options, plan harnesspkg.InstallPlan) (Result, error) {
+func removeNativeIntegration(ctx context.Context, options Options, plan harnesspkg.InstallPlan) (Result, error) {
 	for _, action := range plan.Actions {
-		result, handled, err := removePlanAction(options, options.Harness, action)
+		result, handled, err := removePlanAction(ctx, options, options.Harness, action)
 		if handled {
 			return result, err
 		}
@@ -78,14 +87,20 @@ func removeOwnedShim(path string, dryRun bool, status ArtifactStatus) (bool, err
 
 // RemoveAll deletes owned artifacts for every installable harness.
 func RemoveAll(options Options) ([]Result, error) {
-	results := make([]Result, 0, len(AllHarnesses))
+	return RemoveAllContext(context.Background(), options)
+}
+
+// RemoveAllContext removes every integration while honoring caller cancellation.
+func RemoveAllContext(ctx context.Context, options Options) ([]Result, error) {
+	harnesses := AllHarnesses()
+	results := make([]Result, 0, len(harnesses))
 	failures := make([]string, 0)
-	for _, harnessID := range AllHarnesses {
+	for _, harnessID := range harnesses {
 		next := options
 		next.Harness = harnessID
-		result, err := Remove(next)
+		result, err := RemoveContext(ctx, next)
 		if err != nil {
-			result = Result{Harness: string(harnessID), Path: "", Changed: false, Message: "remove failed", Snippet: "", Error: err.Error()}
+			result = Result{Harness: string(harnessID), Path: "", Changed: false, Message: "remove failed", NextStep: "", Snippet: "", Error: err.Error()}
 			failures = append(failures, string(harnessID))
 		}
 		results = append(results, result)
@@ -96,7 +111,7 @@ func RemoveAll(options Options) ([]Result, error) {
 	return results, nil
 }
 
-func removePlanAction(options Options, harnessID registry.Harness, action harnesspkg.InstallAction) (Result, bool, error) {
+func removePlanAction(ctx context.Context, options Options, harnessID registry.Harness, action harnesspkg.InstallAction) (Result, bool, error) {
 	switch typed := action.(type) {
 	case harnesspkg.JSONCommandHooksAction:
 		result, err := removeJSONCommandHooks(options, harnessID, typed.Plan)
@@ -118,7 +133,7 @@ func removePlanAction(options Options, harnessID registry.Harness, action harnes
 		result, err := removeOwnedFiles(options, harnessID, paths, typed.Plan.Dir)
 		return result, true, err
 	case harnesspkg.PluginDirectoryAction:
-		result, err := removePluginDirectory(options, harnessID, typed.Plan)
+		result, err := removePluginDirectory(ctx, options, harnessID, typed.Plan)
 		return result, true, err
 	case harnesspkg.ShimAction:
 		return emptyResult(), false, nil
@@ -248,7 +263,7 @@ func removeOwnedFiles(options Options, harnessID registry.Harness, paths []strin
 }
 
 //nolint:cyclop // removal handles both native registrations and import manifests
-func removePluginDirectory(options Options, harnessID registry.Harness, plan harnesspkg.PluginDirectoryInstallPlan) (Result, error) {
+func removePluginDirectory(ctx context.Context, options Options, harnessID registry.Harness, plan harnesspkg.PluginDirectoryInstallPlan) (Result, error) {
 	plugin := newPluginDirectoryInstall(plan, nil)
 	managed, err := plugin.managed()
 	if err != nil {
@@ -262,11 +277,15 @@ func removePluginDirectory(options Options, harnessID registry.Harness, plan har
 	if exists && !managed {
 		return Result{}, fmt.Errorf("%w: %s", errForeignFile, plan.Dir)
 	}
+	obsoleteFiles, err := managedObsoleteFiles(plan.ObsoleteFiles)
+	if err != nil {
+		return Result{}, err
+	}
 	if plan.OpenClaw != nil {
-		return removeOpenClawPlugin(options, harnessID, plan, exists)
+		return removeOpenClawPlugin(ctx, options, harnessID, plan, exists)
 	}
 	if plan.Hermes != nil {
-		return removeHermesPlugin(options, harnessID, plan, exists)
+		return removeHermesPlugin(ctx, options, harnessID, plan, exists)
 	}
 	manifestChanged := false
 	var manifest importManifest
@@ -277,16 +296,16 @@ func removePluginDirectory(options Options, harnessID registry.Harness, plan har
 		}
 		manifest, manifestChanged = removeImport(manifest, plan.ImportManifest.Name)
 	}
-	changed := exists || manifestChanged
+	changed := exists || manifestChanged || len(obsoleteFiles) > 0
 	if changed && !options.DryRun {
-		if err := applyPluginRemoval(plan, exists, manifestChanged, manifest); err != nil {
+		if err := applyPluginRemoval(plan, exists, manifestChanged, manifest, obsoleteFiles); err != nil {
 			return Result{}, err
 		}
 	}
 	return removeResult(harnessID, plan.Dir, changed, options.DryRun), nil
 }
 
-func applyPluginRemoval(plan harnesspkg.PluginDirectoryInstallPlan, exists bool, manifestChanged bool, manifest importManifest) error {
+func applyPluginRemoval(plan harnesspkg.PluginDirectoryInstallPlan, exists bool, manifestChanged bool, manifest importManifest, obsoleteFiles []string) error {
 	if exists {
 		if err := os.RemoveAll(plan.Dir); err != nil {
 			return fmt.Errorf("removing managed plugin %s: %w", plan.Dir, err)
@@ -297,7 +316,8 @@ func applyPluginRemoval(plan harnesspkg.PluginDirectoryInstallPlan, exists bool,
 			return err
 		}
 	}
-	return nil
+
+	return removeManagedObsoleteFiles(obsoleteFiles)
 }
 
 func removeImport(manifest importManifest, name string) (importManifest, bool) {
@@ -321,9 +341,9 @@ func removeResult(harnessID registry.Harness, path string, changed bool, dryRun 
 	} else if changed {
 		message = "integration removed"
 	}
-	return Result{Harness: string(harnessID), Path: path, Changed: changed, Message: message, Snippet: "", Error: ""}
+	return Result{Harness: string(harnessID), Path: path, Changed: changed, Message: message, NextStep: "", Snippet: "", Error: ""}
 }
 
 func emptyResult() Result {
-	return Result{Harness: "", Path: "", Changed: false, Message: "", Snippet: "", Error: ""}
+	return Result{Harness: "", Path: "", Changed: false, Message: "", NextStep: "", Snippet: "", Error: ""}
 }

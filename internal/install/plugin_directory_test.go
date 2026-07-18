@@ -1,9 +1,21 @@
 package install
 
 import (
+	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	harnesspkg "github.com/zigai/agent-sessions/v2/pkg/harness"
+)
+
+var (
+	errPostStageTest     = errors.New("post stage failed")
+	errInstallStageTest  = errors.New("install staged plugin failed")
+	errRestoreBackupTest = errors.New("restore plugin backup failed")
+	errRemoveBackupTest  = errors.New("remove plugin backup failed")
 )
 
 func TestReplacePluginDirectoryRollbackRestoresExistingDirectory(t *testing.T) {
@@ -45,6 +57,71 @@ func TestReplacePluginDirectoryRollbackRestoresExistingDirectory(t *testing.T) {
 	}
 }
 
+func TestReplacePluginDirectoryReportsInstallAndRestoreFailures(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	dir := filepath.Join(root, "plugin")
+	staged := filepath.Join(root, "staged")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(staged, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	plugin := pluginDirectoryInstall{
+		dir: dir,
+		renameFile: func(oldPath string, newPath string) error {
+			if oldPath == staged {
+				return errInstallStageTest
+			}
+			if newPath == dir && strings.Contains(filepath.Base(oldPath), ".plugin.backup-") {
+				return errRestoreBackupTest
+			}
+
+			return os.Rename(oldPath, newPath)
+		},
+	}
+	_, _, err := plugin.replace(staged)
+	if !errors.Is(err, errInstallStageTest) || !errors.Is(err, errRestoreBackupTest) {
+		t.Fatalf("replace error = %v, want install and restore failures", err)
+	}
+	if !strings.Contains(err.Error(), ".plugin.backup-") {
+		t.Fatalf("replace error omits retained backup path: %v", err)
+	}
+}
+
+func TestReplacePluginDirectoryReportsBackupRemovalFailure(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	dir := filepath.Join(root, "plugin")
+	staged := filepath.Join(root, "staged")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(staged, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	plugin := pluginDirectoryInstall{
+		dir: dir,
+		removeTree: func(path string) error {
+			if strings.Contains(filepath.Base(path), ".plugin.backup-") {
+				return errRemoveBackupTest
+			}
+
+			return os.RemoveAll(path)
+		},
+	}
+	_, commit, err := plugin.replace(staged)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := commit(); !errors.Is(err, errRemoveBackupTest) || !strings.Contains(err.Error(), ".plugin.backup-") {
+		t.Fatalf("commit error = %v, want retained backup path", err)
+	}
+}
+
 func TestPluginDirectoryNeedsUpdateDetectsStaleFiles(t *testing.T) {
 	t.Parallel()
 
@@ -64,6 +141,51 @@ func TestPluginDirectoryNeedsUpdateDetectsStaleFiles(t *testing.T) {
 	}
 	if !changed {
 		t.Fatal("expected stale generated file to require plugin directory replacement")
+	}
+}
+
+func TestPluginDirectoryPostStageFailureRestoresManifestAndDirectory(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	pluginDir := filepath.Join(root, "plugin")
+	if err := os.MkdirAll(pluginDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pluginDir, "old.txt"), []byte("old"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	manifestPath := filepath.Join(root, "import_manifest.json")
+	oldManifest := []byte("{\n  \"imports\": []\n}\n")
+	if err := os.WriteFile(manifestPath, oldManifest, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	plugin := pluginDirectoryInstall{
+		dir: pluginDir, files: map[string]string{"new.txt": "new"},
+	}
+	err := writePluginDirectoryChanges(
+		plugin,
+		&harnesspkg.ImportManifestInstallPlan{Path: manifestPath},
+		importManifest{Imports: []importEntry{{Name: "agent-sessions", Source: "test"}}},
+		true,
+		true,
+		func() error { return errPostStageTest },
+	)
+	if !errors.Is(err, errPostStageTest) {
+		t.Fatalf("writePluginDirectoryChanges() error = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(pluginDir, "old.txt")); err != nil {
+		t.Fatalf("old plugin was not restored: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(pluginDir, "new.txt")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("new plugin survived rollback: %v", err)
+	}
+	manifest, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(manifest, oldManifest) {
+		t.Fatalf("manifest after rollback = %q, want %q", manifest, oldManifest)
 	}
 }
 

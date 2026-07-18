@@ -19,13 +19,13 @@ func TestInstallRemoveRoundTripForEveryHarness(t *testing.T) {
 	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(home, ".claude"))
 	t.Setenv("CODEX_HOME", filepath.Join(home, ".codex"))
 	t.Setenv("COPILOT_HOME", filepath.Join(home, ".copilot"))
-	t.Setenv("CLINE_HOOKS_DIR", filepath.Join(home, ".cline", "hooks"))
+	t.Setenv("CLINE_DIR", filepath.Join(home, ".cline"))
 	t.Setenv("KIMI_CODE_HOME", filepath.Join(home, ".kimi-code"))
 	t.Setenv("GROK_HOME", filepath.Join(home, ".grok"))
 	t.Setenv("PI_CODING_AGENT_DIR", filepath.Join(home, ".pi", "agent"))
 	t.Setenv("AGY_CONFIG_HOME", filepath.Join(home, ".gemini", "antigravity-cli"))
 
-	for _, harnessID := range AllHarnesses {
+	for _, harnessID := range AllHarnesses() {
 		result, err := Run(Options{Harness: harnessID, Binary: testInstallBinary})
 		if err != nil {
 			t.Fatalf("install %s: %v", harnessID, err)

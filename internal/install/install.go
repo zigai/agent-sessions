@@ -1,9 +1,11 @@
 package install
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 
 	harnesspkg "github.com/zigai/agent-sessions/v2/pkg/harness"
@@ -21,7 +23,12 @@ var (
 	errInstallFailed      = errors.New("one or more integrations failed to install")
 )
 
-var AllHarnesses = installableHarnesses()
+var allHarnesses = installableHarnesses()
+
+// AllHarnesses returns a snapshot of the installable harness catalog.
+func AllHarnesses() []registry.Harness {
+	return slices.Clone(allHarnesses)
+}
 
 type Options struct {
 	Harness      registry.Harness
@@ -33,39 +40,55 @@ type Options struct {
 }
 
 type Result struct {
-	Harness string `json:"harness"`
-	Path    string `json:"path"`
-	Changed bool   `json:"changed"`
-	Message string `json:"message"`
-	Snippet string `json:"snippet,omitempty"`
-	Error   string `json:"error,omitempty"`
+	Harness  string `json:"harness"`
+	Path     string `json:"path"`
+	Changed  bool   `json:"changed"`
+	Message  string `json:"message"`
+	NextStep string `json:"next_step,omitempty"`
+	Snippet  string `json:"snippet,omitempty"`
+	Error    string `json:"error,omitempty"`
 }
 
 func Run(options Options) (Result, error) {
+	return RunContext(context.Background(), options)
+}
+
+// RunContext installs one integration while honoring caller cancellation.
+func RunContext(ctx context.Context, options Options) (Result, error) {
+	if err := ctx.Err(); err != nil {
+		return Result{}, fmt.Errorf("install integration context: %w", err)
+	}
 	if options.Binary == "" {
 		options.Binary = defaultBinary
 	}
 
-	return installHarnessAdapter(options)
+	return installHarnessAdapter(ctx, options)
 }
 
 func RunAll(options Options) ([]Result, error) {
-	results := make([]Result, 0, len(AllHarnesses))
+	return RunAllContext(context.Background(), options)
+}
+
+// RunAllContext installs every integration while honoring caller cancellation.
+func RunAllContext(ctx context.Context, options Options) ([]Result, error) {
+	harnesses := AllHarnesses()
+	results := make([]Result, 0, len(harnesses))
 	failures := make([]string, 0)
 
-	for _, harness := range AllHarnesses {
+	for _, harness := range harnesses {
 		nextOptions := options
 		nextOptions.Harness = harness
 
-		result, err := Run(nextOptions)
+		result, err := RunContext(ctx, nextOptions)
 		if err != nil {
 			result = Result{
-				Harness: string(harness),
-				Path:    "",
-				Changed: false,
-				Message: "install failed",
-				Snippet: "",
-				Error:   err.Error(),
+				Harness:  string(harness),
+				Path:     "",
+				Changed:  false,
+				Message:  "install failed",
+				NextStep: "",
+				Snippet:  "",
+				Error:    err.Error(),
 			}
 			failures = append(failures, string(harness))
 		}

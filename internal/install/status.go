@@ -14,10 +14,11 @@ import (
 
 // IntegrationStatus describes the managed artifacts for one harness integration.
 type IntegrationStatus struct {
-	Harness registry.Harness `json:"harness"`
-	Status  ArtifactStatus   `json:"status"`
-	Paths   []string         `json:"paths"`
-	Message string           `json:"message"`
+	Harness  registry.Harness `json:"harness"`
+	Status   ArtifactStatus   `json:"status"`
+	Paths    []string         `json:"paths"`
+	Message  string           `json:"message"`
+	NextStep string           `json:"next_step,omitempty"`
 }
 
 // Inspect reports whether a harness integration or its shim fallback is current.
@@ -28,52 +29,95 @@ func Inspect(harnessID registry.Harness, binary string) (IntegrationStatus, erro
 // InspectContext reports whether a harness integration is current, honoring
 // cancellation while consulting native harness CLIs.
 func InspectContext(ctx context.Context, harnessID registry.Harness, binary string) (IntegrationStatus, error) {
+	if err := ctx.Err(); err != nil {
+		return IntegrationStatus{}, fmt.Errorf("inspect integration context: %w", err)
+	}
+	plan, err := installPlanForHarness(harnessID, binary)
+	if err != nil {
+		return IntegrationStatus{}, err
+	}
+	shimPath := filepath.Join(registry.DefaultStateDir(), "shims", string(harnessID))
+	paths := append(planPaths(plan), shimPath)
+	result := IntegrationStatus{
+		Harness:  harnessID,
+		Status:   ArtifactCurrent,
+		Paths:    paths,
+		Message:  "current",
+		NextStep: "",
+	}
+	if err := inspectIntegrationPlan(ctx, plan, &result); err != nil {
+		return IntegrationStatus{}, err
+	}
+	if err := markDesiredIntegrationState(ctx, harnessID, binary, &result); err != nil {
+		return IntegrationStatus{}, err
+	}
+	nativeStatus := result.Status
+	result, err = mergeShimStatus(result, shimPath)
+	if err != nil {
+		return IntegrationStatus{}, err
+	}
+	if harnessID == registry.HarnessCodex && (nativeStatus == ArtifactCurrent || nativeStatus == ArtifactStale) {
+		result.NextStep = codexHookTrustStatusNextStep(nativeStatus)
+	}
+
+	return result, nil
+}
+
+func installPlanForHarness(harnessID registry.Harness, binary string) (harnesspkg.InstallPlan, error) {
 	adapter, ok := harnesspkg.Find(harnessID)
 	if !ok {
-		return IntegrationStatus{}, fmt.Errorf("%w: %q", errUnsupportedHarness, harnessID)
+		return harnesspkg.InstallPlan{}, fmt.Errorf("%w: %q", errUnsupportedHarness, harnessID)
 	}
 	installer, ok := adapter.(harnesspkg.Installable)
 	if !ok {
-		return IntegrationStatus{}, fmt.Errorf("%w: %q", errUnsupportedHarness, harnessID)
+		return harnesspkg.InstallPlan{}, fmt.Errorf("%w: %q", errUnsupportedHarness, harnessID)
 	}
-	plan := installer.InstallPlan(binary)
-	paths := planPaths(plan)
-	shimPath := filepath.Join(registry.DefaultStateDir(), "shims", string(harnessID))
-	paths = append(paths, shimPath)
-	result := IntegrationStatus{Harness: harnessID, Status: ArtifactMissing, Paths: paths, Message: "not installed"}
-	if len(paths) == 0 {
-		return result, nil
-	}
-	result.Status = ArtifactCurrent
-	result.Message = "current"
+
+	return installer.InstallPlan(binary), nil
+}
+
+func inspectIntegrationPlan(ctx context.Context, plan harnesspkg.InstallPlan, result *IntegrationStatus) error {
 	for _, action := range plan.Actions {
 		statuses, err := inspectAction(ctx, action)
 		if err != nil {
-			return IntegrationStatus{}, err
+			return err
 		}
 		for _, item := range statuses {
-			mergeInspectedArtifact(&result, item)
+			mergeInspectedArtifact(result, item)
 			if result.Status == ArtifactForeign {
-				return result, nil
+				return nil
 			}
 		}
 	}
-	if result.Status == ArtifactCurrent {
-		//nolint:contextcheck // the legacy installer API has no context; native inspection above honors ctx
-		dryRun, err := Run(Options{Harness: harnessID, Binary: binary, TargetBinary: "", DryRun: true, Force: false, UseShim: false})
-		if err != nil {
-			return IntegrationStatus{}, fmt.Errorf("checking desired integration state: %w", err)
-		}
-		if dryRun.Changed {
-			result.Status = ArtifactStale
-			result.Message = "managed integration differs from the desired configuration"
-		}
+
+	return nil
+}
+
+func markDesiredIntegrationState(ctx context.Context, harnessID registry.Harness, binary string, result *IntegrationStatus) error {
+	if result.Status != ArtifactCurrent {
+		return nil
 	}
-	return mergeShimStatus(result, shimPath)
+	dryRun, err := RunContext(ctx, Options{
+		Harness:      harnessID,
+		Binary:       binary,
+		TargetBinary: "",
+		DryRun:       true,
+		Force:        false,
+		UseShim:      false,
+	})
+	if err != nil {
+		return fmt.Errorf("checking desired integration state: %w", err)
+	}
+	if dryRun.Changed {
+		result.Status = ArtifactStale
+		result.Message = "managed integration differs from the desired configuration"
+	}
+
+	return nil
 }
 
 func mergeShimStatus(result IntegrationStatus, path string) (IntegrationStatus, error) {
-	status, err := ClassifyArtifact(path)
+	status, err := classifyShimArtifact(path)
 	if err != nil {
 		return IntegrationStatus{}, err
 	}
@@ -139,6 +183,13 @@ func inspectPluginAction(ctx context.Context, plan harnesspkg.PluginDirectoryIns
 	result, err := inspectOwnedPath(plan.Dir)
 	if err != nil {
 		return result, err
+	}
+	obsoleteFiles, err := managedObsoleteFiles(plan.ObsoleteFiles)
+	if err != nil {
+		return nil, err
+	}
+	for _, path := range obsoleteFiles {
+		result = append(result, inspectedArtifact{path: path, status: ArtifactStale})
 	}
 	if plan.OpenClaw != nil {
 		state, inspectErr := inspectOpenClawRegistration(ctx, plan)

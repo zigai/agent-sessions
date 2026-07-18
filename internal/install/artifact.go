@@ -32,12 +32,13 @@ func installRenderedFile(options Options, file renderedFileInstall) (Result, err
 	}
 
 	return Result{
-		Harness: string(file.Harness),
-		Path:    file.Path,
-		Changed: changed,
-		Message: renderedFileMessage(changed, options.DryRun, file),
-		Snippet: file.Content,
-		Error:   "",
+		Harness:  string(file.Harness),
+		Path:     file.Path,
+		Changed:  changed,
+		Message:  renderedFileMessage(changed, options.DryRun, file),
+		NextStep: "",
+		Snippet:  file.Content,
+		Error:    "",
 	}, nil
 }
 
@@ -82,12 +83,13 @@ func installJSONHookFile(options Options, file jsonHookFileInstall) (Result, err
 	}
 
 	return Result{
-		Harness: string(file.Harness),
-		Path:    file.Path,
-		Changed: changed,
-		Message: jsonHookFileMessage(changed, options.DryRun, file),
-		Snippet: string(data),
-		Error:   "",
+		Harness:  string(file.Harness),
+		Path:     file.Path,
+		Changed:  changed,
+		Message:  jsonHookFileMessage(changed, options.DryRun, file),
+		NextStep: "",
+		Snippet:  string(data),
+		Error:    "",
 	}, nil
 }
 

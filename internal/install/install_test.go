@@ -1,6 +1,7 @@
 package install
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -32,6 +33,30 @@ const (
 	grokHookFileName      = "agent-sessions-state.json"
 )
 
+func TestContextAwareIntegrationEntryPointsPreserveCancellation(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("CODEX_HOME", filepath.Join(home, ".codex"))
+	t.Setenv(registry.StateDirEnv, filepath.Join(home, "state"))
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	options := Options{Harness: registry.HarnessCodex, Binary: testInstallBinary}
+
+	for _, test := range []struct {
+		name string
+		run  func() error
+	}{
+		{name: "install", run: func() error { _, err := RunContext(ctx, options); return err }},
+		{name: "remove", run: func() error { _, err := RemoveContext(ctx, options); return err }},
+		{name: "inspect", run: func() error { _, err := InspectContext(ctx, options.Harness, options.Binary); return err }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if err := test.run(); !errors.Is(err, context.Canceled) {
+				t.Fatalf("context-aware %s error = %v, want context.Canceled", test.name, err)
+			}
+		})
+	}
+}
+
 func TestInstallCodexMergesHooks(t *testing.T) {
 	t.Setenv("CODEX_HOME", t.TempDir())
 
@@ -48,6 +73,9 @@ func TestInstallCodexMergesHooks(t *testing.T) {
 	}
 	if !result.Changed {
 		t.Fatal("expected codex install to report changed")
+	}
+	if result.NextStep != codexHookTrustNextStep {
+		t.Fatalf("Codex install next step = %q", result.NextStep)
 	}
 
 	data, err := os.ReadFile(result.Path)
@@ -98,6 +126,7 @@ func TestInstallCodexReplacesManagedHooks(t *testing.T) {
 		RequiredText:         []string{"--raw-stdin", "--quiet"},
 		FirstChangeMessage:   "expected codex install to replace old managed hook",
 		SecondChangedMessage: "expected second codex install to be idempotent",
+		ExpectedNextStep:     codexHookTrustNextStep,
 	})
 }
 
@@ -405,9 +434,10 @@ func TestInstallCopilotWritesHooks(t *testing.T) {
 	}, "copilot hooks")
 }
 
-func TestInstallClineWritesHookFiles(t *testing.T) {
-	hooksDir := filepath.Join(t.TempDir(), "hooks")
-	t.Setenv("CLINE_HOOKS_DIR", hooksDir)
+func TestInstallClineWritesNativePlugin(t *testing.T) {
+	clineDir := filepath.Join(t.TempDir(), ".cline")
+	t.Setenv("CLINE_DIR", clineDir)
+	pluginDir := filepath.Join(clineDir, "plugins", "agent-sessions-state")
 
 	result, err := Run(Options{
 		Harness:      registry.HarnessCline,
@@ -423,30 +453,12 @@ func TestInstallClineWritesHookFiles(t *testing.T) {
 	if !result.Changed {
 		t.Fatal("expected cline install to report changed")
 	}
-	if result.Path != hooksDir {
+	if result.Path != pluginDir {
 		t.Fatalf("unexpected path %q", result.Path)
 	}
-
-	for _, name := range []string{
-		"TaskStart.sh",
-		"TaskResume.sh",
-		"UserPromptSubmit.sh",
-		"PreToolUse.sh",
-		"PostToolUse.sh",
-		"TaskComplete.sh",
-		"TaskCancel.sh",
-		"TaskError.sh",
-		"PreCompact.sh",
-		"SessionShutdown.sh",
-	} {
-		text := string(readTestFile(t, filepath.Join(hooksDir, name), "reading cline hook "+name))
-		requireTextContainsAll(t, text, []string{
-			managedMarker,
-			"--raw-stdin-defaults-only",
-			"agent_sessions_integration=cline-hook",
-			"printf '%s\\n' '{}'",
-		}, "cline hook "+name)
-	}
+	requireClinePackageManifest(t, pluginDir)
+	requireClineAgentPlugin(t, pluginDir)
+	requireClinePluginMarker(t, pluginDir)
 
 	second, err := Run(Options{
 		Harness:      registry.HarnessCline,
@@ -464,14 +476,76 @@ func TestInstallClineWritesHookFiles(t *testing.T) {
 	}
 }
 
-func TestInstallClineRequiresForceForForeignHook(t *testing.T) {
-	hooksDir := filepath.Join(t.TempDir(), "hooks")
-	t.Setenv("CLINE_HOOKS_DIR", hooksDir)
-	if err := os.MkdirAll(hooksDir, 0o700); err != nil {
-		t.Fatalf("creating cline hooks dir: %v", err)
+func requireClinePackageManifest(t *testing.T, pluginDir string) {
+	t.Helper()
+	packageData := readTestFile(t, filepath.Join(pluginDir, "package.json"), "reading Cline plugin package")
+	var packageManifest map[string]any
+	if err := json.Unmarshal(packageData, &packageManifest); err != nil {
+		t.Fatalf("parsing Cline plugin package: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(hooksDir, "TaskStart.sh"), []byte("#!/bin/sh\n"), 0o600); err != nil {
-		t.Fatalf("writing foreign cline hook: %v", err)
+	clineManifest, ok := packageManifest["cline"].(map[string]any)
+	if !ok {
+		t.Fatalf("Cline package manifest missing cline entry: %#v", packageManifest)
+	}
+	plugins, ok := clineManifest["plugins"].([]any)
+	if !ok || len(plugins) != 1 {
+		t.Fatalf("Cline package plugin entries = %#v", clineManifest["plugins"])
+	}
+	entry, ok := plugins[0].(map[string]any)
+	if !ok {
+		t.Fatalf("Cline package plugin entry = %#v", plugins[0])
+	}
+	if paths, ok := entry["paths"].([]any); !ok || len(paths) != 1 || paths[0] != "./index.js" {
+		t.Fatalf("Cline plugin paths = %#v", entry["paths"])
+	}
+	if capabilities, ok := entry["capabilities"].([]any); !ok || len(capabilities) != 1 || capabilities[0] != "hooks" {
+		t.Fatalf("Cline plugin capabilities = %#v", entry["capabilities"])
+	}
+}
+
+func requireClineAgentPlugin(t *testing.T, pluginDir string) {
+	t.Helper()
+	text := string(readTestFile(t, filepath.Join(pluginDir, "index.js"), "reading Cline AgentPlugin"))
+	requireTextContainsAll(t, text, []string{
+		"manifest: { capabilities: [\"hooks\"] }",
+		"setup(_api, ctx)",
+		"beforeRun(context)",
+		"beforeTool(context)",
+		"afterTool(context)",
+		"afterRun({ snapshot, result })",
+		"export default plugin",
+		"ctx?.session?.sessionId",
+		"ctx?.workspaceInfo?.rootPath",
+		"snapshot.runId",
+		"--pid",
+		"agent_sessions_integration=cline-plugin",
+		"child.on(\"error\", () => {})",
+	}, "Cline AgentPlugin")
+	if strings.Contains(text, "context.input") || strings.Contains(text, "context.result") || strings.Contains(text, "outputText") {
+		t.Fatalf("Cline plugin reads content-bearing fields: %q", text)
+	}
+}
+
+func requireClinePluginMarker(t *testing.T, pluginDir string) {
+	t.Helper()
+	marker := string(readTestFile(t, filepath.Join(pluginDir, ".agent-sessions-managed"), "reading Cline plugin marker"))
+	requireTextContainsAll(t, marker, []string{
+		managedMarker,
+		"AGENT_SESSIONS_INTEGRATION_ID=cline",
+		"AGENT_SESSIONS_INTEGRATION_VERSION=4",
+		"AGENT_SESSIONS_SOURCE=cline-plugin",
+	}, "Cline plugin marker")
+}
+
+func TestInstallClineRequiresForceForForeignPlugin(t *testing.T) {
+	clineDir := filepath.Join(t.TempDir(), ".cline")
+	t.Setenv("CLINE_DIR", clineDir)
+	pluginDir := filepath.Join(clineDir, "plugins", "agent-sessions-state")
+	if err := os.MkdirAll(pluginDir, 0o700); err != nil {
+		t.Fatalf("creating Cline plugin dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(pluginDir, "index.js"), []byte("export default {};\n"), 0o600); err != nil {
+		t.Fatalf("writing foreign Cline plugin: %v", err)
 	}
 
 	_, err := Run(Options{
@@ -483,7 +557,39 @@ func TestInstallClineRequiresForceForForeignHook(t *testing.T) {
 		UseShim:      false,
 	})
 	if err == nil {
-		t.Fatal("expected error for unmanaged cline hook")
+		t.Fatal("expected error for unmanaged Cline plugin")
+	}
+}
+
+func TestInstallClineMigratesManagedLegacyHooks(t *testing.T) {
+	clineDir := filepath.Join(t.TempDir(), ".cline")
+	t.Setenv("CLINE_DIR", clineDir)
+	hooksDir := filepath.Join(clineDir, "hooks")
+	if err := os.MkdirAll(hooksDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	managedPath := filepath.Join(hooksDir, "TaskStart.sh")
+	managed := "#!/bin/sh\n# " + managedMarker + "\n# AGENT_SESSIONS_INTEGRATION_ID=cline\n# AGENT_SESSIONS_INTEGRATION_VERSION=3\n"
+	if err := os.WriteFile(managedPath, []byte(managed), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	foreignPath := filepath.Join(hooksDir, "TaskResume.sh")
+	if err := os.WriteFile(foreignPath, []byte("#!/bin/sh\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := Run(Options{Harness: registry.HarnessCline, Binary: testInstallBinary})
+	if err != nil {
+		t.Fatalf("migrating Cline integration: %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("expected migration to report a change")
+	}
+	if _, err := os.Stat(managedPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("legacy managed hook still exists: %v", err)
+	}
+	if _, err := os.Stat(foreignPath); err != nil {
+		t.Fatalf("foreign legacy hook was removed: %v", err)
 	}
 }
 
@@ -534,6 +640,50 @@ func TestInstallShimWritesManagedScript(t *testing.T) {
 	}
 	if result.Path != filepath.Join(dir, "shims", "opencode") {
 		t.Fatalf("unexpected path %q", result.Path)
+	}
+	info, err := os.Stat(result.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != shimFileMode {
+		t.Fatalf("installed shim mode = %#o, want %#o", info.Mode().Perm(), os.FileMode(shimFileMode))
+	}
+}
+
+func TestInstallShimRepairsExecutableMode(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv(registry.StateDirEnv, dir)
+	options := Options{
+		Harness: registry.HarnessOpenCode, Binary: defaultBinary,
+		TargetBinary: "/usr/bin/opencode", UseShim: true,
+	}
+	first, err := Run(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(first.Path, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	status, err := Inspect(registry.HarnessOpenCode, defaultBinary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Status != ArtifactStale {
+		t.Fatalf("non-executable shim status = %q, want stale", status.Status)
+	}
+	repaired, err := Run(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !repaired.Changed {
+		t.Fatal("mode repair was not reported as a change")
+	}
+	info, err := os.Stat(first.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != shimFileMode {
+		t.Fatalf("repaired shim mode = %#o, want %#o", info.Mode().Perm(), os.FileMode(shimFileMode))
 	}
 }
 
@@ -985,6 +1135,22 @@ func TestInstallGooseWritesPlugin(t *testing.T) {
 func TestInstallDroidWritesHooks(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	hooksPath := filepath.Join(home, ".factory", "hooks.json")
+	if err := os.MkdirAll(filepath.Dir(hooksPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	userCommand := "/opt/local/bin/user-droid-hook"
+	initial := `{
+  "description": "user hooks",
+  "foreign_setting": {"enabled": true},
+  "hooks": {
+    "PreToolUse": [{"matcher": "Execute", "hooks": [{"type": "command", "command": "` + userCommand + `"}]}],
+    "CustomEvent": [{"hooks": [{"type": "command", "command": "/opt/local/bin/custom"}]}]
+  }
+}`
+	if err := os.WriteFile(hooksPath, []byte(initial), 0o600); err != nil {
+		t.Fatal(err)
+	}
 
 	result, err := Run(Options{
 		Harness:      registry.HarnessDroid,
@@ -1000,13 +1166,19 @@ func TestInstallDroidWritesHooks(t *testing.T) {
 	if !result.Changed {
 		t.Fatal("expected droid install to report changed")
 	}
-	if result.Path != filepath.Join(home, ".factory", "hooks.json") {
+	if result.Path != hooksPath {
 		t.Fatalf("unexpected path %q", result.Path)
 	}
 
 	data := readTestFile(t, result.Path, "reading droid hooks")
 	config := decodeTestJSONObject(t, data, "droid hooks")
 	hooks := requireTestHooks(t, config)
+	if config["description"] != "user hooks" || !strings.Contains(string(data), userCommand) {
+		t.Fatalf("Droid install did not preserve foreign settings/hooks: %s", data)
+	}
+	if _, ok := hooks["CustomEvent"]; !ok {
+		t.Fatalf("Droid install removed a foreign hook event: %#v", hooks)
+	}
 	requireTestHookEvents(t, hooks, []string{
 		hookEventSessionStart,
 		"UserPromptSubmit",
@@ -1358,8 +1530,8 @@ func TestRunAllInstallsEveryHarness(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunAll returned error: %v", err)
 	}
-	if len(results) != len(AllHarnesses) {
-		t.Fatalf("expected %d results, got %d", len(AllHarnesses), len(results))
+	if len(results) != len(AllHarnesses()) {
+		t.Fatalf("expected %d results, got %d", len(AllHarnesses()), len(results))
 	}
 
 	for _, result := range results {
@@ -1381,7 +1553,7 @@ func TestInstallPlansMatchHarnessCatalog(t *testing.T) {
 		}
 	}
 
-	for _, harness := range AllHarnesses {
+	for _, harness := range AllHarnesses() {
 		adapter, ok := harnesspkg.Find(harness)
 		if !ok {
 			t.Fatalf("AllHarnesses contains unknown harness %q", harness)
@@ -1392,6 +1564,20 @@ func TestInstallPlansMatchHarnessCatalog(t *testing.T) {
 	}
 }
 
+func TestAllHarnessesReturnsDefensiveCopy(t *testing.T) {
+	t.Parallel()
+
+	first := AllHarnesses()
+	if len(first) == 0 {
+		t.Fatal("expected installable harnesses")
+	}
+	want := first[0]
+	first[0] = "mutated"
+	if got := AllHarnesses()[0]; got != want {
+		t.Fatalf("catalog mutation leaked: got %q, want %q", got, want)
+	}
+}
+
 type managedReplacementCase struct {
 	Harness              registry.Harness
 	Path                 string
@@ -1399,6 +1585,7 @@ type managedReplacementCase struct {
 	RequiredText         []string
 	FirstChangeMessage   string
 	SecondChangedMessage string
+	ExpectedNextStep     string
 }
 
 func requireManagedReplacement(t *testing.T, test managedReplacementCase) {
@@ -1417,6 +1604,9 @@ func requireManagedReplacement(t *testing.T, test managedReplacementCase) {
 	}
 	if !result.Changed {
 		t.Fatal(test.FirstChangeMessage)
+	}
+	if result.NextStep != test.ExpectedNextStep {
+		t.Fatalf("install next step = %q, want %q", result.NextStep, test.ExpectedNextStep)
 	}
 
 	text := string(readTestFile(t, test.Path, "reading installed hooks"))
@@ -1438,6 +1628,9 @@ func requireManagedReplacement(t *testing.T, test managedReplacementCase) {
 	}
 	if second.Changed {
 		t.Fatal(test.SecondChangedMessage)
+	}
+	if second.NextStep != "" {
+		t.Fatalf("idempotent install unexpectedly requires activation: %q", second.NextStep)
 	}
 }
 

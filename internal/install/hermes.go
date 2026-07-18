@@ -120,6 +120,7 @@ func ensureHermesMutable(plan harnesspkg.PluginDirectoryInstallPlan) error {
 
 //nolint:cyclop // native install coordinates ownership, activation, and source rollback
 func installHermesPlugin(
+	ctx context.Context,
 	options Options,
 	harness registry.Harness,
 	plan harnesspkg.PluginDirectoryInstallPlan,
@@ -127,14 +128,13 @@ func installHermesPlugin(
 	pluginChanged bool,
 ) (Result, error) {
 	registration := plan.Hermes
-	ctx := context.Background()
 	state, err := inspectHermesRegistration(ctx, plan)
 	if err != nil {
 		return Result{}, err
 	}
 	changed := pluginChanged || state != hermesRegistrationCurrent
 	label := installLabel(plan.Label, harness, "plugin")
-	result := Result{Harness: string(harness), Path: plan.Dir, Changed: changed, Message: installMessage(label, changed, options.DryRun), Snippet: plugin.snippet(), Error: ""}
+	result := Result{Harness: string(harness), Path: plan.Dir, Changed: changed, Message: installMessage(label, changed, options.DryRun), NextStep: "", Snippet: plugin.snippet(), Error: ""}
 	if !changed || options.DryRun {
 		return result, nil
 	}
@@ -179,8 +179,7 @@ func installHermesPlugin(
 	return result, nil
 }
 
-func removeHermesPlugin(options Options, harnessID registry.Harness, plan harnesspkg.PluginDirectoryInstallPlan, exists bool) (Result, error) {
-	ctx := context.Background()
+func removeHermesPlugin(ctx context.Context, options Options, harnessID registry.Harness, plan harnesspkg.PluginDirectoryInstallPlan, exists bool) (Result, error) {
 	state, err := inspectHermesRegistration(ctx, plan)
 	if err != nil {
 		return Result{}, err

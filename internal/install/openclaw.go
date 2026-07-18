@@ -179,6 +179,7 @@ func ensureOpenClawMutable() error {
 
 //nolint:gocognit,cyclop // native install coordinates ownership, CLI mutation, and source rollback
 func installOpenClawPlugin(
+	ctx context.Context,
 	options Options,
 	harness registry.Harness,
 	plan harnesspkg.PluginDirectoryInstallPlan,
@@ -186,7 +187,6 @@ func installOpenClawPlugin(
 	pluginChanged bool,
 ) (Result, error) {
 	registration := plan.OpenClaw
-	ctx := context.Background()
 	state, err := inspectOpenClawRegistration(ctx, plan)
 	if err != nil {
 		return Result{}, err
@@ -196,7 +196,7 @@ func installOpenClawPlugin(
 	}
 	changed := pluginChanged || state != openClawRegistrationCurrent
 	label := installLabel(plan.Label, harness, "plugin")
-	result := Result{Harness: string(harness), Path: plan.Dir, Changed: changed, Message: installMessage(label, changed, options.DryRun), Snippet: plugin.snippet(), Error: ""}
+	result := Result{Harness: string(harness), Path: plan.Dir, Changed: changed, Message: installMessage(label, changed, options.DryRun), NextStep: "", Snippet: plugin.snippet(), Error: ""}
 	if !changed || options.DryRun {
 		return result, nil
 	}
@@ -243,8 +243,7 @@ func installOpenClawPlugin(
 	return result, nil
 }
 
-func removeOpenClawPlugin(options Options, harnessID registry.Harness, plan harnesspkg.PluginDirectoryInstallPlan, exists bool) (Result, error) {
-	ctx := context.Background()
+func removeOpenClawPlugin(ctx context.Context, options Options, harnessID registry.Harness, plan harnesspkg.PluginDirectoryInstallPlan, exists bool) (Result, error) {
 	state, err := inspectOpenClawRegistration(ctx, plan)
 	if err != nil {
 		return Result{}, err

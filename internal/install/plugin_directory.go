@@ -58,6 +58,8 @@ type pluginDirectoryInstall struct {
 	markerFile   string
 	files        map[string]string
 	snippetOrder []string
+	renameFile   func(string, string) error
+	removeTree   func(string) error
 }
 
 func newPluginDirectoryInstall(
@@ -69,7 +71,37 @@ func newPluginDirectoryInstall(
 		markerFile:   plan.MarkerFile,
 		files:        files,
 		snippetOrder: plan.SnippetOrder,
+		renameFile:   os.Rename,
+		removeTree:   os.RemoveAll,
 	}
+}
+
+func (plugin pluginDirectoryInstall) rename(oldPath string, newPath string) error {
+	var err error
+	if plugin.renameFile != nil {
+		err = plugin.renameFile(oldPath, newPath)
+	} else {
+		err = os.Rename(oldPath, newPath)
+	}
+	if err != nil {
+		return fmt.Errorf("renaming %s to %s: %w", oldPath, newPath, err)
+	}
+
+	return nil
+}
+
+func (plugin pluginDirectoryInstall) removeAll(path string) error {
+	var err error
+	if plugin.removeTree != nil {
+		err = plugin.removeTree(path)
+	} else {
+		err = os.RemoveAll(path)
+	}
+	if err != nil {
+		return fmt.Errorf("removing directory tree %s: %w", path, err)
+	}
+
+	return nil
 }
 
 func (plugin pluginDirectoryInstall) ensureManaged(force bool) error {
@@ -257,6 +289,32 @@ func (plugin pluginDirectoryInstall) expectedDirs() map[string]struct{} {
 	return dirs
 }
 
+func managedObsoleteFiles(paths []string) ([]string, error) {
+	managed := make([]string, 0, len(paths))
+	for _, path := range paths {
+		status, err := ClassifyArtifact(path)
+		if err != nil {
+			return nil, err
+		}
+		if status == ArtifactCurrent || status == ArtifactStale {
+			managed = append(managed, path)
+		}
+	}
+
+	return managed, nil
+}
+
+func removeManagedObsoleteFiles(paths []string) error {
+	var failures []error
+	for _, path := range paths {
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			failures = append(failures, fmt.Errorf("removing obsolete managed integration %s: %w", path, err))
+		}
+	}
+
+	return errors.Join(failures...)
+}
+
 func (plugin pluginDirectoryInstall) installStaged() (func() error, func() error, error) {
 	stagedDir, err := plugin.stage()
 	if err != nil {
@@ -274,56 +332,76 @@ func (plugin pluginDirectoryInstall) installStaged() (func() error, func() error
 // at the install operation level.
 func (plugin pluginDirectoryInstall) replace(stagedDir string) (func() error, func() error, error) {
 	parent := filepath.Dir(plugin.dir)
-	backup, err := os.MkdirTemp(parent, "."+filepath.Base(plugin.dir)+".backup-*")
+	backup, backupExists, err := plugin.backupCurrent(parent)
 	if err != nil {
-		return nil, nil, fmt.Errorf("creating plugin backup path: %w", err)
+		return nil, nil, err
 	}
-	if err := os.Remove(backup); err != nil {
-		return nil, nil, fmt.Errorf("preparing plugin backup path: %w", err)
-	}
-
-	backupExists := false
-	if err := os.Rename(plugin.dir, backup); err != nil {
-		if !errors.Is(err, os.ErrNotExist) {
-			return nil, nil, fmt.Errorf("backing up plugin directory: %w", err)
-		}
-	} else {
-		backupExists = true
-	}
-
-	if err := os.Rename(stagedDir, plugin.dir); err != nil {
-		if backupExists {
-			_ = os.Rename(backup, plugin.dir)
-		}
-
-		return nil, nil, fmt.Errorf("installing staged plugin directory: %w", err)
+	if err := plugin.rename(stagedDir, plugin.dir); err != nil {
+		cause := fmt.Errorf("installing staged plugin directory: %w", err)
+		return nil, nil, errors.Join(cause, plugin.restoreBackup(backup, backupExists))
 	}
 
 	rollback := func() error {
-		err := os.RemoveAll(plugin.dir)
-		if err != nil {
-			return fmt.Errorf("removing staged plugin directory: %w", err)
-		}
-		if backupExists {
-			if err := os.Rename(backup, plugin.dir); err != nil {
-				return fmt.Errorf("restoring plugin directory backup: %w", err)
-			}
-		}
-
-		return nil
+		return plugin.rollbackReplacement(parent, backup, backupExists)
 	}
 	commit := func() error {
-		if !backupExists {
-			return syncDir(parent)
-		}
-		if err := os.RemoveAll(backup); err != nil {
-			return fmt.Errorf("removing plugin directory backup: %w", err)
-		}
-
-		return syncDir(parent)
+		return plugin.commitReplacement(parent, backup, backupExists)
 	}
 
 	return rollback, commit, nil
+}
+
+func (plugin pluginDirectoryInstall) backupCurrent(parent string) (string, bool, error) {
+	backup, err := os.MkdirTemp(parent, "."+filepath.Base(plugin.dir)+".backup-*")
+	if err != nil {
+		return "", false, fmt.Errorf("creating plugin backup path: %w", err)
+	}
+	if err := os.Remove(backup); err != nil {
+		return "", false, fmt.Errorf("preparing plugin backup path: %w", err)
+	}
+	if err := plugin.rename(plugin.dir, backup); err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			return "", false, fmt.Errorf("backing up plugin directory: %w", err)
+		}
+
+		return backup, false, nil
+	}
+
+	return backup, true, nil
+}
+
+func (plugin pluginDirectoryInstall) restoreBackup(backup string, backupExists bool) error {
+	if !backupExists {
+		return nil
+	}
+	if err := plugin.rename(backup, plugin.dir); err != nil {
+		return fmt.Errorf("restoring plugin directory backup %s: %w", backup, err)
+	}
+
+	return nil
+}
+
+func (plugin pluginDirectoryInstall) rollbackReplacement(parent string, backup string, backupExists bool) error {
+	var removeErr error
+	if err := plugin.removeAll(plugin.dir); err != nil {
+		removeErr = fmt.Errorf("removing staged plugin directory: %w", err)
+	}
+	restoreErr := plugin.restoreBackup(backup, backupExists)
+	if restoreErr == nil {
+		restoreErr = syncDir(parent)
+	}
+
+	return errors.Join(removeErr, restoreErr)
+}
+
+func (plugin pluginDirectoryInstall) commitReplacement(parent string, backup string, backupExists bool) error {
+	if backupExists {
+		if err := plugin.removeAll(backup); err != nil {
+			return fmt.Errorf("removing plugin directory backup %s: %w", backup, err)
+		}
+	}
+
+	return syncDir(parent)
 }
 
 func (plugin pluginDirectoryInstall) snippet() string {

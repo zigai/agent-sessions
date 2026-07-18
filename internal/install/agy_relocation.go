@@ -14,6 +14,12 @@ const (
 	legacyAgySource       = "antigravity"
 )
 
+type agyRelocationOps struct {
+	rename    func(string, string) error
+	removeAll func(string) error
+	stat      func(string) (os.FileInfo, error)
+}
+
 // legacyAgyPaths returns old plugin and manifest paths when the active plan
 // targets ~/.gemini/antigravity-cli. Paths outside that exact layout are left
 // untouched, including user-configured plugin directories.
@@ -39,7 +45,7 @@ func legacyAgyPluginManaged(path string) (bool, error) {
 		}
 		return false, fmt.Errorf("checking legacy Agy plugin: %w", err)
 	}
-	return (pluginDirectoryInstall{dir: path, markerFile: legacyAgyMarkerFile, files: nil, snippetOrder: nil}).managed()
+	return (pluginDirectoryInstall{dir: path, markerFile: legacyAgyMarkerFile, files: nil, snippetOrder: nil, renameFile: nil, removeTree: nil}).managed()
 }
 
 func legacyAgyNeedsCleanup(pluginDir string) (bool, error) {
@@ -73,9 +79,16 @@ func legacyAgyNeedsCleanup(pluginDir string) (bool, error) {
 // marker and only our import-manifest entry. It is called after the new
 // directory has been staged and installed, so a failed staging operation never
 // destroys the old integration.
-//
-//nolint:gocognit,cyclop // cleanup validates ownership and manifest entries before mutation
 func cleanupLegacyAgy(pluginDir string) error {
+	return cleanupLegacyAgyWithOps(pluginDir, agyRelocationOps{
+		rename:    os.Rename,
+		removeAll: os.RemoveAll,
+		stat:      os.Stat,
+	})
+}
+
+//nolint:gocognit,cyclop // injectable file operations cover rollback failures without package-global test seams
+func cleanupLegacyAgyWithOps(pluginDir string, ops agyRelocationOps) error {
 	legacyDir, manifestPath, ok := legacyAgyPaths(pluginDir)
 	if !ok {
 		return nil
@@ -95,28 +108,36 @@ func cleanupLegacyAgy(pluginDir string) error {
 		if err := os.Remove(backupDir); err != nil {
 			return fmt.Errorf("preparing legacy Agy backup path: %w", err)
 		}
-		if err := os.Rename(legacyDir, backupDir); err != nil {
+		if err := ops.rename(legacyDir, backupDir); err != nil {
 			return fmt.Errorf("staging legacy Agy plugin removal: %w", err)
 		}
 	}
-	restored := false
-	restore := func() {
-		if restored || backupDir == "" {
-			return
+	restore := func(cause error) error {
+		if backupDir == "" {
+			return cause
 		}
-		restored = true
-		_ = os.Rename(backupDir, legacyDir)
+		if restoreErr := ops.rename(backupDir, legacyDir); restoreErr != nil {
+			return errors.Join(cause, fmt.Errorf("restoring legacy Agy plugin backup %s: %w", backupDir, restoreErr))
+		}
+		backupDir = ""
+
+		return cause
 	}
-	defer func() {
-		if backupDir != "" && !restored {
-			_ = os.RemoveAll(backupDir)
+	discard := func() error {
+		if backupDir == "" {
+			return nil
 		}
-	}()
+		if err := ops.removeAll(backupDir); err != nil {
+			return fmt.Errorf("removing legacy Agy backup %s: %w", backupDir, err)
+		}
+		backupDir = ""
+
+		return nil
+	}
 
 	manifest, err := readImportManifest(manifestPath)
 	if err != nil {
-		restore()
-		return err
+		return restore(err)
 	}
 	filtered := manifest.Imports[:0]
 	removed := false
@@ -128,35 +149,22 @@ func cleanupLegacyAgy(pluginDir string) error {
 		filtered = append(filtered, item)
 	}
 	if !removed {
-		if backupDir != "" {
-			if err := os.RemoveAll(backupDir); err != nil {
-				restore()
-				return fmt.Errorf("removing legacy Agy backup: %w", err)
-			}
+		if err := discard(); err != nil {
+			return restore(err)
 		}
 		return nil
 	}
 	manifest.Imports = filtered
 
-	if _, err := os.Stat(manifestPath); err != nil {
+	if _, err := ops.stat(manifestPath); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			if backupDir != "" {
-				_ = os.RemoveAll(backupDir)
-			}
-			return nil
+			return discard()
 		}
-		restore()
-		return fmt.Errorf("checking legacy Agy import manifest: %w", err)
+		return restore(fmt.Errorf("checking legacy Agy import manifest: %w", err))
 	}
 	if err := writeImportManifest(manifestPath, manifest); err != nil {
-		restore()
-		return fmt.Errorf("removing legacy Agy import entry: %w", err)
-	}
-	if backupDir != "" {
-		if err := os.RemoveAll(backupDir); err != nil {
-			return fmt.Errorf("removing legacy Agy backup: %w", err)
-		}
+		return restore(fmt.Errorf("removing legacy Agy import entry: %w", err))
 	}
 
-	return nil
+	return discard()
 }
