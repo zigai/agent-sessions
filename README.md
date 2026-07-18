@@ -1,6 +1,7 @@
 # agent-sessions
 
-Track coding-agent sessions, activity, processes, and tmux locations on one machine.
+Track coding-agent sessions, activity, processes, and terminal-multiplexer
+locations on one machine.
 
 Supported harnesses: `claude`, `codex`, `cursor`, `copilot`, `cline`,
 `kimi-code`, `grok`, `goose`, `pi`, `omp`, `opencode`, `agy`,
@@ -62,6 +63,25 @@ through their managed configuration instead of this installer.
 
 Run `agent-sessions --help` or `agent-sessions <command> --help` for all
 commands and options.
+
+## Multiplexer support
+
+The background monitor discovers panes in tmux, Zellij, and Herdr and records
+the multiplexer, session, container, pane, and cwd alongside each agent. No raw
+terminal contents are stored.
+
+- tmux uses native pane inventory, foreground TTY/PID correlation, and
+  `capture-pane` state detection.
+- Zellij uses native session/pane JSON and `dump-screen`. Zellij's CLI does not
+  expose pane PIDs or TTYs, so Linux correlation uses the inherited
+  `ZELLIJ_SESSION_NAME` and `ZELLIJ_PANE_ID`; other platforms use a conservative
+  unique command/cwd match when possible.
+- Herdr uses its native session snapshot and pane process-info APIs. Herdr's
+  semantic agent status is preferred when available, with its detection buffer
+  as the screen-state fallback.
+
+Install the relevant multiplexer command on `PATH`; no separate
+agent-sessions multiplexer plugin is required.
 
 ## Hook Installation
 
