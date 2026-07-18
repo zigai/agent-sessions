@@ -19,6 +19,15 @@ func TestParseFastReportOptionsSupportsProcessEvidence(t *testing.T) {
 	}
 }
 
+func TestParseFastReportOptionsSupportsLifecycle(t *testing.T) {
+	t.Parallel()
+
+	options, ok, err := parseFastReportOptions([]string{"openclaw", "--lifecycle", "start", "--presence", "live", "--session-id", "session"})
+	if err != nil || !ok || options.lifecycle != "start" {
+		t.Fatalf("fast lifecycle options = %#v, ok=%v, err=%v", options, ok, err)
+	}
+}
+
 func TestParseFastReportOptionsRejectsConflictingHarnesses(t *testing.T) {
 	t.Setenv("AGENT_SESSIONS_HARNESS", "codex")
 

@@ -47,6 +47,22 @@ func TestProcessQueuedObservation(t *testing.T) {
 	}
 }
 
+func TestQueuedReportEnvelopePreservesNoTmux(t *testing.T) {
+	t.Parallel()
+
+	at := time.Date(2026, 7, 18, 12, 0, 0, 0, time.UTC)
+	envelope := queuedReportEnvelope("/tmp/state.json", preparedReport{
+		harness: registry.HarnessOpenClaw,
+		observation: registry.Observation{
+			Harness:  registry.HarnessOpenClaw,
+			Identity: registry.ObservationIdentity{SessionID: "session"},
+		},
+	}, true, at, reportqueue.RuntimeContext{}, registry.TmuxContext{Inside: true, SessionName: "foreign"})
+	if !envelope.NoTmux {
+		t.Fatal("queued report lost --no-tmux")
+	}
+}
+
 func TestValidateQueuedObservationRejectsMissingIdentity(t *testing.T) {
 	err := validateQueuedObservation(registry.Observation{Harness: registry.HarnessClaude})
 	if err == nil {

@@ -181,6 +181,9 @@ func TestNormalize(t *testing.T) {
 		{name: "droid", value: "droid", want: registry.HarnessDroid},
 		{name: "droid factory alias", value: "factory", want: registry.HarnessDroid},
 		{name: "droid factory cli alias", value: "factory_cli", want: registry.HarnessDroid},
+		{name: "openclaw", value: "openclaw", want: registry.HarnessOpenClaw},
+		{name: "hermes", value: "hermes", want: registry.HarnessHermes},
+		{name: "hermes agent alias", value: "hermes-agent", want: registry.HarnessHermes},
 	}
 
 	for _, test := range tests {
@@ -216,6 +219,8 @@ func TestSupportedNames(t *testing.T) {
 		"agy",
 		kiloCommand,
 		"droid",
+		"openclaw",
+		"hermes",
 	}
 	got := SupportedNames()
 	if !slices.Equal(got, want) {
@@ -328,6 +333,8 @@ func TestFromCommand(t *testing.T) {
 		{command: "kilo-code", want: registry.HarnessKilo, wantOK: true},
 		{command: "kilo_code", want: registry.HarnessKilo, wantOK: true},
 		{command: "droid", want: registry.HarnessDroid, wantOK: true},
+		{command: "openclaw", want: "", wantOK: false},
+		{command: "hermes", want: "", wantOK: false},
 		{command: "zsh", want: "", wantOK: false},
 	}
 

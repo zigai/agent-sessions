@@ -1335,6 +1335,8 @@ func TestInstallGrokReplacesManagedHooks(t *testing.T) {
 }
 
 func TestRunAllInstallsEveryHarness(t *testing.T) {
+	installFakeOpenClawCLI(t)
+	installFakeHermesCLI(t)
 	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
 	t.Setenv("CODEX_HOME", t.TempDir())
 	t.Setenv("GROK_HOME", t.TempDir())
