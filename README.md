@@ -4,7 +4,7 @@ Track coding-agent sessions, activity, processes, and tmux locations on one mach
 
 Supported harnesses: `claude`, `codex`, `cursor`, `copilot`, `cline`,
 `kimi-code`, `grok`, `goose`, `pi`, `omp`, `opencode`, `agy`,
-`kilo`, and `droid`.
+`kilo`, `droid`, `openclaw`, and `hermes`.
 
 ## Installation
 
@@ -36,6 +36,29 @@ Check the installation:
 ```sh
 agent-sessions doctor
 ```
+
+### OpenClaw
+
+The OpenClaw integration installs a managed native plugin with
+`openclaw plugins install --link`. It reports only live session identity,
+lifecycle, activity, workspace, and resume metadata; it does not import
+persisted session history or conversation content. OpenClaw requires the
+plugin's scoped `allowConversationAccess` permission so its documented
+`before_agent_run` and `agent_end` hooks can run. Follow OpenClaw's restart
+notice when a Gateway is already running. Permission/input-waiting state is not
+reported because OpenClaw's current typed plugin API does not expose a general
+approval-request observer hook.
+
+### Hermes
+
+The Hermes integration installs a managed native Python plugin under
+`$HERMES_HOME/plugins` (default `~/.hermes/plugins`) and activates it with
+`hermes plugins enable`. It reports live session identity, lifecycle, cwd,
+activity, approval-waiting state, and resume metadata without reading prompts,
+conversation history, commands, descriptions, responses, or persisted session
+history. Start a new Hermes session after installation so Hermes loads the
+plugin. Package-manager-managed Hermes configurations must declare the plugin
+through their managed configuration instead of this installer.
 
 Run `agent-sessions --help` or `agent-sessions <command> --help` for all
 commands and options.
