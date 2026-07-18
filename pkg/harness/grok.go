@@ -163,7 +163,7 @@ func grokCommandHookGroup(command string, matcher string) map[string]any {
 	return group
 }
 
-func grokHookCommand(binary string, transition any, event string) string {
+func grokHookCommand[T hookTransition](binary string, transition T, event string) string {
 	return ReportHookCommand(binary, registry.HarnessGrok, transition, event, grokIntegrationSource)
 }
 

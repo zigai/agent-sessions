@@ -3,6 +3,8 @@ package harness
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -60,6 +62,12 @@ func (kimiCodeHarness) PayloadCompatible(rawPayload json.RawMessage) bool {
 }
 
 func (kimiCodeHarness) PayloadDefaults(payload map[string]any) PayloadDefaults {
+	defaults, _ := kimiCodePayloadDefaults(payload)
+
+	return defaults
+}
+
+func (kimiCodeHarness) payloadDefaultsWithError(payload map[string]any) (PayloadDefaults, error) {
 	return kimiCodePayloadDefaults(payload)
 }
 
@@ -201,12 +209,16 @@ func kimiCodeHookBlock(binary string) string {
 	return builder.String()
 }
 
-func kimiCodeHookCommand(binary string, transition any, event string) string {
+func kimiCodeHookCommand[T hookTransition](binary string, transition T, event string) string {
 	return ReportHookCommand(binary, registry.HarnessKimiCode, transition, event, kimiCodeIntegrationSource)
 }
 
-func kimiCodePayloadDefaults(payload map[string]any) PayloadDefaults {
+func kimiCodePayloadDefaults(payload map[string]any) (PayloadDefaults, error) {
 	sessionID := payloadString(payload, "session_id")
+	sessionPath, err := kimiCodeSessionPath(sessionID)
+	if err != nil {
+		return PayloadDefaults{}, err
+	}
 	attributes := make(map[string]string)
 	addAttributeString(attributes, "kimi_code_hook_event", payloadString(payload, "hook_event_name"))
 	addAttributeString(attributes, "kimi_code_start_source", payloadString(payload, "source"))
@@ -218,12 +230,12 @@ func kimiCodePayloadDefaults(payload map[string]any) PayloadDefaults {
 
 	return PayloadDefaults{
 		SessionID:   sessionID,
-		SessionPath: kimiCodeSessionPath(sessionID),
+		SessionPath: sessionPath,
 		CWD:         payloadString(payload, "cwd"),
 		ProjectRoot: "",
 		Event:       payloadString(payload, "hook_event_name"),
 		Attributes:  attributes,
-	}
+	}, nil
 }
 
 func payloadScalarString(payload map[string]any, key string) string {
@@ -244,21 +256,24 @@ func payloadScalarString(payload map[string]any, key string) string {
 	}
 }
 
-func kimiCodeSessionPath(sessionID string) string {
+func kimiCodeSessionPath(sessionID string) (string, error) {
 	if sessionID == "" {
-		return ""
+		return "", nil
 	}
 
-	file, err := os.Open(filepath.Join(kimiCodeHome(), "session_index.jsonl"))
+	indexPath := filepath.Join(kimiCodeHome(), "session_index.jsonl")
+	file, err := os.Open(indexPath)
 	if err != nil {
-		return ""
+		if errors.Is(err, os.ErrNotExist) {
+			return "", nil
+		}
+
+		return "", fmt.Errorf("opening Kimi Code session index: %w", err)
 	}
-	defer func() {
-		_ = file.Close()
-	}()
 
 	scanner := bufio.NewScanner(file)
 	scanner.Buffer(make([]byte, 0, kimiCodeSessionIndexInitialBufferSize), kimiCodeSessionIndexMaxBufferSize)
+	sessionPath := ""
 	for scanner.Scan() {
 		var entry map[string]any
 		if err := json.Unmarshal([]byte(strings.TrimSpace(scanner.Text())), &entry); err != nil {
@@ -266,11 +281,20 @@ func kimiCodeSessionPath(sessionID string) string {
 		}
 		sessionDir := payloadString(entry, "sessionDir")
 		if payloadString(entry, "sessionId") == sessionID && sessionDir != "" {
-			return sessionDir
+			sessionPath = sessionDir
+			break
 		}
 	}
+	scanErr := scanner.Err()
+	closeErr := file.Close()
+	if scanErr != nil {
+		return "", errors.Join(fmt.Errorf("scanning Kimi Code session index %s: %w", indexPath, scanErr), closeErr)
+	}
+	if closeErr != nil {
+		return "", fmt.Errorf("closing Kimi Code session index %s: %w", indexPath, closeErr)
+	}
 
-	return ""
+	return sessionPath, nil
 }
 
 func kimiCodeHome() string {

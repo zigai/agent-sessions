@@ -20,6 +20,21 @@ const (
 	resumeFlag                  = "--resume"
 )
 
+// HookTransition is the closed, dimension-aware state used by generated hook
+// specifications that need to store a transition before rendering it.
+type HookTransition string
+
+const (
+	HookActivityRunning HookTransition = "activity:running"
+	HookActivityWaiting HookTransition = "activity:waiting"
+	HookActivityIdle    HookTransition = "activity:idle"
+	HookPresenceGone    HookTransition = "presence:gone"
+)
+
+type hookTransition interface {
+	registry.Activity | registry.Presence | HookTransition
+}
+
 type InstallPlan struct {
 	Actions []InstallAction
 }
@@ -134,6 +149,7 @@ type PluginDirectoryInstallPlan struct {
 	Files          []PluginFileInstallSpec
 	SnippetOrder   []string
 	MarkerFile     string
+	ObsoleteFiles  []string
 	ImportManifest *ImportManifestInstallPlan
 	OpenClaw       *OpenClawPluginRegistrationPlan
 	Hermes         *HermesPluginRegistrationPlan
@@ -169,24 +185,24 @@ type ImportManifestInstallPlan struct {
 	Components []string
 }
 
-func ReportHookCommand(binary string, harness registry.Harness, transition any, event string, source string) string {
+func ReportHookCommand[T hookTransition](binary string, harness registry.Harness, transition T, event string, source string) string {
 	return reportHookCommand(binary, harness, transition, event, source, "--raw-stdin")
 }
 
-func RawStdinDefaultsReportHookCommand(
+func RawStdinDefaultsReportHookCommand[T hookTransition](
 	binary string,
 	harness registry.Harness,
-	transition any,
+	transition T,
 	event string,
 	source string,
 ) string {
 	return reportHookCommand(binary, harness, transition, event, source, "--raw-stdin-defaults-only")
 }
 
-func reportHookCommand(
+func reportHookCommand[T hookTransition](
 	binary string,
 	harness registry.Harness,
-	transition any,
+	transition T,
 	event string,
 	source string,
 	stdinFlag string,
@@ -196,20 +212,8 @@ func reportHookCommand(
 		"report",
 		ShellQuote(string(harness)),
 	}
-	switch value := transition.(type) {
-	case registry.Presence:
-		if value != "" {
-			parts = append(parts, "--presence", ShellQuote(string(value)))
-		}
-	case registry.Activity:
-		if value != "" {
-			parts = append(parts, "--activity", ShellQuote(string(value)))
-		}
-	case string:
-		if value != "" {
-			parts = append(parts, "--activity", ShellQuote(value))
-		}
-	}
+	flag, value := hookTransitionArgument(transition)
+	parts = append(parts, flag, ShellQuote(value))
 	if event != "" {
 		parts = append(parts, "--event", ShellQuote(event))
 	}
@@ -224,17 +228,56 @@ func reportHookCommand(
 	return strings.Join(parts, " ")
 }
 
-func stringTransition(value any) string {
-	switch transition := value.(type) {
+func hookTransitionArgument[T hookTransition](transition T) (string, string) {
+	switch value := any(transition).(type) {
 	case registry.Activity:
-		return string(transition)
+		return activityTransitionArgument(value)
 	case registry.Presence:
-		return string(transition)
-	case string:
-		return transition
+		return presenceTransitionArgument(value)
+	case HookTransition:
+		return storedHookTransitionArgument(value)
 	default:
-		return ""
+		panic("unsupported hook transition type")
 	}
+}
+
+func activityTransitionArgument(value registry.Activity) (string, string) {
+	normalized, err := registry.NormalizeActivity(string(value))
+	if err != nil || normalized == "" || normalized != value {
+		panic("invalid hook activity transition")
+	}
+
+	return "--activity", string(value)
+}
+
+func presenceTransitionArgument(value registry.Presence) (string, string) {
+	normalized, err := registry.NormalizePresence(string(value))
+	if err != nil || normalized == "" || normalized != value {
+		panic("invalid hook presence transition")
+	}
+
+	return "--presence", string(value)
+}
+
+func storedHookTransitionArgument(value HookTransition) (string, string) {
+	switch value {
+	case HookActivityRunning:
+		return "--activity", string(registry.ActivityRunning)
+	case HookActivityWaiting:
+		return "--activity", string(registry.ActivityWaiting)
+	case HookActivityIdle:
+		return "--activity", string(registry.ActivityIdle)
+	case HookPresenceGone:
+		return "--presence", string(registry.PresenceGone)
+	default:
+		panic("invalid stored hook transition")
+	}
+}
+
+func stringTransition(value HookTransition) string {
+	_, state := hookTransitionArgument(value)
+
+	return state
 }
 
 func ShellQuote(value string) string {

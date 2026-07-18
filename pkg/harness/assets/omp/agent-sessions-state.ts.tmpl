@@ -81,6 +81,7 @@ function report(activity: string | undefined, presence: string | undefined, ctx?
       detached: true,
       stdio: "ignore",
     });
+    child.on("error", () => {});
     child.unref();
   } catch {
     // Session reporting must never break oh-my-pi startup or turns.

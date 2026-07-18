@@ -45,6 +45,7 @@ func (hermesHarness) InstallPlan(binary string) InstallPlan {
 		},
 		SnippetOrder:   []string{"plugin.yaml", "__init__.py", hermesMarkerFileName},
 		MarkerFile:     hermesMarkerFileName,
+		ObsoleteFiles:  nil,
 		ImportManifest: nil,
 		OpenClaw:       nil,
 		Hermes: &HermesPluginRegistrationPlan{

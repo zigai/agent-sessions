@@ -57,7 +57,7 @@ const IntegrationVersion = 3
 
 // IntegrationVersionFor returns the managed artifact generation for a harness.
 func IntegrationVersionFor(id registry.Harness) int {
-	if id == registry.HarnessAgy {
+	if id == registry.HarnessAgy || id == registry.HarnessCline {
 		return IntegrationVersion + 1
 	}
 	return IntegrationVersion
@@ -120,6 +120,10 @@ type Resumable interface {
 type PayloadAdapter interface {
 	PayloadCompatible(rawPayload json.RawMessage) bool
 	PayloadDefaults(payload map[string]any) PayloadDefaults
+}
+
+type payloadDefaultsErrorAdapter interface {
+	payloadDefaultsWithError(payload map[string]any) (PayloadDefaults, error)
 }
 
 type baseAdapter struct {
@@ -203,25 +207,36 @@ func ProcessNames(harness registry.Harness) []string {
 }
 
 func DefaultsFromPayload(harness registry.Harness, rawPayload json.RawMessage) PayloadDefaults {
+	defaults, _ := DefaultsFromPayloadWithError(harness, rawPayload)
+
+	return defaults
+}
+
+// DefaultsFromPayloadWithError derives known harness fields while preserving
+// failures from adapters that consult auxiliary native session metadata.
+func DefaultsFromPayloadWithError(harness registry.Harness, rawPayload json.RawMessage) (PayloadDefaults, error) {
 	if len(rawPayload) == 0 {
-		return emptyPayloadDefaults()
+		return emptyPayloadDefaults(), nil
 	}
 
 	adapter, ok := Find(harness)
 	if !ok {
-		return emptyPayloadDefaults()
+		return emptyPayloadDefaults(), nil
 	}
 	payloadAdapter, ok := adapter.(PayloadAdapter)
 	if !ok {
-		return emptyPayloadDefaults()
+		return emptyPayloadDefaults(), nil
 	}
 
 	var payload map[string]any
 	if err := json.Unmarshal(rawPayload, &payload); err != nil {
-		return emptyPayloadDefaults()
+		return emptyPayloadDefaults(), fmt.Errorf("decoding hook payload defaults: %w", err)
+	}
+	if errorAdapter, ok := adapter.(payloadDefaultsErrorAdapter); ok {
+		return errorAdapter.payloadDefaultsWithError(payload)
 	}
 
-	return payloadAdapter.PayloadDefaults(payload)
+	return payloadAdapter.PayloadDefaults(payload), nil
 }
 
 func PayloadCompatibleWithHarness(harness registry.Harness, rawPayload json.RawMessage) bool {

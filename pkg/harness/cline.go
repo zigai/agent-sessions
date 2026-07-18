@@ -1,7 +1,9 @@
 package harness
 
 import (
+	_ "embed"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -12,17 +14,16 @@ import (
 
 const (
 	clineCommand           = "cline"
-	clineIntegrationID     = "cline"
-	clineIntegrationSource = "cline-hook"
+	clinePluginName        = "agent-sessions-state"
+	clineMarkerFileName    = ".agent-sessions-managed"
+	clineIntegrationSource = "cline-plugin"
 )
+
+//go:embed assets/cline/index.js.tmpl
+var clinePluginTemplate string
 
 type clineHarness struct {
 	baseAdapter
-}
-
-type clineHookSpec struct {
-	name       string
-	transition any
 }
 
 func clineAdapter() Adapter {
@@ -38,28 +39,29 @@ func clineAdapter() Adapter {
 }
 
 func (clineHarness) InstallPlan(binary string) InstallPlan {
-	specs := clineHookSpecs()
-	files := make([]RenderedFileInstallSpec, 0, len(specs))
-	order := make([]string, 0, len(specs))
-	for _, spec := range specs {
-		name := spec.name + ".sh"
-		files = append(files, RenderedFileInstallSpec{
-			Name:        name,
-			Content:     clineHookScript(binary, spec),
-			JSONContent: nil,
-		})
-		order = append(order, name)
-	}
+	version := strconv.Itoa(IntegrationVersionFor(registry.HarnessCline))
+	dir := filepath.Join(clineConfigDir(), "plugins", clinePluginName)
 
-	return InstallPlan{
-		Actions: []InstallAction{RenderedFilesAction{Plan: RenderedFilesInstallPlan{
-			Dir:          clineHooksDir(),
-			Label:        "cline hooks",
-			ConfigLabel:  "cline hooks",
-			Files:        files,
-			SnippetOrder: order,
-		}}},
-	}
+	return InstallPlan{Actions: []InstallAction{PluginDirectoryAction{Plan: PluginDirectoryInstallPlan{
+		Dir:   dir,
+		Label: "Cline plugin",
+		Files: []PluginFileInstallSpec{
+			{Name: "package.json", Content: "", JSONContent: map[string]any{
+				"name": clinePluginName, "version": "0.0." + version, "private": true, "type": "module",
+				"cline": map[string]any{"plugins": []any{map[string]any{
+					"paths": []string{"./index.js"}, "capabilities": []string{"hooks"},
+				}}},
+			}},
+			{Name: "index.js", Content: renderClinePlugin(binary, version), JSONContent: nil},
+			{Name: clineMarkerFileName, Content: clineMarkerContent(version), JSONContent: nil},
+		},
+		SnippetOrder:   []string{"package.json", "index.js", clineMarkerFileName},
+		MarkerFile:     clineMarkerFileName,
+		ObsoleteFiles:  clineLegacyHookPaths(),
+		ImportManifest: nil,
+		OpenClaw:       nil,
+		Hermes:         nil,
+	}}}}
 }
 
 func (clineHarness) ResumeCommand(sessionID string, _ string) []string {
@@ -70,6 +72,8 @@ func (clineHarness) ResumeCommand(sessionID string, _ string) []string {
 	return []string{clineCommand, "--id", sessionID}
 }
 
+// PayloadCompatible retains report-command compatibility with payloads from
+// Cline's retired standalone-hook surface. New installations use AgentPlugin.
 func (clineHarness) PayloadCompatible(rawPayload json.RawMessage) bool {
 	return clinePayloadValidator(rawPayload)
 }
@@ -78,37 +82,17 @@ func (clineHarness) PayloadDefaults(payload map[string]any) PayloadDefaults {
 	return clinePayloadDefaults(payload)
 }
 
-func clineHookSpecs() []clineHookSpec {
-	return []clineHookSpec{
-		{name: "TaskStart", transition: registry.ActivityIdle},
-		{name: "TaskResume", transition: registry.ActivityIdle},
-		{name: HookEventUserPromptSubmit, transition: registry.ActivityRunning},
-		{name: HookEventPreToolUse, transition: registry.ActivityRunning},
-		{name: HookEventPostToolUse, transition: registry.ActivityRunning},
-		{name: "TaskComplete", transition: registry.ActivityIdle},
-		{name: "TaskCancel", transition: registry.ActivityIdle},
-		{name: "TaskError", transition: registry.ActivityIdle},
-		{name: "PreCompact", transition: registry.ActivityRunning},
-		{name: "SessionShutdown", transition: registry.PresenceGone},
-	}
+func renderClinePlugin(binary string, version string) string {
+	replacer := strings.NewReplacer(
+		"{{BINARY}}", strconv.Quote(binary),
+		"{{INTEGRATION_VERSION}}", strconv.Quote(version),
+	)
+
+	return replacer.Replace(clinePluginTemplate)
 }
 
-func clineHookScript(binary string, spec clineHookSpec) string {
-	return strings.Join([]string{
-		"#!/bin/sh",
-		"# " + ManagedMarker,
-		"# AGENT_SESSIONS_INTEGRATION_ID=" + clineIntegrationID,
-		"# AGENT_SESSIONS_INTEGRATION_VERSION=" + strconv.Itoa(IntegrationVersion),
-		"# AGENT_SESSIONS_SOURCE=" + clineIntegrationSource,
-		clineHookCommand(binary, spec.transition, spec.name) + " >/dev/null 2>&1 || true",
-		"printf '%s\\n' '{}'",
-		"",
-	}, "\n")
-}
-
-func clineHookCommand(binary string, transition any, event string) string {
-	return reportHookCommand(binary, registry.HarnessCline, transition, event, clineIntegrationSource, "--raw-stdin-defaults-only") +
-		" --attribute " + ShellQuote("cline_hook_event="+event)
+func clineMarkerContent(version string) string {
+	return fmt.Sprintf("%s\nAGENT_SESSIONS_INTEGRATION_ID=cline\nAGENT_SESSIONS_INTEGRATION_VERSION=%s\nAGENT_SESSIONS_SOURCE=%s\n", ManagedMarker, version, clineIntegrationSource)
 }
 
 func clinePayloadDefaults(payload map[string]any) PayloadDefaults {
@@ -156,15 +140,44 @@ func clineSessionPath(sessionID string) string {
 	return filepath.Join(clineSessionDir(), sessionID, sessionID+".messages.json")
 }
 
-func clineHooksDir() string {
-	if value := strings.TrimSpace(os.Getenv("CLINE_HOOKS_DIR")); value != "" {
+func clineConfigDir() string {
+	if value := strings.TrimSpace(os.Getenv("CLINE_DIR")); value != "" {
 		return value
 	}
 	if home := strings.TrimSpace(os.Getenv("HOME")); home != "" {
-		return filepath.Join(home, ".cline", "hooks")
+		return filepath.Join(home, ".cline")
 	}
 
-	return filepath.Join(".cline", "hooks")
+	return ".cline"
+}
+
+func clineLegacyHooksDir() string {
+	if value := strings.TrimSpace(os.Getenv("CLINE_HOOKS_DIR")); value != "" {
+		return value
+	}
+
+	return filepath.Join(clineConfigDir(), "hooks")
+}
+
+func clineLegacyHookPaths() []string {
+	names := []string{
+		"TaskStart.sh",
+		"TaskResume.sh",
+		"UserPromptSubmit.sh",
+		"PreToolUse.sh",
+		"PostToolUse.sh",
+		"TaskComplete.sh",
+		"TaskCancel.sh",
+		"TaskError.sh",
+		"PreCompact.sh",
+		"SessionShutdown.sh",
+	}
+	paths := make([]string, 0, len(names))
+	for _, name := range names {
+		paths = append(paths, filepath.Join(clineLegacyHooksDir(), name))
+	}
+
+	return paths
 }
 
 func clineSessionDir() string {
@@ -174,9 +187,6 @@ func clineSessionDir() string {
 	if value := strings.TrimSpace(os.Getenv("CLINE_DATA_DIR")); value != "" {
 		return filepath.Join(value, "sessions")
 	}
-	if home := strings.TrimSpace(os.Getenv("HOME")); home != "" {
-		return filepath.Join(home, ".cline", "data", "sessions")
-	}
 
-	return filepath.Join(".cline", "data", "sessions")
+	return filepath.Join(clineConfigDir(), "data", "sessions")
 }

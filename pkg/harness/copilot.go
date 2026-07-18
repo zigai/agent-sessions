@@ -21,7 +21,7 @@ type copilotHarness struct {
 
 type copilotHookSpec struct {
 	event      string
-	transition any
+	transition HookTransition
 	matcher    string
 }
 
@@ -67,24 +67,23 @@ func (copilotHarness) PayloadDefaults(payload map[string]any) PayloadDefaults {
 
 func copilotHookConfig(binary string) map[string]any {
 	specs := []copilotHookSpec{
-		{event: "sessionStart", transition: registry.ActivityIdle, matcher: ""},
-		{event: "userPromptSubmitted", transition: registry.ActivityRunning, matcher: ""},
-		{event: "preToolUse", transition: registry.ActivityRunning, matcher: ""},
-		{event: "permissionRequest", transition: registry.ActivityWaiting, matcher: ""},
-		{event: "notification", transition: registry.ActivityWaiting, matcher: "permission_prompt"},
-		{event: "postToolUse", transition: registry.ActivityRunning, matcher: ""},
-		{event: "postToolUseFailure", transition: registry.ActivityRunning, matcher: ""},
-		{event: "preCompact", transition: registry.ActivityRunning, matcher: ""},
-		{event: "subagentStart", transition: registry.ActivityRunning, matcher: ""},
-		{event: "subagentStop", transition: registry.ActivityIdle, matcher: ""},
-		{event: "agentStop", transition: registry.ActivityIdle, matcher: ""},
-		{event: "sessionEnd", transition: registry.PresenceGone, matcher: ""},
+		{event: "sessionStart", transition: HookActivityIdle, matcher: ""},
+		{event: "userPromptSubmitted", transition: HookActivityRunning, matcher: ""},
+		{event: "preToolUse", transition: HookActivityRunning, matcher: ""},
+		{event: "permissionRequest", transition: HookActivityWaiting, matcher: ""},
+		{event: "notification", transition: HookActivityWaiting, matcher: "permission_prompt"},
+		{event: "postToolUse", transition: HookActivityRunning, matcher: ""},
+		{event: "postToolUseFailure", transition: HookActivityRunning, matcher: ""},
+		{event: "preCompact", transition: HookActivityRunning, matcher: ""},
+		{event: "subagentStart", transition: HookActivityRunning, matcher: ""},
+		{event: "subagentStop", transition: HookActivityIdle, matcher: ""},
+		{event: "agentStop", transition: HookActivityIdle, matcher: ""},
+		{event: "sessionEnd", transition: HookPresenceGone, matcher: ""},
 	}
 
-	hooks := make(map[string]any, len(specs))
+	hooks := make(map[string][]any, len(specs))
 	for _, spec := range specs {
-		existing, _ := hooks[spec.event].([]any)
-		hooks[spec.event] = append(existing, copilotCommandHook(binary, spec))
+		hooks[spec.event] = append(hooks[spec.event], copilotCommandHook(binary, spec))
 	}
 
 	return map[string]any{
@@ -110,7 +109,7 @@ func copilotCommandHook(binary string, spec copilotHookSpec) map[string]any {
 	return hook
 }
 
-func copilotHookCommand(binary string, transition any, event string) string {
+func copilotHookCommand(binary string, transition HookTransition, event string) string {
 	return reportHookCommand(binary, registry.HarnessCopilot, transition, event, copilotIntegrationSource, "--raw-stdin-defaults-only") +
 		" --attribute " + ShellQuote("copilot_hook_event="+event) +
 		" >/dev/null 2>&1 || true"

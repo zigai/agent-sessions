@@ -24,7 +24,7 @@ type gooseHarness struct {
 
 type gooseHookSpec struct {
 	event      string
-	transition any
+	transition HookTransition
 	matcher    string
 }
 
@@ -73,6 +73,7 @@ func (gooseHarness) InstallPlan(binary string) InstallPlan {
 			},
 			SnippetOrder:   []string{"plugin.json", "hooks/hooks.json", "scripts/report.sh", gooseMarkerFileName},
 			MarkerFile:     gooseMarkerFileName,
+			ObsoleteFiles:  nil,
 			ImportManifest: nil,
 			OpenClaw:       nil,
 			Hermes:         nil,
@@ -108,24 +109,24 @@ func gooseHookConfig() map[string]any {
 
 func gooseHookSpecs() []gooseHookSpec {
 	return []gooseHookSpec{
-		{event: HookEventSessionStart, transition: registry.ActivityIdle, matcher: ""},
-		{event: HookEventUserPromptSubmit, transition: registry.ActivityRunning, matcher: ""},
-		{event: HookEventPreToolUse, transition: registry.ActivityRunning, matcher: ""},
-		{event: HookEventPostToolUse, transition: registry.ActivityRunning, matcher: ""},
-		{event: HookEventPostToolUseFailure, transition: registry.ActivityRunning, matcher: ""},
-		{event: "BeforeReadFile", transition: registry.ActivityRunning, matcher: ""},
-		{event: "AfterFileEdit", transition: registry.ActivityRunning, matcher: ""},
-		{event: "BeforeShellExecution", transition: registry.ActivityRunning, matcher: ""},
-		{event: "AfterShellExecution", transition: registry.ActivityRunning, matcher: ""},
-		{event: HookEventStop, transition: registry.ActivityIdle, matcher: ""},
-		{event: "SessionEnd", transition: registry.PresenceGone, matcher: ""},
+		{event: HookEventSessionStart, transition: HookActivityIdle, matcher: ""},
+		{event: HookEventUserPromptSubmit, transition: HookActivityRunning, matcher: ""},
+		{event: HookEventPreToolUse, transition: HookActivityRunning, matcher: ""},
+		{event: HookEventPostToolUse, transition: HookActivityRunning, matcher: ""},
+		{event: HookEventPostToolUseFailure, transition: HookActivityRunning, matcher: ""},
+		{event: "BeforeReadFile", transition: HookActivityRunning, matcher: ""},
+		{event: "AfterFileEdit", transition: HookActivityRunning, matcher: ""},
+		{event: "BeforeShellExecution", transition: HookActivityRunning, matcher: ""},
+		{event: "AfterShellExecution", transition: HookActivityRunning, matcher: ""},
+		{event: HookEventStop, transition: HookActivityIdle, matcher: ""},
+		{event: "SessionEnd", transition: HookPresenceGone, matcher: ""},
 	}
 }
 
 func gooseSessionStartHookRule() map[string]any {
 	return map[string]any{
 		"hooks": []any{
-			gooseCommandHook(gooseHookSpec{event: HookEventSessionStart, transition: registry.ActivityIdle, matcher: ""}),
+			gooseCommandHook(gooseHookSpec{event: HookEventSessionStart, transition: HookActivityIdle, matcher: ""}),
 		},
 	}
 }

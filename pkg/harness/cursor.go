@@ -76,7 +76,7 @@ func (cursorHarness) PayloadDefaults(payload map[string]any) PayloadDefaults {
 	return cursorPayloadDefaults(payload)
 }
 
-func cursorHookCommand(binary string, transition any, event string, hookOutput string) string {
+func cursorHookCommand[T hookTransition](binary string, transition T, event string, hookOutput string) string {
 	report := RawStdinDefaultsReportHookCommand(binary, registry.HarnessCursor, transition, event, cursorIntegrationSource)
 
 	return report + " >/dev/null 2>&1 || true; printf '%s\\n' " + ShellQuote(hookOutput)

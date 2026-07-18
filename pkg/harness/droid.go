@@ -33,6 +33,8 @@ func droidAdapter() Adapter {
 func (droidHarness) InstallPlan(binary string) InstallPlan {
 	return InstallPlan{
 		Actions: []InstallAction{JSONCommandHooksAction{Plan: JSONCommandHookInstallPlan{
+			// Factory's current hooks reference makes hooks.json the primary
+			// user-scope file; settings.json is retained only as a fallback.
 			Path:              filepath.Join(droidConfigDir(), "hooks.json"),
 			Source:            droidIntegrationSource,
 			Label:             "droid hooks",
@@ -106,7 +108,7 @@ func (droidHarness) PayloadDefaults(payload map[string]any) PayloadDefaults {
 	return droidPayloadDefaults(payload)
 }
 
-func droidHookCommand(binary string, transition any, event string) string {
+func droidHookCommand[T hookTransition](binary string, transition T, event string) string {
 	return RawStdinDefaultsReportHookCommand(binary, registry.HarnessDroid, transition, event, droidIntegrationSource)
 }
 

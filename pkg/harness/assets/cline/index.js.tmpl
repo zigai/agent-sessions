@@ -1,0 +1,75 @@
+// agent-sessions managed integration
+// Native Cline AgentPlugin. This plugin never reads prompt, message, tool input,
+// tool output, response, or error content.
+import { spawn } from "node:child_process";
+
+const binary = {{BINARY}};
+const integrationVersion = {{INTEGRATION_VERSION}};
+let sessionId = "";
+let workspaceRoot = "";
+
+function text(value) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function attribute(args, key, value) {
+  const normalized = text(value);
+  if (normalized) args.push("--attribute", `${key}=${normalized}`);
+}
+
+function report(eventName, context, transition) {
+  const snapshot = context?.snapshot ?? {};
+  const identity = sessionId || text(snapshot.conversationId) || text(snapshot.agentId);
+  if (!identity) return;
+
+  const args = [
+    "report", "cline", "--session-id", identity,
+    "--pid", String(process.pid),
+    "--event", eventName,
+    "--observed-at", new Date().toISOString(),
+    "--queue", "--quiet",
+    "--attribute", "agent_sessions_integration=cline-plugin",
+    "--attribute", `agent_sessions_integration_version=${integrationVersion}`,
+  ];
+  if (transition.presence) args.push("--presence", transition.presence);
+  if (transition.activity) args.push("--activity", transition.activity);
+  if (workspaceRoot) {
+    args.push("--cwd", workspaceRoot, "--project-root", workspaceRoot);
+  }
+  attribute(args, "cline_agent_id", snapshot.agentId);
+  attribute(args, "cline_parent_agent_id", snapshot.parentAgentId);
+  attribute(args, "cline_conversation_id", snapshot.conversationId);
+  attribute(args, "cline_run_id", snapshot.runId);
+  attribute(args, "cline_run_status", context?.resultStatus || snapshot.status);
+
+  const child = spawn(binary, args, { stdio: "ignore", detached: true });
+  child.on("error", () => {});
+  child.unref();
+}
+
+const plugin = {
+  name: "agent-sessions-state",
+  manifest: { capabilities: ["hooks"] },
+  setup(_api, ctx) {
+    sessionId = text(ctx?.session?.sessionId);
+    workspaceRoot = text(ctx?.workspaceInfo?.rootPath);
+    report("setup", {}, { presence: "live", activity: "idle" });
+  },
+  hooks: {
+    beforeRun(context) {
+      report("beforeRun", context, { presence: "live", activity: "running" });
+    },
+    beforeTool(context) {
+      report("beforeTool", context, { presence: "live", activity: "running" });
+    },
+    afterTool(context) {
+      report("afterTool", context, { presence: "live", activity: "running" });
+    },
+    afterRun({ snapshot, result }) {
+      report("afterRun", { snapshot, resultStatus: result?.status }, { presence: "live", activity: "idle" });
+    },
+  },
+};
+
+export { plugin };
+export default plugin;

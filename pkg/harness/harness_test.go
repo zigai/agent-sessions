@@ -13,6 +13,34 @@ import (
 
 const testSessionID = "abc"
 
+func TestReportHookCommandRendersTypedTransitionDimension(t *testing.T) {
+	t.Parallel()
+
+	activity := ReportHookCommand("agent-sessions", registry.HarnessCodex, registry.ActivityRunning, "turn", "test")
+	if !strings.Contains(activity, "--activity running") || strings.Contains(activity, "--presence") {
+		t.Fatalf("activity command = %q", activity)
+	}
+	presence := ReportHookCommand("agent-sessions", registry.HarnessCodex, registry.PresenceGone, "stop", "test")
+	if !strings.Contains(presence, "--presence gone") || strings.Contains(presence, "--activity") {
+		t.Fatalf("presence command = %q", presence)
+	}
+}
+
+func TestReportHookCommandRejectsInvalidTypedTransition(t *testing.T) {
+	t.Parallel()
+
+	deferredPanic := false
+	func() {
+		defer func() {
+			deferredPanic = recover() != nil
+		}()
+		_ = ReportHookCommand("agent-sessions", registry.HarnessCodex, registry.Activity("bogus"), "turn", "test")
+	}()
+	if !deferredPanic {
+		t.Fatal("ReportHookCommand accepted an invalid activity")
+	}
+}
+
 func TestResumeCommandFor(t *testing.T) {
 	t.Parallel()
 
@@ -506,6 +534,14 @@ func TestDefaultsFromPayload(t *testing.T) {
 	}
 }
 
+func TestDefaultsFromPayloadWithErrorRejectsMalformedPayload(t *testing.T) {
+	t.Parallel()
+
+	if _, err := DefaultsFromPayloadWithError(registry.HarnessCodex, json.RawMessage(`"not-an-object"`)); err == nil {
+		t.Fatal("DefaultsFromPayloadWithError accepted a non-object payload")
+	}
+}
+
 func TestKimiDefaultsFromPayloadUsesSessionIndex(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("KIMI_CODE_HOME", home)
@@ -888,6 +924,21 @@ func TestOpenCodeAndKiloPluginTemplatesUseCurrentModuleShape(t *testing.T) {
 			if !strings.Contains(template, `case "session.idle":`) {
 				t.Fatal("expected deprecated idle event compatibility")
 			}
+			if !strings.Contains(template, `child.on("error", () => {});`) {
+				t.Fatal("expected asynchronous child error handling")
+			}
+		})
+	}
+}
+
+func TestPiAndOMPPluginTemplatesOwnSpawnErrors(t *testing.T) {
+	t.Parallel()
+
+	for name, template := range map[string]string{
+		"pi":  piExtensionTemplate,
+		"omp": ompExtensionTemplate,
+	} {
+		t.Run(name, func(t *testing.T) {
 			if !strings.Contains(template, `child.on("error", () => {});`) {
 				t.Fatal("expected asynchronous child error handling")
 			}

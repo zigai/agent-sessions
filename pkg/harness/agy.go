@@ -64,8 +64,9 @@ func (agyHarness) InstallPlan(binary string) InstallPlan {
 					JSONContent: nil,
 				},
 			},
-			SnippetOrder: []string{"plugin.json", "hooks.json", agyMarkerFileName},
-			MarkerFile:   agyMarkerFileName,
+			SnippetOrder:  []string{"plugin.json", "hooks.json", agyMarkerFileName},
+			MarkerFile:    agyMarkerFileName,
+			ObsoleteFiles: nil,
 			ImportManifest: &ImportManifestInstallPlan{
 				Path:       filepath.Join(configDir, agyImportManifestName),
 				Name:       agyPluginName,

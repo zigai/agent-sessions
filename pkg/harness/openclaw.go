@@ -53,6 +53,7 @@ func (openClawHarness) InstallPlan(binary string) InstallPlan {
 		},
 		SnippetOrder:   []string{"package.json", "openclaw.plugin.json", "index.js", openClawMarkerFileName},
 		MarkerFile:     openClawMarkerFileName,
+		ObsoleteFiles:  nil,
 		ImportManifest: nil,
 		OpenClaw: &OpenClawPluginRegistrationPlan{
 			Command: openClawCommand, PluginID: openClawPluginName, Version: "0.0." + version,

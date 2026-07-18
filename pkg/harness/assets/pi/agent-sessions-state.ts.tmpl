@@ -68,6 +68,7 @@ function report(transition: string, ctx?: any, event?: any): void {
       detached: true,
       stdio: "ignore",
     });
+    child.on("error", () => {});
     child.unref();
   } catch {
     // Session reporting must never break Pi startup or turns.
