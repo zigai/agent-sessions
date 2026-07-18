@@ -247,6 +247,7 @@ func removeOwnedFiles(options Options, harnessID registry.Harness, paths []strin
 	return removeResult(harnessID, resultPath, len(managed) > 0, options.DryRun), nil
 }
 
+//nolint:cyclop // removal handles both native registrations and import manifests
 func removePluginDirectory(options Options, harnessID registry.Harness, plan harnesspkg.PluginDirectoryInstallPlan) (Result, error) {
 	plugin := newPluginDirectoryInstall(plan, nil)
 	managed, err := plugin.managed()
@@ -260,6 +261,12 @@ func removePluginDirectory(options Options, harnessID registry.Harness, plan har
 	}
 	if exists && !managed {
 		return Result{}, fmt.Errorf("%w: %s", errForeignFile, plan.Dir)
+	}
+	if plan.OpenClaw != nil {
+		return removeOpenClawPlugin(options, harnessID, plan, exists)
+	}
+	if plan.Hermes != nil {
+		return removeHermesPlugin(options, harnessID, plan, exists)
 	}
 	manifestChanged := false
 	var manifest importManifest

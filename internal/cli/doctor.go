@@ -200,7 +200,7 @@ func (app *application) runDoctor(ctx context.Context, includeAll bool) doctorRe
 		if includeAll {
 			result.Capabilities = append(result.Capabilities, doctorCapability{Harness: string(definition.ID), SessionStart: definition.Capabilities.SessionStart, SessionEnd: definition.Capabilities.SessionEnd, RunningIdle: definition.Capabilities.RunningIdle, Waiting: definition.Capabilities.WaitingPermission, ProcessIdentity: definition.Capabilities.ProcessIdentity, NativeCatalog: definition.Capabilities.NativeCatalog, TTYTmuxContext: definition.Capabilities.TTYTmuxContext})
 		}
-		status, message, relevant := app.integrationStatus(definition.ID)
+		status, message, relevant := app.integrationStatus(ctx, definition.ID)
 		if includeAll || relevant {
 			add("integration."+string(definition.ID), status, message)
 		}
@@ -267,8 +267,8 @@ func (app *application) addDetectionManifestCheck(result *doctorResult) {
 	result.Checks = append(result.Checks, doctorCheck{Name: "detection.manifests", Status: doctorOK, Message: "Codex, Claude, OpenCode, and Pi manifests are valid"})
 }
 
-func (app *application) integrationStatus(id registry.Harness) (doctorStatus, string, bool) {
-	status, err := install.Inspect(id, defaultInstallBinary())
+func (app *application) integrationStatus(ctx context.Context, id registry.Harness) (doctorStatus, string, bool) {
+	status, err := install.InspectContext(ctx, id, defaultInstallBinary())
 	if err != nil {
 		return doctorError, err.Error(), true
 	}

@@ -168,17 +168,8 @@ func (app *application) runQueuedReport(ctx context.Context, stdin io.Reader, o 
 	now := time.Now().UTC()
 	q := reportqueue.New(app.store().Path())
 	runtime, cachedTmux := queuedReportRuntime(q, now, nil)
-	if _, e = q.Enqueue(ctx, reportqueue.Envelope{
-		Version:       reportqueue.EnvelopeVersion,
-		CreatedAt:     now,
-		StorePath:     app.store().Path(),
-		Kind:          reportqueue.KindReport,
-		Report:        reportqueue.ReportFromRegistry(p.observation),
-		RawPayloadSet: len(p.observation.RawPayload) > 0,
-		Stdin:         p.stdin,
-		Runtime:       runtime,
-		CachedTmux:    cachedTmux,
-	}, reportqueue.EnqueueOptions{Now: func() time.Time { return now }}); e != nil {
+	envelope := queuedReportEnvelope(app.store().Path(), p, o.noTmux, now, runtime, cachedTmux)
+	if _, e = q.Enqueue(ctx, envelope, reportqueue.EnqueueOptions{Now: func() time.Time { return now }}); e != nil {
 		return fmt.Errorf("queueing report: %w", e)
 	}
 	app.kickQueueDrainer(ctx, app.store().Path())
@@ -189,6 +180,28 @@ func (app *application) runQueuedReport(ctx context.Context, stdin io.Reader, o 
 		return nil
 	}
 	return app.writef("queued\n")
+}
+
+func queuedReportEnvelope(
+	storePath string,
+	prepared preparedReport,
+	noTmux bool,
+	now time.Time,
+	runtime reportqueue.RuntimeContext,
+	cachedTmux registry.TmuxContext,
+) reportqueue.Envelope {
+	return reportqueue.Envelope{
+		Version:       reportqueue.EnvelopeVersion,
+		CreatedAt:     now,
+		StorePath:     storePath,
+		Kind:          reportqueue.KindReport,
+		Report:        reportqueue.ReportFromRegistry(prepared.observation),
+		RawPayloadSet: len(prepared.observation.RawPayload) > 0,
+		NoTmux:        noTmux,
+		Stdin:         prepared.stdin,
+		Runtime:       runtime,
+		CachedTmux:    cachedTmux,
+	}
 }
 
 func queuedReportRuntime(q reportqueue.Queue, now time.Time, parentArgs []string) (reportqueue.RuntimeContext, registry.TmuxContext) {

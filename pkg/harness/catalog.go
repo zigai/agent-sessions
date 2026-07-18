@@ -15,4 +15,6 @@ var adapters = []Adapter{
 	agyAdapter(),
 	kiloAdapter(),
 	droidAdapter(),
+	openClawAdapter(),
+	hermesAdapter(),
 }

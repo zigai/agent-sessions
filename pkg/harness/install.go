@@ -135,6 +135,25 @@ type PluginDirectoryInstallPlan struct {
 	SnippetOrder   []string
 	MarkerFile     string
 	ImportManifest *ImportManifestInstallPlan
+	OpenClaw       *OpenClawPluginRegistrationPlan
+	Hermes         *HermesPluginRegistrationPlan
+}
+
+// OpenClawPluginRegistrationPlan describes native OpenClaw CLI registration
+// for a managed plugin source directory.
+type OpenClawPluginRegistrationPlan struct {
+	Command                 string
+	PluginID                string
+	Version                 string
+	AllowConversationAccess bool
+}
+
+// HermesPluginRegistrationPlan describes native Hermes plugin activation for
+// a managed plugin installed in the documented user plugin directory.
+type HermesPluginRegistrationPlan struct {
+	Command  string
+	PluginID string
+	Version  string
 }
 
 type PluginFileInstallSpec struct {

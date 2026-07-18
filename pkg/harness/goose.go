@@ -74,6 +74,8 @@ func (gooseHarness) InstallPlan(binary string) InstallPlan {
 			SnippetOrder:   []string{"plugin.json", "hooks/hooks.json", "scripts/report.sh", gooseMarkerFileName},
 			MarkerFile:     gooseMarkerFileName,
 			ImportManifest: nil,
+			OpenClaw:       nil,
+			Hermes:         nil,
 		}}},
 	}
 }

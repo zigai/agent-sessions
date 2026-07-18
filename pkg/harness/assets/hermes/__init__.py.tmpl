@@ -1,0 +1,161 @@
+"""agent-sessions managed integration.
+
+This plugin intentionally ignores prompts, conversation history, commands,
+descriptions, responses, and tool payloads.
+"""
+
+from __future__ import annotations
+
+from contextvars import ContextVar
+from datetime import datetime, timezone
+import os
+import subprocess
+from threading import Lock, Thread
+from typing import Any
+
+
+_BINARY = {{BINARY}}
+_INTEGRATION_VERSION = {{INTEGRATION_VERSION}}
+_SEEN_SESSIONS: set[str] = set()
+_SEEN_LOCK = Lock()
+_CURRENT_SESSION_ID: ContextVar[str] = ContextVar("agent_sessions_hermes_session_id", default="")
+
+
+def _text(value: Any) -> str:
+    return value.strip() if isinstance(value, str) else ""
+
+
+def _session_identity(values: dict[str, Any]) -> str:
+    return (
+        _text(values.get("session_id"))
+        or _CURRENT_SESSION_ID.get()
+        or _text(values.get("session_key"))
+    )
+
+
+def _remember(session_id: str) -> bool:
+    with _SEEN_LOCK:
+        first_seen = session_id not in _SEEN_SESSIONS
+        _SEEN_SESSIONS.add(session_id)
+    return first_seen
+
+
+def _forget(session_id: str) -> None:
+    with _SEEN_LOCK:
+        _SEEN_SESSIONS.discard(session_id)
+
+
+def _attribute(args: list[str], name: str, value: Any) -> None:
+    rendered = _text(value) if isinstance(value, str) else str(value) if value is not None else ""
+    if rendered:
+        args.extend(("--attribute", f"{name}={rendered}"))
+
+
+def _report(event: str, transition: dict[str, str], values: dict[str, Any]) -> None:
+    session_id = _session_identity(values)
+    if not session_id:
+        return
+
+    cwd = os.getcwd()
+    args = [
+        "report", "hermes", "--session-id", session_id,
+        "--event", event,
+        "--observed-at", datetime.now(timezone.utc).isoformat(),
+        "--cwd", cwd, "--project-root", cwd,
+        "--queue", "--quiet", "--no-tmux",
+        "--attribute", "agent_sessions_integration=hermes-plugin",
+        "--attribute", f"agent_sessions_integration_version={_INTEGRATION_VERSION}",
+    ]
+    for flag in ("lifecycle", "presence", "activity"):
+        if transition.get(flag):
+            args.extend((f"--{flag}", transition[flag]))
+    for item in ("hermes", "--resume", session_id):
+        args.extend(("--resume-command", item))
+
+    _attribute(args, "hermes_session_key", values.get("session_key"))
+    _attribute(args, "hermes_model", values.get("model"))
+    _attribute(args, "hermes_platform", values.get("platform"))
+    _attribute(args, "hermes_task_id", values.get("task_id"))
+    _attribute(args, "hermes_turn_id", values.get("turn_id"))
+    _attribute(args, "hermes_api_request_id", values.get("api_request_id"))
+    _attribute(args, "hermes_tool_call_id", values.get("tool_call_id"))
+    _attribute(args, "hermes_telemetry_schema_version", values.get("telemetry_schema_version"))
+    _attribute(args, "hermes_approval_surface", values.get("surface"))
+    _attribute(args, "hermes_approval_choice", values.get("choice"))
+    _attribute(args, "hermes_approval_decided_by", values.get("decided_by"))
+    if isinstance(values.get("completed"), bool):
+        _attribute(args, "hermes_completed", str(values["completed"]).lower())
+    if isinstance(values.get("interrupted"), bool):
+        _attribute(args, "hermes_interrupted", str(values["interrupted"]).lower())
+
+    try:
+        child = subprocess.Popen(
+            [_BINARY, *args],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            close_fds=True,
+            start_new_session=True,
+        )
+        Thread(target=child.wait, daemon=True).start()
+    except (OSError, ValueError):
+        pass
+
+
+def _on_session_start(**values: Any) -> None:
+    session_id = _session_identity(values)
+    if session_id:
+        _CURRENT_SESSION_ID.set(session_id)
+        _remember(session_id)
+    _report("on_session_start", {"lifecycle": "start", "presence": "live", "activity": "idle"}, values)
+
+
+def _on_pre_llm_call(**values: Any) -> None:
+    session_id = _session_identity(values)
+    transition = {"presence": "live", "activity": "running"}
+    if session_id:
+        _CURRENT_SESSION_ID.set(session_id)
+        if _remember(session_id):
+            transition["lifecycle"] = "resume"
+    _report("pre_llm_call", transition, values)
+
+
+def _on_session_end(**values: Any) -> None:
+    session_id = _session_identity(values)
+    if session_id:
+        _CURRENT_SESSION_ID.set(session_id)
+    _report("on_session_end", {"presence": "live", "activity": "idle"}, values)
+
+
+def _on_session_finalize(**values: Any) -> None:
+    session_id = _session_identity(values)
+    _report("on_session_finalize", {"lifecycle": "end", "presence": "gone"}, values)
+    if session_id:
+        _forget(session_id)
+    _CURRENT_SESSION_ID.set("")
+
+
+def _on_session_reset(**values: Any) -> None:
+    session_id = _session_identity(values)
+    if session_id:
+        _CURRENT_SESSION_ID.set(session_id)
+        _remember(session_id)
+    _report("on_session_reset", {"lifecycle": "start", "presence": "live", "activity": "idle"}, values)
+
+
+def _on_pre_approval_request(**values: Any) -> None:
+    _report("pre_approval_request", {"presence": "live", "activity": "waiting"}, values)
+
+
+def _on_post_approval_response(**values: Any) -> None:
+    _report("post_approval_response", {"presence": "live", "activity": "running"}, values)
+
+
+def register(ctx: Any) -> None:
+    ctx.register_hook("on_session_start", _on_session_start)
+    ctx.register_hook("pre_llm_call", _on_pre_llm_call)
+    ctx.register_hook("on_session_end", _on_session_end)
+    ctx.register_hook("on_session_finalize", _on_session_finalize)
+    ctx.register_hook("on_session_reset", _on_session_reset)
+    ctx.register_hook("pre_approval_request", _on_pre_approval_request)
+    ctx.register_hook("post_approval_response", _on_post_approval_response)

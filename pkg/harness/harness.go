@@ -95,6 +95,10 @@ func capabilitiesFor(id registry.Harness) Capabilities {
 		capabilities.SessionStart, capabilities.RunningIdle, capabilities.WaitingPermission, capabilities.NativeCatalog = true, true, true, true
 	case registry.HarnessDroid:
 		capabilities.SessionStart, capabilities.SessionEnd, capabilities.RunningIdle = true, true, true
+	case registry.HarnessOpenClaw:
+		capabilities.SessionStart, capabilities.SessionEnd, capabilities.RunningIdle = true, true, true
+	case registry.HarnessHermes:
+		capabilities.SessionStart, capabilities.SessionEnd, capabilities.RunningIdle, capabilities.WaitingPermission = true, true, true, true
 	default:
 		return Capabilities{}
 	}

@@ -33,6 +33,8 @@ const (
 	HarnessAgy      Harness = harnessmeta.IDAgy
 	HarnessKilo     Harness = harnessmeta.IDKilo
 	HarnessDroid    Harness = harnessmeta.IDDroid
+	HarnessOpenClaw Harness = harnessmeta.IDOpenClaw
+	HarnessHermes   Harness = harnessmeta.IDHermes
 )
 
 var (

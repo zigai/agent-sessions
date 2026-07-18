@@ -189,6 +189,7 @@ type reportOptions struct {
 	harness         string
 	presence        string
 	activity        string
+	lifecycle       string
 	sessionID       string
 	sessionPath     string
 	cwd             string
@@ -244,6 +245,8 @@ func (app *application) newReportCommand() *cobra.Command {
 	f := cmd.Flags()
 	f.StringVar(&options.presence, "presence", options.presence, "presence: live, gone, unknown")
 	f.StringVar(&options.activity, "activity", options.activity, "activity: running, waiting, idle, unknown")
+	f.StringVar(&options.lifecycle, "lifecycle", options.lifecycle, "native lifecycle: start, resume, end")
+	_ = f.MarkHidden("lifecycle")
 	f.StringVar(&options.sessionID, "session-id", options.sessionID, "harness session id")
 	f.StringVar(&options.sessionPath, "session-path", options.sessionPath, "harness session file path")
 	f.StringVar(&options.cwd, "cwd", options.cwd, "agent current working directory")
@@ -348,6 +351,13 @@ func (app *application) prepareReport(stdin io.Reader, options reportOptions, ru
 	if presence == registry.PresenceGone && activity != "" {
 		return preparedReport{}, errGonePresenceActivity
 	}
+	lifecycle, err := normalizeReportLifecycle(options.lifecycle)
+	if err != nil {
+		return preparedReport{}, err
+	}
+	if lifecycle == registry.NativeLifecycleEnd && activity != "" {
+		return preparedReport{}, errGonePresenceActivity
+	}
 	observedAt, err := parseObservedAt(options.observedAt)
 	if err != nil {
 		return preparedReport{}, err
@@ -358,11 +368,14 @@ func (app *application) prepareReport(stdin io.Reader, options reportOptions, ru
 	if observedAt.IsZero() {
 		observedAt = time.Now().UTC()
 	}
-	if presence == "" && activity == "" && options.event == "" && options.sessionID == "" && options.sessionPath == "" {
+	if presence == "" && activity == "" && lifecycle == "" && options.event == "" && options.sessionID == "" && options.sessionPath == "" {
 		return preparedReport{}, errMissingReportIdentity
 	}
 	identity := registry.ObservationIdentity{SessionID: options.sessionID, SessionPath: options.sessionPath}
 	observation := registry.Observation{Source: registry.ObservationSourceNative, Evidence: registry.ObservationEvidenceNativeEvent, Harness: harness, Identity: identity, NativeEvent: options.event, Attributes: attrs, RawPayload: rawPayload, ObservedAt: observedAt}
+	if lifecycle != "" {
+		observation.Lifecycle = &lifecycle
+	}
 	if agentstate.PolicyFor(harness).Primary == agentstate.AuthorityScreen {
 		authoritative := false
 		observation.ActivityAuthoritative = &authoritative
@@ -395,13 +408,26 @@ func (app *application) prepareReport(stdin io.Reader, options reportOptions, ru
 	if activity != "" {
 		observation.Activity = &activity
 	}
-	if observation.Source == registry.ObservationSourceNative && options.event == "" && (presence != "" || activity != "") {
+	if observation.Source == registry.ObservationSourceNative && options.event == "" && (presence != "" || activity != "" || lifecycle != "") {
 		observation.NativeEvent = "cli"
 	}
 	if options.cwd != "" || options.projectRoot != "" || len(options.resumeCommand) > 0 {
 		observation.Catalog = &registry.CatalogMetadata{ResumeCommand: append([]string(nil), options.resumeCommand...), CWD: options.cwd, ProjectRoot: options.projectRoot}
 	}
 	return preparedReport{harness: harness, observation: observation, stdin: stdinData}, nil
+}
+
+func normalizeReportLifecycle(value string) (registry.NativeLifecycle, error) {
+	if strings.TrimSpace(value) == "" {
+		return "", nil
+	}
+
+	lifecycle, err := registry.NormalizeLifecycle(value)
+	if err != nil {
+		return "", fmt.Errorf("normalize lifecycle: %w", err)
+	}
+
+	return lifecycle, nil
 }
 
 func processEvidenceIdentity(options reportOptions, processes []processinfo.Process) *registry.ProcessIdentity {

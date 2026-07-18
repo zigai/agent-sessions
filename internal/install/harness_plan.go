@@ -522,6 +522,12 @@ func installPluginDirectory(
 	if err != nil {
 		return Result{}, err
 	}
+	if plan.OpenClaw != nil {
+		return installOpenClawPlugin(options, harness, plan, plugin, pluginChanged)
+	}
+	if plan.Hermes != nil {
+		return installHermesPlugin(options, harness, plan, plugin, pluginChanged)
+	}
 
 	manifest, manifestChanged, err := plannedImportManifest(plan.ImportManifest, time.Now().UTC())
 	if err != nil {

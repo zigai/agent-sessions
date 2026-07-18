@@ -1,0 +1,80 @@
+// agent-sessions managed integration
+// This plugin intentionally ignores prompts, messages, responses, and errors.
+import { spawn } from "node:child_process";
+import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+
+const binary = {{BINARY}};
+const integrationVersion = {{INTEGRATION_VERSION}};
+const sessions = new Map();
+
+function text(value) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function remember(sessionId, values) {
+  const current = sessions.get(sessionId) ?? {};
+  const next = { ...current };
+  for (const [key, value] of Object.entries(values)) {
+    if (text(value)) next[key] = text(value);
+  }
+  sessions.set(sessionId, next);
+  return next;
+}
+
+function attribute(args, key, value) {
+  if (text(value)) args.push("--attribute", `${key}=${text(value)}`);
+}
+
+function report(eventName, event, ctx, transition) {
+  const sessionId = text(event.sessionId) || text(ctx.sessionId);
+  if (!sessionId) return;
+
+  const metadata = remember(sessionId, {
+    sessionKey: event.sessionKey || ctx.sessionKey,
+    agentId: ctx.agentId,
+    workspaceDir: ctx.workspaceDir,
+    runId: event.runId || ctx.runId,
+    sessionFile: event.sessionFile,
+  });
+  const args = [
+    "report", "openclaw", "--session-id", sessionId,
+    "--event", eventName, "--observed-at", new Date().toISOString(),
+    "--queue", "--quiet", "--no-tmux",
+    "--attribute", "agent_sessions_integration=openclaw-plugin",
+    "--attribute", `agent_sessions_integration_version=${integrationVersion}`,
+  ];
+  if (transition.lifecycle) args.push("--lifecycle", transition.lifecycle);
+  if (transition.presence) args.push("--presence", transition.presence);
+  if (transition.activity) args.push("--activity", transition.activity);
+  if (metadata.sessionFile) args.push("--session-path", metadata.sessionFile);
+  if (metadata.workspaceDir) args.push("--cwd", metadata.workspaceDir, "--project-root", metadata.workspaceDir);
+  if (metadata.sessionKey) {
+    for (const item of ["openclaw", "tui", "--session", metadata.sessionKey]) {
+      args.push("--resume-command", item);
+    }
+  }
+  attribute(args, "openclaw_session_key", metadata.sessionKey);
+  attribute(args, "openclaw_agent_id", metadata.agentId);
+  attribute(args, "openclaw_run_id", metadata.runId);
+  attribute(args, "openclaw_end_reason", event.reason);
+  if (typeof event.success === "boolean") attribute(args, "openclaw_success", String(event.success));
+
+  const child = spawn(binary, args, { stdio: "ignore", detached: true });
+  child.on("error", () => {});
+  child.unref();
+  if (transition.lifecycle === "end") sessions.delete(sessionId);
+}
+
+export default definePluginEntry({
+  id: "agent-sessions-state",
+  name: "Agent Sessions State",
+  description: "Reports OpenClaw lifecycle metadata without conversation content.",
+  register(api) {
+    api.on("session_start", (event, ctx) => report("session_start", event, ctx, {
+      lifecycle: text(event.resumedFrom) ? "resume" : "start", presence: "live", activity: "idle",
+    }));
+    api.on("before_agent_run", (_event, ctx) => report("before_agent_run", {}, ctx, { presence: "live", activity: "running" }));
+    api.on("agent_end", (event, ctx) => report("agent_end", event, ctx, { presence: "live", activity: "idle" }));
+    api.on("session_end", (event, ctx) => report("session_end", event, ctx, { lifecycle: "end", presence: "gone" }));
+  },
+});

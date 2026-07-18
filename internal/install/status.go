@@ -1,6 +1,7 @@
 package install
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -21,6 +22,12 @@ type IntegrationStatus struct {
 
 // Inspect reports whether a harness integration or its shim fallback is current.
 func Inspect(harnessID registry.Harness, binary string) (IntegrationStatus, error) {
+	return InspectContext(context.Background(), harnessID, binary)
+}
+
+// InspectContext reports whether a harness integration is current, honoring
+// cancellation while consulting native harness CLIs.
+func InspectContext(ctx context.Context, harnessID registry.Harness, binary string) (IntegrationStatus, error) {
 	adapter, ok := harnesspkg.Find(harnessID)
 	if !ok {
 		return IntegrationStatus{}, fmt.Errorf("%w: %q", errUnsupportedHarness, harnessID)
@@ -40,7 +47,7 @@ func Inspect(harnessID registry.Harness, binary string) (IntegrationStatus, erro
 	result.Status = ArtifactCurrent
 	result.Message = "current"
 	for _, action := range plan.Actions {
-		statuses, err := inspectAction(action)
+		statuses, err := inspectAction(ctx, action)
 		if err != nil {
 			return IntegrationStatus{}, err
 		}
@@ -52,6 +59,7 @@ func Inspect(harnessID registry.Harness, binary string) (IntegrationStatus, erro
 		}
 	}
 	if result.Status == ArtifactCurrent {
+		//nolint:contextcheck // the legacy installer API has no context; native inspection above honors ctx
 		dryRun, err := Run(Options{Harness: harnessID, Binary: binary, TargetBinary: "", DryRun: true, Force: false, UseShim: false})
 		if err != nil {
 			return IntegrationStatus{}, fmt.Errorf("checking desired integration state: %w", err)
@@ -99,7 +107,7 @@ type inspectedArtifact struct {
 	status ArtifactStatus
 }
 
-func inspectAction(action harnesspkg.InstallAction) ([]inspectedArtifact, error) {
+func inspectAction(ctx context.Context, action harnesspkg.InstallAction) ([]inspectedArtifact, error) {
 	switch value := action.(type) {
 	case harnesspkg.JSONCommandHooksAction:
 		return inspectSharedFile(value.Plan.Path)
@@ -120,16 +128,53 @@ func inspectAction(action harnesspkg.InstallAction) ([]inspectedArtifact, error)
 		}
 		return result, nil
 	case harnesspkg.PluginDirectoryAction:
-		return inspectPluginAction(value.Plan)
+		return inspectPluginAction(ctx, value.Plan)
 	default:
 		return nil, nil
 	}
 }
 
-func inspectPluginAction(plan harnesspkg.PluginDirectoryInstallPlan) ([]inspectedArtifact, error) {
+//nolint:cyclop,gocognit // plugin status combines owned source and native/import registration state
+func inspectPluginAction(ctx context.Context, plan harnesspkg.PluginDirectoryInstallPlan) ([]inspectedArtifact, error) {
 	result, err := inspectOwnedPath(plan.Dir)
-	if err != nil || plan.ImportManifest == nil {
+	if err != nil {
 		return result, err
+	}
+	if plan.OpenClaw != nil {
+		state, inspectErr := inspectOpenClawRegistration(ctx, plan)
+		if inspectErr != nil {
+			return nil, inspectErr
+		}
+		status := ArtifactMissing
+		switch state {
+		case openClawRegistrationCurrent:
+			status = ArtifactCurrent
+		case openClawRegistrationStale:
+			status = ArtifactStale
+		case openClawRegistrationForeign:
+			status = ArtifactForeign
+		case openClawRegistrationMissing:
+		}
+		return append(result, inspectedArtifact{path: "OpenClaw plugin " + plan.OpenClaw.PluginID, status: status}), nil
+	}
+	if plan.Hermes != nil {
+		state, inspectErr := inspectHermesRegistration(ctx, plan)
+		if inspectErr != nil {
+			return nil, inspectErr
+		}
+		status := ArtifactMissing
+		switch state {
+		case hermesRegistrationCurrent:
+			status = ArtifactCurrent
+		case hermesRegistrationStale:
+			status = ArtifactStale
+		case hermesRegistrationMissing:
+		}
+
+		return append(result, inspectedArtifact{path: "Hermes plugin " + plan.Hermes.PluginID, status: status}), nil
+	}
+	if plan.ImportManifest == nil {
+		return result, nil
 	}
 	manifest, err := readImportManifest(plan.ImportManifest.Path)
 	if err != nil {

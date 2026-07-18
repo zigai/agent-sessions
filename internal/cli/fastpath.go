@@ -120,6 +120,9 @@ func parseFastReportOptions(args []string) (reportOptions, bool, error) {
 		case "--activity":
 			v, e = need()
 			s.o.activity = v
+		case "--lifecycle":
+			v, e = need()
+			s.o.lifecycle = v
 		case "--session-id":
 			v, e = need()
 			s.o.sessionID = v

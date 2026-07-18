@@ -72,6 +72,8 @@ func (agyHarness) InstallPlan(binary string) InstallPlan {
 				Source:     agyImportSource,
 				Components: []string{agyImportComponent},
 			},
+			OpenClaw: nil,
+			Hermes:   nil,
 		}}, ShimAction{}},
 	}
 }

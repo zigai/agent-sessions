@@ -27,6 +27,8 @@ const (
 	IDAgy      = "agy"
 	IDKilo     = "kilo"
 	IDDroid    = "droid"
+	IDOpenClaw = "openclaw"
+	IDHermes   = "hermes"
 )
 
 var definitions = []Definition{
@@ -111,6 +113,16 @@ var definitions = []Definition{
 			"factory_cli",
 		},
 		ProcessNames: []string{"droid"},
+	},
+	{
+		ID:           IDOpenClaw,
+		Aliases:      nil,
+		ProcessNames: nil,
+	},
+	{
+		ID:           IDHermes,
+		Aliases:      []string{"hermes-agent", "hermes_agent"},
+		ProcessNames: nil,
 	},
 }
 
