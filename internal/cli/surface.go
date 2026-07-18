@@ -296,7 +296,7 @@ func selectedHarnesses(args []string, emptyMeansAll bool) ([]registry.Harness, e
 func (app *application) newMonitorCommand() *cobra.Command {
 	command := &cobra.Command{Use: monitorCommand, Short: "Manage background process tracking"}
 	run := app.newObserveCommand()
-	run.Use, run.Short, run.Hidden = "run", "Run process and tmux reconciliation", false
+	run.Use, run.Short, run.Hidden = "run", "Run process and multiplexer reconciliation", false
 	command.AddCommand(run, app.newMonitorEnableCommand(), app.newMonitorDisableCommand(), app.newMonitorStatusCommand())
 	return command
 }
@@ -467,6 +467,7 @@ func (app *application) newWatchCommand() *cobra.Command {
 	flags.StringVar(&options.presence, "presence", "", "filter by presence")
 	flags.StringVar(&options.activity, "activity", "", "filter by activity")
 	flags.StringVar(&options.tmuxSession, "tmux-session", "", "filter by tmux session")
+	flags.StringVar(&options.multiplexerSession, "multiplexer-session", "", "filter by multiplexer session")
 	flags.BoolVar(&options.noSnapshot, "no-snapshot", false, "start with future changes only")
 	flags.StringVar(&options.watchFormat, "format", "", "output format: table or plain")
 	return command

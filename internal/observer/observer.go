@@ -9,12 +9,14 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 	"time"
 
 	"github.com/zigai/agent-sessions/v2/internal/agentstate"
 	"github.com/zigai/agent-sessions/v2/internal/processinfo"
 	"github.com/zigai/agent-sessions/v2/pkg/harness"
+	"github.com/zigai/agent-sessions/v2/pkg/muxctx"
 	"github.com/zigai/agent-sessions/v2/pkg/registry"
 	"github.com/zigai/agent-sessions/v2/pkg/tmuxctx"
 )
@@ -51,19 +53,21 @@ type CatalogEntry struct {
 type CatalogLister func(context.Context) ([]CatalogEntry, error)
 
 type Options struct {
-	Store              registry.Store
-	StorePath          string
-	Interval           time.Duration
-	GracePeriod        time.Duration
-	HealthPath         string
-	ProcessList        ProcessLister
-	PaneList           PaneLister
-	CatalogList        CatalogLister
-	ScreenCapture      ScreenCapturer
-	DetectionConfigDir string
-	Now                func() time.Time
-	ErrorWriter        io.Writer
-	Quiet              bool
+	Store                    registry.Store
+	StorePath                string
+	Interval                 time.Duration
+	GracePeriod              time.Duration
+	HealthPath               string
+	ProcessList              ProcessLister
+	PaneList                 PaneLister
+	CatalogList              CatalogLister
+	ScreenCapture            ScreenCapturer
+	MultiplexerPaneList      muxctx.PaneLister
+	MultiplexerScreenCapture muxctx.ScreenCapturer
+	DetectionConfigDir       string
+	Now                      func() time.Time
+	ErrorWriter              io.Writer
+	Quiet                    bool
 }
 
 type Result struct {
@@ -115,9 +119,10 @@ type Observer struct {
 	grace          time.Duration
 	healthPath     string
 	processList    ProcessLister
-	paneList       PaneLister
+	paneList       muxctx.PaneLister
 	catalogList    CatalogLister
-	screenCapture  ScreenCapturer
+	screenCapture  muxctx.ScreenCapturer
+	tmuxOnly       bool
 	manifestLoader agentstate.Loader
 	now            func() time.Time
 	errorWriter    io.Writer
@@ -151,9 +156,15 @@ func New(options Options) *Observer {
 	if processList == nil {
 		processList = processinfo.List
 	}
-	paneList := options.PaneList
+	paneList := options.MultiplexerPaneList
+	tmuxOnly := false
 	if paneList == nil {
-		paneList = tmuxctx.ListPanes
+		if options.PaneList != nil {
+			paneList = legacyTmuxPaneLister(options.PaneList)
+			tmuxOnly = true
+		} else {
+			paneList = listMultiplexerPanes
+		}
 	}
 	now := options.Now
 	if now == nil {
@@ -179,14 +190,18 @@ func New(options Options) *Observer {
 	if catalogList == nil {
 		catalogList = DefaultCatalogList
 	}
-	screenCapture := options.ScreenCapture
+	screenCapture := options.MultiplexerScreenCapture
 	if screenCapture == nil {
-		screenCapture = tmuxctx.CapturePane
+		if options.ScreenCapture != nil {
+			screenCapture = legacyTmuxScreenCapturer(options.ScreenCapture)
+		} else {
+			screenCapture = captureMultiplexerPane
+		}
 	}
 	return &Observer{
 		store: store, storePath: storePath, interval: interval, grace: options.GracePeriod,
 		healthPath: healthPath, processList: processList, paneList: paneList, catalogList: catalogList,
-		screenCapture: screenCapture, manifestLoader: agentstate.Loader{ConfigDir: options.DetectionConfigDir},
+		screenCapture: screenCapture, tmuxOnly: tmuxOnly, manifestLoader: agentstate.Loader{ConfigDir: options.DetectionConfigDir},
 		now: now, errorWriter: errorWriter, quiet: options.Quiet, tracked: make(map[processKey]trackedProcess),
 		mu: sync.Mutex{}, startedAt: time.Time{}, initialized: false, health: Health{PID: 0, StartIdentity: "", Interval: 0, GracePeriod: 0, StartedAt: time.Time{}, LastAttemptAt: time.Time{}, LastSuccessAt: time.Time{}, LastEnumerationErrorCategory: "", LastEnumerationError: "", Cycles: 0, Observations: 0, Sessions: 0, Degraded: false},
 		lastHealthWrite: time.Time{}, lockPath: lockPath, lockFile: nil, running: false,
@@ -248,7 +263,7 @@ func (o *Observer) RunOnce(ctx context.Context) (Result, error) {
 	return o.runCycle(ctx)
 }
 
-//nolint:gocognit,cyclop,funcorder // one reconciliation cycle correlates process, tmux, catalog, and terminal evidence
+//nolint:gocognit,cyclop,funcorder,maintidx // one cycle correlates process, multiplexer, catalog, and terminal evidence
 func (o *Observer) runCycle(ctx context.Context) (Result, error) {
 	at := o.now().UTC()
 	result := Result{ObservedAt: at, Observations: 0, Sessions: 0, Processes: 0, Panes: 0, Catalog: 0, Present: 0, Gone: 0, Changed: 0, Degraded: false, Error: ""}
@@ -272,13 +287,17 @@ func (o *Observer) runCycle(ctx context.Context) (Result, error) {
 		result.Error = paneErr.Error()
 	}
 	result.Panes = len(panes)
+	sort.SliceStable(panes, func(left, right int) bool {
+		return multiplexerPriority(panes[left].Location.Kind) > multiplexerPriority(panes[right].Location.Kind)
+	})
+	paneCommandCounts := commandPaneCounts(panes)
 	catalog, catalogErr := o.listCatalog(ctx)
 	if catalogErr != nil {
 		result.Degraded = true
 		result.Error = catalogErr.Error()
 	}
 	result.Catalog = len(catalog)
-	knownSessions, sessionErr := o.store.List(ctx, registry.Filter{Harness: "", Presence: "", Activity: "", TmuxSession: ""})
+	knownSessions, sessionErr := o.store.List(ctx, registry.Filter{Harness: "", Presence: "", Activity: "", TmuxSession: "", MultiplexerSession: ""})
 	if sessionErr != nil {
 		result.Degraded = true
 		result.Error = sessionErr.Error()
@@ -321,17 +340,32 @@ func (o *Observer) runCycle(ctx context.Context) (Result, error) {
 	}
 	locationPIDs := make(map[int]bool)
 	for _, pane := range panes {
-		process, harnessID, ok := paneProcess(pane, processes, processByPID, harnessByPID)
+		process, harnessID, ok := multiplexerPaneProcess(pane, processes, processByPID, harnessByPID, paneCommandCounts)
 		if !ok {
 			continue
 		}
-		context := pane.Tmux
-		context.PanePID = pane.PanePID
-		context.PaneTTY = pane.PaneTTY
-		observations = append(observations, registry.Observation{ //nolint:exhaustruct // tmux observations intentionally omit unrelated evidence dimensions
-			Source: registry.ObservationSourceTmux, Evidence: registry.ObservationEvidenceTmuxLocation,
-			Harness: harnessID, Process: processIdentity(process), Tmux: &context, ObservedAt: at,
-		})
+		if locationPIDs[process.PID] {
+			continue
+		}
+		location := pane.Location
+		if location.PanePID == 0 && len(pane.Processes) > 0 {
+			location.PanePID = pane.Processes[0].PID
+		}
+		if location.PaneTTY == "" {
+			location.PaneTTY = pane.ProcessTTY
+		}
+		if location.Kind == registry.MultiplexerTmux {
+			tmuxContext := location.TmuxContext()
+			observations = append(observations, registry.Observation{ //nolint:exhaustruct // tmux observations intentionally omit unrelated evidence dimensions
+				Source: registry.ObservationSourceTmux, Evidence: registry.ObservationEvidenceTmuxLocation,
+				Harness: harnessID, Process: processIdentity(process), Tmux: &tmuxContext, ObservedAt: at,
+			})
+		} else {
+			observations = append(observations, registry.Observation{ //nolint:exhaustruct // multiplexer observations intentionally omit unrelated evidence dimensions
+				Source: registry.ObservationSourceMultiplexer, Evidence: registry.ObservationEvidenceMultiplexerLocation,
+				Harness: harnessID, Process: processIdentity(process), Multiplexer: &location, ObservedAt: at,
+			})
+		}
 		if screenObservation, detected, detectErr := o.detectScreenState(ctx, knownSessions, harnessID, process, pane, at); detected {
 			observations = append(observations, screenObservation)
 			if detectErr != nil {
@@ -341,7 +375,7 @@ func (o *Observer) runCycle(ctx context.Context) (Result, error) {
 		}
 		locationPIDs[process.PID] = true
 	}
-	observations = append(observations, observationsForUnlocatedProcesses(knownSessions, processByPID, harnessByPID, locationPIDs, paneErr, at)...)
+	observations = append(observations, observationsForUnlocatedProcesses(knownSessions, processByPID, harnessByPID, locationPIDs, paneErr, o.tmuxOnly, at)...)
 	for _, entry := range catalog {
 		if entry.Harness == "" || entry.SessionID == "" {
 			continue
@@ -455,22 +489,36 @@ func isAgentWrapper(process processinfo.Process) bool {
 	}
 }
 
-func observationsForUnlocatedProcesses(sessions []registry.Session, processByPID map[int]processinfo.Process, harnessByPID map[int]registry.Harness, locationPIDs map[int]bool, paneErr error, at time.Time) []registry.Observation {
+func observationsForUnlocatedProcesses(sessions []registry.Session, processByPID map[int]processinfo.Process, harnessByPID map[int]registry.Harness, locationPIDs map[int]bool, paneErr error, tmuxOnly bool, at time.Time) []registry.Observation {
 	observations := make([]registry.Observation, 0, len(processByPID))
 	for pid, process := range processByPID {
 		if locationPIDs[pid] {
 			continue
 		}
 		harnessID := harnessByPID[pid]
-		unavailableReason := "screen_not_in_tmux"
+		unavailableReason := "screen_not_in_supported_multiplexer"
+		if tmuxOnly {
+			unavailableReason = "screen_not_in_tmux"
+		}
 		if paneErr == nil {
-			emptyContext := registry.TmuxContext{}                    //nolint:exhaustruct // zero-value tmux context represents no pane location
-			observations = append(observations, registry.Observation{ //nolint:exhaustruct // tmux observations intentionally omit unrelated evidence dimensions
-				Source: registry.ObservationSourceTmux, Evidence: registry.ObservationEvidenceTmuxLocation,
-				Harness: harnessID, Process: processIdentity(process), Tmux: &emptyContext, ObservedAt: at,
-			})
+			if tmuxOnly {
+				emptyContext := registry.TmuxContext{}                    //nolint:exhaustruct // zero-value tmux context represents no pane location
+				observations = append(observations, registry.Observation{ //nolint:exhaustruct // tmux observations intentionally omit unrelated evidence dimensions
+					Source: registry.ObservationSourceTmux, Evidence: registry.ObservationEvidenceTmuxLocation,
+					Harness: harnessID, Process: processIdentity(process), Tmux: &emptyContext, ObservedAt: at,
+				})
+			} else {
+				emptyContext := registry.MultiplexerContext{}             //nolint:exhaustruct // zero-value context represents no supported multiplexer pane
+				observations = append(observations, registry.Observation{ //nolint:exhaustruct // location observations intentionally omit unrelated evidence dimensions
+					Source: registry.ObservationSourceMultiplexer, Evidence: registry.ObservationEvidenceMultiplexerLocation,
+					Harness: harnessID, Process: processIdentity(process), Multiplexer: &emptyContext, ObservedAt: at,
+				})
+			}
 		} else {
-			unavailableReason = "tmux_enumeration_failed"
+			unavailableReason = "multiplexer_enumeration_failed"
+			if tmuxOnly {
+				unavailableReason = "tmux_enumeration_failed"
+			}
 		}
 		if screenObservation, detected := unavailableScreenState(sessions, harnessID, process, at, unavailableReason); detected {
 			observations = append(observations, screenObservation)
@@ -522,7 +570,7 @@ func unavailableScreenState(sessions []registry.Session, harnessID registry.Harn
 }
 
 //nolint:funcorder // state detection runs as part of reconciliation near its call site
-func (o *Observer) detectScreenState(ctx context.Context, sessions []registry.Session, harnessID registry.Harness, process processinfo.Process, pane tmuxctx.Pane, at time.Time) (registry.Observation, bool, error) {
+func (o *Observer) detectScreenState(ctx context.Context, sessions []registry.Session, harnessID registry.Harness, process processinfo.Process, pane muxctx.Pane, at time.Time) (registry.Observation, bool, error) {
 	if !agentstate.SupportsScreen(harnessID) {
 		var empty registry.Observation
 		return empty, false, nil
@@ -532,6 +580,24 @@ func (o *Observer) detectScreenState(ctx context.Context, sessions []registry.Se
 	if !agentstate.ShouldDetectScreen(session, at) {
 		var empty registry.Observation
 		return empty, false, nil
+	}
+	if pane.Activity != nil {
+		fallback, fallbackReason := screenFallbackMetadata(session, harnessID, at)
+		reason := pane.StateReason
+		if reason == "" {
+			reason = "multiplexer_agent_status"
+		}
+		screen := &registry.ScreenObservation{
+			Activity: *pane.Activity, Authority: string(pane.Location.Kind), Reason: reason,
+			RuleID: "", ManifestSource: "", ManifestVersion: 0,
+			FallbackForIntegration: fallback, FallbackReason: fallbackReason,
+			Process: *identity, ObservedAt: at,
+		}
+		observation := registry.Observation{ //nolint:exhaustruct // semantic multiplexer state contains no terminal contents
+			Source: registry.ObservationSourceScreen, Evidence: registry.ObservationEvidenceScreenState, Harness: harnessID,
+			Activity: pane.Activity, Process: identity, Screen: screen, ObservedAt: at,
+		}
+		return observation, true, nil
 	}
 	manifest, err := o.manifestLoader.Load(harnessID)
 	if err != nil {
@@ -550,7 +616,7 @@ func (o *Observer) detectScreenState(ctx context.Context, sessions []registry.Se
 		Activity: &decision.Activity, Process: identity, Screen: screen, ObservedAt: observedAt,
 	}
 	if captureErr != nil {
-		return observation, true, fmt.Errorf("capturing %s pane %s for detection: %w", harnessID, pane.Tmux.PaneID, captureErr)
+		return observation, true, fmt.Errorf("capturing %s pane %s for detection: %w", harnessID, pane.Location.PaneID, captureErr)
 	}
 	if manifest.Warning != "" {
 		return observation, true, fmt.Errorf("%w: %s", errDetectionOverrideInvalid, manifest.Warning)
@@ -569,55 +635,9 @@ func unavailableScreenDecision(manifest agentstate.Manifest) agentstate.Decision
 	return agentstate.Decision{Activity: registry.ActivityUnknown, Reason: "screen_unavailable", RuleID: "", ManifestSource: manifest.Source, ManifestVersion: manifest.Version, Warning: manifest.Warning, Evidence: nil}
 }
 
-//nolint:gocognit,cyclop // pane correlation follows direct, tty, and ancestor matching paths
 func paneProcess(pane tmuxctx.Pane, processes []processinfo.Process, byPID map[int]processinfo.Process, harnessByPID map[int]registry.Harness) (processinfo.Process, registry.Harness, bool) {
-	var foreground processinfo.Process
-	var foregroundHarness registry.Harness
-	for _, process := range processes {
-		if !process.Foreground || pane.PaneTTY == "" || process.TTY != pane.PaneTTY {
-			continue
-		}
-		harnessID, ok := harnessByPID[process.PID]
-		if !ok {
-			continue
-		}
-		if foreground.PID == 0 || preferForegroundProcess(process, foreground) {
-			foreground = process
-			foregroundHarness = harnessID
-		}
-	}
-	if foreground.PID != 0 {
-		return foreground, foregroundHarness, true
-	}
-	if process, ok := byPID[pane.PanePID]; ok {
-		if harnessID, ok := harnessByPID[pane.PanePID]; ok {
-			return process, harnessID, true
-		}
-	}
-	for _, process := range processes {
-		if process.PID <= 0 {
-			continue
-		}
-		ancestor := process
-		for range processes {
-			if ancestor.PPID == pane.PanePID {
-				if harnessID, ok := harnessByPID[ancestor.PID]; ok {
-					return ancestor, harnessID, true
-				}
-			}
-			next, ok := byPID[ancestor.PPID]
-			if !ok || next.PID == ancestor.PID {
-				break
-			}
-			ancestor = next
-		}
-		if pane.PaneTTY != "" && process.TTY == pane.PaneTTY {
-			if harnessID, ok := harnessByPID[process.PID]; ok {
-				return process, harnessID, true
-			}
-		}
-	}
-	return processinfo.Process{PID: 0, PPID: 0, ProcessGroupID: 0, Foreground: false, StartIdentity: "", Executable: "", CWD: "", TTY: "", Args: nil, AgentHint: ""}, "", false
+	converted := multiplexerPanesFromTmux([]tmuxctx.Pane{pane})
+	return multiplexerPaneProcess(converted[0], processes, byPID, harnessByPID, commandPaneCounts(converted))
 }
 
 func preferForegroundProcess(candidate processinfo.Process, current processinfo.Process) bool {
@@ -658,7 +678,7 @@ func (o *Observer) initializeTracked(ctx context.Context) error {
 	if o.initialized {
 		return nil
 	}
-	sessions, err := o.store.List(ctx, registry.Filter{Harness: "", Presence: registry.PresenceLive, Activity: "", TmuxSession: ""})
+	sessions, err := o.store.List(ctx, registry.Filter{Harness: "", Presence: registry.PresenceLive, Activity: "", TmuxSession: "", MultiplexerSession: ""})
 	if err != nil {
 		return fmt.Errorf("listing live sessions: %w", err)
 	}
@@ -668,16 +688,17 @@ func (o *Observer) initializeTracked(ctx context.Context) error {
 			continue
 		}
 		process := processinfo.Process{
-			PID:            observation.Process.PID,
-			PPID:           observation.Process.PPID,
-			ProcessGroupID: observation.Process.ProcessGroupID,
-			Foreground:     observation.Process.Foreground,
-			StartIdentity:  observation.Process.StartIdentity,
-			Executable:     observation.Process.Executable,
-			CWD:            observation.Process.CWD,
-			TTY:            observation.Process.TTY,
-			Args:           nil,
-			AgentHint:      "",
+			PID:             observation.Process.PID,
+			PPID:            observation.Process.PPID,
+			ProcessGroupID:  observation.Process.ProcessGroupID,
+			Foreground:      observation.Process.Foreground,
+			StartIdentity:   observation.Process.StartIdentity,
+			Executable:      observation.Process.Executable,
+			CWD:             observation.Process.CWD,
+			TTY:             observation.Process.TTY,
+			AgentHint:       "",
+			MultiplexerKind: "", MultiplexerServer: "", MultiplexerSession: "", MultiplexerPane: "",
+			Args: nil,
 		}
 		key := processKey{harness: session.Harness, pid: process.PID, start: process.StartIdentity}
 		o.tracked[key] = trackedProcess{

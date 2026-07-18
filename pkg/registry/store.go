@@ -21,7 +21,7 @@ const (
 )
 
 // IntegrationActivityLease is the maximum age of a matching integration
-// transition before tmux screen evidence becomes authoritative again.
+// transition before multiplexer screen evidence becomes authoritative again.
 const IntegrationActivityLease = 30 * time.Second
 
 var (
@@ -167,8 +167,9 @@ func newSession(id string, harness Harness, now time.Time) Session {
 		CWD:               "",
 		ProjectRoot:       "",
 		Process:           nil,
-		Tmux:              TmuxContext{},  //nolint:exhaustruct // zero-value location is the new session default
-		Observations:      Observations{}, //nolint:exhaustruct // no evidence has been observed yet
+		Tmux:              TmuxContext{},        //nolint:exhaustruct // zero-value location is the new session default
+		Multiplexer:       MultiplexerContext{}, //nolint:exhaustruct // zero-value location is the new session default
+		Observations:      Observations{},       //nolint:exhaustruct // no evidence has been observed yet
 		CreatedAt:         now,
 		UpdatedAt:         now,
 		PresenceChangedAt: time.Time{},
@@ -188,6 +189,7 @@ func observationTime(observedAt, receivedAt time.Time) (time.Time, bool) {
 	return observedAt, true
 }
 
+//nolint:cyclop // each source owns an independent timestamp slot
 func sourceSlotTime(session Session, observation Observation) time.Time {
 	switch observation.Source {
 	case ObservationSourceNative:
@@ -201,6 +203,10 @@ func sourceSlotTime(session Session, observation Observation) time.Time {
 	case ObservationSourceTmux:
 		if session.Observations.Tmux != nil {
 			return session.Observations.Tmux.ObservedAt
+		}
+	case ObservationSourceMultiplexer:
+		if session.Observations.Multiplexer != nil {
+			return session.Observations.Multiplexer.ObservedAt
 		}
 	case ObservationSourceCatalog:
 		if session.Observations.Catalog != nil {
@@ -228,6 +234,9 @@ func currentProcessObservationTime(session Session) time.Time {
 	if observation := session.Observations.Tmux; observation != nil && observation.Process.Equal(*session.Process) {
 		latest = maxTime(latest, observation.ObservedAt)
 	}
+	if observation := session.Observations.Multiplexer; observation != nil && observation.Process.Equal(*session.Process) {
+		latest = maxTime(latest, observation.ObservedAt)
+	}
 	if observation := session.Observations.Screen; observation != nil && observation.Process.Equal(*session.Process) {
 		latest = maxTime(latest, observation.ObservedAt)
 	}
@@ -242,6 +251,8 @@ func existingSlot(session Session, observation Observation) any {
 		return session.Observations.Process
 	case ObservationSourceTmux:
 		return session.Observations.Tmux
+	case ObservationSourceMultiplexer:
+		return session.Observations.Multiplexer
 	case ObservationSourceCatalog:
 		return session.Observations.Catalog
 	case ObservationSourceScreen:
@@ -322,6 +333,8 @@ func storeObservation(session *Session, observation Observation, at time.Time) e
 		storeProcessObservation(session, observation, at)
 	case ObservationSourceTmux:
 		return storeTmuxObservation(session, observation, at)
+	case ObservationSourceMultiplexer:
+		return storeMultiplexerObservation(session, observation, at)
 	case ObservationSourceCatalog:
 		return storeCatalogObservation(session, observation, at)
 	case ObservationSourceScreen:
@@ -354,6 +367,14 @@ func storeTmuxObservation(session *Session, observation Observation, at time.Tim
 		return ErrInvalidObservation
 	}
 	session.Observations.Tmux = &TmuxObservation{Process: *observation.Process, Context: *observation.Tmux, ObservedAt: at}
+	return nil
+}
+
+func storeMultiplexerObservation(session *Session, observation Observation, at time.Time) error {
+	if observation.Multiplexer == nil || observation.Process == nil {
+		return ErrInvalidObservation
+	}
+	session.Observations.Multiplexer = &MultiplexerObservation{Process: *observation.Process, Context: *observation.Multiplexer, ObservedAt: at}
 	return nil
 }
 
@@ -402,6 +423,7 @@ func applyIdentity(session *Session, observation Observation) {
 	}
 }
 
+//nolint:cyclop // metadata dimensions are reduced independently
 func applyMetadata(session *Session, observation Observation, at time.Time) {
 	if observation.Process != nil && observation.Process.Complete() {
 		process := *observation.Process
@@ -423,8 +445,16 @@ func applyMetadata(session *Session, observation Observation, at time.Time) {
 	}
 	if observation.Tmux != nil {
 		session.Tmux = *observation.Tmux
+		session.Multiplexer = MultiplexerFromTmux(*observation.Tmux)
 		if session.CWD == "" {
 			session.CWD = observation.Tmux.PaneCurrentPath
+		}
+	}
+	if observation.Multiplexer != nil {
+		session.Multiplexer = *observation.Multiplexer
+		session.Tmux = observation.Multiplexer.TmuxContext()
+		if session.CWD == "" {
+			session.CWD = observation.Multiplexer.PaneCurrentPath
 		}
 	}
 }
@@ -503,7 +533,7 @@ func applyPresenceAndActivity(session *Session, observation Observation, at time
 		}
 		session.Activity = activityPtr(screen.Activity)
 		session.ActivityDecision = &ActivityDecision{Authority: screen.Authority, Reason: screen.Reason, RuleID: screen.RuleID, ManifestSource: screen.ManifestSource, ManifestVersion: screen.ManifestVersion, FallbackReason: screen.FallbackReason, Process: screen.Process, ObservedAt: at}
-	case ObservationSourceTmux, ObservationSourceCatalog:
+	case ObservationSourceTmux, ObservationSourceMultiplexer, ObservationSourceCatalog:
 		return
 	}
 }
@@ -658,6 +688,7 @@ func (s *FileStore) List(ctx context.Context, filter Filter) ([]Session, error) 
 	sessions := make([]Session, 0, len(snap.Sessions))
 	for _, session := range snap.Sessions {
 		session.SchemaVersion = storeSchemaVersion
+		populateMultiplexerProjection(&session)
 		sessions = append(sessions, session)
 	}
 	return filterSessions(sessions, filter), nil
@@ -676,7 +707,14 @@ func (s *FileStore) Get(ctx context.Context, id string) (Session, error) {
 		return Session{}, ErrSessionNotFound
 	}
 	session.SchemaVersion = storeSchemaVersion
+	populateMultiplexerProjection(&session)
 	return session, nil
+}
+
+func populateMultiplexerProjection(session *Session) {
+	if session.Multiplexer.Empty() && !session.Tmux.Empty() {
+		session.Multiplexer = MultiplexerFromTmux(session.Tmux)
+	}
 }
 
 func (s *FileStore) SummaryByTmuxSession(ctx context.Context, filter Filter) ([]Summary, error) {
@@ -693,6 +731,7 @@ func (s *FileStore) SummaryByTmuxSessionWithOptions(ctx context.Context, options
 	}
 	sessions := make([]Session, 0, len(snap.Sessions))
 	for _, session := range snap.Sessions {
+		populateMultiplexerProjection(&session)
 		sessions = append(sessions, session)
 	}
 	return summariesForSessions(filterSessions(sessions, options.Filter)), nil
@@ -702,10 +741,17 @@ func summariesForSessions(sessions []Session) []Summary {
 	byKey := make(map[string]*Summary)
 	order := make([]string, 0)
 	for _, session := range sessions {
+		populateMultiplexerProjection(&session)
 		key := summaryKeyForSession(session)
 		summary := byKey[key]
 		if summary == nil {
-			summary = &Summary{TmuxSessionID: session.Tmux.SessionID, TmuxSessionName: session.Tmux.SessionName, Total: 0, Live: 0, Gone: 0, PresenceUnknown: 0, Running: 0, Waiting: 0, Idle: 0, ActivityUnknown: 0}
+			summary = &Summary{
+				MultiplexerKind: session.Multiplexer.Kind, MultiplexerSessionID: session.Multiplexer.SessionID,
+				MultiplexerSessionName: session.Multiplexer.SessionName,
+				TmuxSessionID:          session.Tmux.SessionID, TmuxSessionName: session.Tmux.SessionName,
+				Total: 0, Live: 0, Gone: 0, PresenceUnknown: 0,
+				Running: 0, Waiting: 0, Idle: 0, ActivityUnknown: 0,
+			}
 			byKey[key] = summary
 			order = append(order, key)
 		}
@@ -740,11 +786,12 @@ func summariesForSessions(sessions []Session) []Summary {
 }
 
 func summaryKeyForSession(session Session) string {
-	if session.Tmux.SessionID != "" {
-		return "tmux:" + session.Tmux.SessionID
+	populateMultiplexerProjection(&session)
+	if session.Multiplexer.SessionID != "" {
+		return string(session.Multiplexer.Kind) + ":" + session.Multiplexer.SessionID
 	}
-	if session.Tmux.SessionName != "" {
-		return "tmux-name:" + session.Tmux.SessionName
+	if session.Multiplexer.SessionName != "" {
+		return string(session.Multiplexer.Kind) + "-name:" + session.Multiplexer.SessionName
 	}
 	return "unknown"
 }
@@ -929,6 +976,10 @@ func storedSessionStateCorruption(session Session) string {
 		return "invalid process identity"
 	case session.Tmux.PanePID < 0:
 		return "invalid tmux pane pid"
+	case session.Multiplexer.PanePID < 0:
+		return "invalid multiplexer pane pid"
+	case !session.Multiplexer.Empty() && !validMultiplexerKind(session.Multiplexer.Kind):
+		return "invalid multiplexer kind"
 	case session.ActivityDecision != nil && !validStoredActivityDecision(*session.ActivityDecision):
 		return "invalid activity decision"
 	default:
@@ -949,6 +1000,7 @@ func storedSessionActivityCorruption(session Session) string {
 	}
 }
 
+//nolint:cyclop // each stored observation slot is validated independently
 func storedObservationCorruption(observations Observations) string {
 	if native := observations.Native; native != nil && !validStoredNativeObservation(*native) {
 		return "invalid native observation"
@@ -958,6 +1010,9 @@ func storedObservationCorruption(observations Observations) string {
 	}
 	if tmux := observations.Tmux; tmux != nil && !validStoredTmuxObservation(*tmux) {
 		return "invalid tmux observation"
+	}
+	if multiplexer := observations.Multiplexer; multiplexer != nil && !validStoredMultiplexerObservation(*multiplexer) {
+		return "invalid multiplexer observation"
 	}
 	if catalog := observations.Catalog; catalog != nil && !validStoredCatalogObservation(*catalog) {
 		return "invalid catalog observation"
@@ -974,6 +1029,13 @@ func validStoredProcessObservation(observation ProcessObservation) bool {
 
 func validStoredTmuxObservation(observation TmuxObservation) bool {
 	return !observation.ObservedAt.IsZero() && validStoredProcess(observation.Process, false) && observation.Context.PanePID >= 0
+}
+
+func validStoredMultiplexerObservation(observation MultiplexerObservation) bool {
+	return !observation.ObservedAt.IsZero() &&
+		validStoredProcess(observation.Process, false) &&
+		observation.Context.PanePID >= 0 &&
+		(observation.Context.Empty() || validMultiplexerKind(observation.Context.Kind))
 }
 
 func validStoredCatalogObservation(observation CatalogObservation) bool {

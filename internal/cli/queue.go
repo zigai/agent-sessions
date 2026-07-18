@@ -94,6 +94,12 @@ func (app *application) prepareQueuedReport(ctx context.Context, q reportqueue.Q
 			o.Tmux = &t
 		}
 	}
+	if o.Multiplexer == nil {
+		multiplexer := reportMultiplexerContextFromEnv(e.Runtime.Env)
+		if !multiplexer.Empty() {
+			o.Multiplexer = &multiplexer
+		}
+	}
 	p := strings.TrimSpace(e.StorePath)
 	if p == "" {
 		p = app.store().Path()
@@ -221,9 +227,17 @@ func queuedReportRuntime(q reportqueue.Queue, now time.Time, parentArgs []string
 		CWD:        defaultCWD(),
 		ParentArgs: append([]string(nil), parentArgs...),
 		Env: map[string]string{
-			"TMUX":      tmuxEnv.TMUX,
-			"TMUX_PANE": tmuxEnv.TMUXPane,
-			"PWD":       os.Getenv("PWD"),
+			"TMUX":                tmuxEnv.TMUX,
+			"TMUX_PANE":           tmuxEnv.TMUXPane,
+			"ZELLIJ_SESSION_NAME": os.Getenv("ZELLIJ_SESSION_NAME"),
+			"ZELLIJ_PANE_ID":      os.Getenv("ZELLIJ_PANE_ID"),
+			"HERDR_ENV":           os.Getenv("HERDR_ENV"),
+			"HERDR_SESSION":       os.Getenv("HERDR_SESSION"),
+			"HERDR_SOCKET_PATH":   os.Getenv("HERDR_SOCKET_PATH"),
+			"HERDR_WORKSPACE_ID":  os.Getenv("HERDR_WORKSPACE_ID"),
+			"HERDR_TAB_ID":        os.Getenv("HERDR_TAB_ID"),
+			"HERDR_PANE_ID":       os.Getenv("HERDR_PANE_ID"),
+			"PWD":                 os.Getenv("PWD"),
 		},
 	}
 	return runtime, cachedTmux

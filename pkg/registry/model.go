@@ -66,21 +66,23 @@ const (
 type ObservationSource string
 
 const (
-	ObservationSourceNative  ObservationSource = "native"
-	ObservationSourceProcess ObservationSource = "process"
-	ObservationSourceTmux    ObservationSource = "tmux"
-	ObservationSourceCatalog ObservationSource = "catalog"
-	ObservationSourceScreen  ObservationSource = "screen"
+	ObservationSourceNative      ObservationSource = "native"
+	ObservationSourceProcess     ObservationSource = "process"
+	ObservationSourceTmux        ObservationSource = "tmux"
+	ObservationSourceMultiplexer ObservationSource = "multiplexer"
+	ObservationSourceCatalog     ObservationSource = "catalog"
+	ObservationSourceScreen      ObservationSource = "screen"
 )
 
 type ObservationEvidence string
 
 const (
-	ObservationEvidenceNativeEvent     ObservationEvidence = "native_event"
-	ObservationEvidenceProcessPresence ObservationEvidence = "process_presence"
-	ObservationEvidenceTmuxLocation    ObservationEvidence = "tmux_location"
-	ObservationEvidenceCatalogMetadata ObservationEvidence = "catalog_metadata"
-	ObservationEvidenceScreenState     ObservationEvidence = "screen_state"
+	ObservationEvidenceNativeEvent         ObservationEvidence = "native_event"
+	ObservationEvidenceProcessPresence     ObservationEvidence = "process_presence"
+	ObservationEvidenceTmuxLocation        ObservationEvidence = "tmux_location"
+	ObservationEvidenceMultiplexerLocation ObservationEvidence = "multiplexer_location"
+	ObservationEvidenceCatalogMetadata     ObservationEvidence = "catalog_metadata"
+	ObservationEvidenceScreenState         ObservationEvidence = "screen_state"
 )
 
 type NativeLifecycle string
@@ -108,6 +110,67 @@ type TmuxContext struct {
 }
 
 func (c TmuxContext) Empty() bool { return c == (TmuxContext{}) } //nolint:exhaustruct // comparing against the zero value is intentional
+
+type MultiplexerKind string
+
+const (
+	MultiplexerTmux   MultiplexerKind = "tmux"
+	MultiplexerZellij MultiplexerKind = "zellij"
+	MultiplexerHerdr  MultiplexerKind = "herdr"
+)
+
+// MultiplexerContext identifies an addressable terminal pane. Window fields
+// represent tmux windows, while workspace and tab fields represent native
+// Zellij and Herdr containers.
+type MultiplexerContext struct {
+	Kind            MultiplexerKind `json:"kind"`
+	ServerID        string          `json:"server_id,omitempty"`
+	SessionID       string          `json:"session_id,omitempty"`
+	SessionName     string          `json:"session_name,omitempty"`
+	WorkspaceID     string          `json:"workspace_id,omitempty"`
+	WorkspaceName   string          `json:"workspace_name,omitempty"`
+	TabID           string          `json:"tab_id,omitempty"`
+	TabIndex        string          `json:"tab_index,omitempty"`
+	TabName         string          `json:"tab_name,omitempty"`
+	WindowID        string          `json:"window_id,omitempty"`
+	WindowIndex     string          `json:"window_index,omitempty"`
+	WindowName      string          `json:"window_name,omitempty"`
+	PaneID          string          `json:"pane_id,omitempty"`
+	PaneIndex       string          `json:"pane_index,omitempty"`
+	PaneCurrentPath string          `json:"pane_current_path,omitempty"`
+	PanePID         int             `json:"pane_pid,omitempty"`
+	PaneTTY         string          `json:"pane_tty,omitempty"`
+	ClientTTY       string          `json:"client_tty,omitempty"`
+}
+
+func (c MultiplexerContext) Empty() bool { return c == (MultiplexerContext{}) } //nolint:exhaustruct // comparing against the zero value is intentional
+
+func MultiplexerFromTmux(c TmuxContext) MultiplexerContext {
+	if c.Empty() {
+		var empty MultiplexerContext
+		return empty
+	}
+	return MultiplexerContext{
+		Kind: MultiplexerTmux, ServerID: c.ServerSocket, SessionID: c.SessionID, SessionName: c.SessionName,
+		WorkspaceID: "", WorkspaceName: "", TabID: "", TabIndex: "", TabName: "",
+		WindowID: c.WindowID, WindowIndex: c.WindowIndex, WindowName: c.WindowName,
+		PaneID: c.PaneID, PaneIndex: c.PaneIndex, PaneCurrentPath: c.PaneCurrentPath,
+		PanePID: c.PanePID, PaneTTY: c.PaneTTY, ClientTTY: c.ClientTTY,
+	}
+}
+
+func (c MultiplexerContext) TmuxContext() TmuxContext {
+	if c.Kind != MultiplexerTmux {
+		var empty TmuxContext
+		return empty
+	}
+	return TmuxContext{
+		Inside: true, ServerSocket: c.ServerID, SessionID: c.SessionID, SessionName: c.SessionName,
+		WindowID: c.WindowID, WindowIndex: c.WindowIndex, WindowName: c.WindowName,
+		PaneID: c.PaneID, PaneIndex: c.PaneIndex, PaneCurrentPath: c.PaneCurrentPath,
+		PanePID: c.PanePID, PaneTTY: c.PaneTTY, ClientTTY: c.ClientTTY,
+	}
+}
 
 type ProcessIdentity struct {
 	PID            int    `json:"pid"`
@@ -176,6 +239,12 @@ type TmuxObservation struct {
 	ObservedAt time.Time       `json:"observed_at"`
 }
 
+type MultiplexerObservation struct {
+	Process    ProcessIdentity    `json:"process"`
+	Context    MultiplexerContext `json:"context"`
+	ObservedAt time.Time          `json:"observed_at"`
+}
+
 type CatalogObservation struct {
 	SessionID     string    `json:"session_id,omitempty"`
 	SessionPath   string    `json:"session_path,omitempty"`
@@ -187,32 +256,34 @@ type CatalogObservation struct {
 }
 
 type Observations struct {
-	Native  *NativeObservation  `json:"native,omitempty"`
-	Process *ProcessObservation `json:"process,omitempty"`
-	Tmux    *TmuxObservation    `json:"tmux,omitempty"`
-	Catalog *CatalogObservation `json:"catalog,omitempty"`
-	Screen  *ScreenObservation  `json:"screen,omitempty"`
+	Native      *NativeObservation      `json:"native,omitempty"`
+	Process     *ProcessObservation     `json:"process,omitempty"`
+	Tmux        *TmuxObservation        `json:"tmux,omitempty"`
+	Multiplexer *MultiplexerObservation `json:"multiplexer,omitempty"`
+	Catalog     *CatalogObservation     `json:"catalog,omitempty"`
+	Screen      *ScreenObservation      `json:"screen,omitempty"`
 }
 
 type Session struct {
-	SchemaVersion     int               `json:"schema_version"`
-	ID                string            `json:"id"`
-	Harness           Harness           `json:"harness"`
-	Presence          Presence          `json:"presence"`
-	Activity          *Activity         `json:"activity"`
-	SessionID         string            `json:"session_id,omitempty"`
-	SessionPath       string            `json:"session_path,omitempty"`
-	ResumeCommand     []string          `json:"resume_command,omitempty"`
-	CWD               string            `json:"cwd,omitempty"`
-	ProjectRoot       string            `json:"project_root,omitempty"`
-	Process           *ProcessIdentity  `json:"process,omitempty"`
-	Tmux              TmuxContext       `json:"tmux,omitzero"`
-	Observations      Observations      `json:"observations"`
-	CreatedAt         time.Time         `json:"created_at"`
-	UpdatedAt         time.Time         `json:"updated_at"`
-	PresenceChangedAt time.Time         `json:"presence_changed_at"`
-	ActivityChangedAt time.Time         `json:"activity_changed_at"`
-	ActivityDecision  *ActivityDecision `json:"activity_decision,omitempty"`
+	SchemaVersion     int                `json:"schema_version"`
+	ID                string             `json:"id"`
+	Harness           Harness            `json:"harness"`
+	Presence          Presence           `json:"presence"`
+	Activity          *Activity          `json:"activity"`
+	SessionID         string             `json:"session_id,omitempty"`
+	SessionPath       string             `json:"session_path,omitempty"`
+	ResumeCommand     []string           `json:"resume_command,omitempty"`
+	CWD               string             `json:"cwd,omitempty"`
+	ProjectRoot       string             `json:"project_root,omitempty"`
+	Process           *ProcessIdentity   `json:"process,omitempty"`
+	Tmux              TmuxContext        `json:"tmux,omitzero"`
+	Multiplexer       MultiplexerContext `json:"multiplexer,omitzero"`
+	Observations      Observations       `json:"observations"`
+	CreatedAt         time.Time          `json:"created_at"`
+	UpdatedAt         time.Time          `json:"updated_at"`
+	PresenceChangedAt time.Time          `json:"presence_changed_at"`
+	ActivityChangedAt time.Time          `json:"activity_changed_at"`
+	ActivityDecision  *ActivityDecision  `json:"activity_decision,omitempty"`
 }
 
 type ObservationIdentity struct {
@@ -241,6 +312,7 @@ type Observation struct {
 	ProcessPresent        *bool               `json:"process_present,omitempty"`
 	Process               *ProcessIdentity    `json:"process,omitempty"`
 	Tmux                  *TmuxContext        `json:"tmux,omitempty"`
+	Multiplexer           *MultiplexerContext `json:"multiplexer,omitempty"`
 	Catalog               *CatalogMetadata    `json:"catalog,omitempty"`
 	Attributes            map[string]string   `json:"attributes,omitempty"`
 	RawPayload            json.RawMessage     `json:"raw_payload,omitempty"`
@@ -249,23 +321,27 @@ type Observation struct {
 }
 
 type Filter struct {
-	Harness     Harness
-	Presence    Presence
-	Activity    Activity
-	TmuxSession string
+	Harness            Harness
+	Presence           Presence
+	Activity           Activity
+	TmuxSession        string
+	MultiplexerSession string
 }
 
 type Summary struct {
-	TmuxSessionID   string `json:"tmux_session_id,omitempty"`
-	TmuxSessionName string `json:"tmux_session_name,omitempty"`
-	Total           int    `json:"total"`
-	Live            int    `json:"live"`
-	Gone            int    `json:"gone"`
-	PresenceUnknown int    `json:"presence_unknown"`
-	Running         int    `json:"running"`
-	Waiting         int    `json:"waiting"`
-	Idle            int    `json:"idle"`
-	ActivityUnknown int    `json:"activity_unknown"`
+	MultiplexerKind        MultiplexerKind `json:"multiplexer_kind,omitempty"`
+	MultiplexerSessionID   string          `json:"multiplexer_session_id,omitempty"`
+	MultiplexerSessionName string          `json:"multiplexer_session_name,omitempty"`
+	TmuxSessionID          string          `json:"tmux_session_id,omitempty"`
+	TmuxSessionName        string          `json:"tmux_session_name,omitempty"`
+	Total                  int             `json:"total"`
+	Live                   int             `json:"live"`
+	Gone                   int             `json:"gone"`
+	PresenceUnknown        int             `json:"presence_unknown"`
+	Running                int             `json:"running"`
+	Waiting                int             `json:"waiting"`
+	Idle                   int             `json:"idle"`
+	ActivityUnknown        int             `json:"activity_unknown"`
 }
 
 type SummaryOptions struct{ Filter Filter }
@@ -317,6 +393,8 @@ func NormalizeSource(value string) (ObservationSource, error) {
 		return ObservationSourceProcess, nil
 	case string(ObservationSourceTmux):
 		return ObservationSourceTmux, nil
+	case string(ObservationSourceMultiplexer):
+		return ObservationSourceMultiplexer, nil
 	case string(ObservationSourceCatalog):
 		return ObservationSourceCatalog, nil
 	case string(ObservationSourceScreen):
@@ -334,6 +412,8 @@ func NormalizeEvidence(value string) (ObservationEvidence, error) {
 		return ObservationEvidenceProcessPresence, nil
 	case string(ObservationEvidenceTmuxLocation):
 		return ObservationEvidenceTmuxLocation, nil
+	case string(ObservationEvidenceMultiplexerLocation):
+		return ObservationEvidenceMultiplexerLocation, nil
 	case string(ObservationEvidenceCatalogMetadata):
 		return ObservationEvidenceCatalogMetadata, nil
 	case string(ObservationEvidenceScreenState):
@@ -356,7 +436,7 @@ func NormalizeLifecycle(value string) (NativeLifecycle, error) {
 	}
 }
 
-//nolint:gocognit,cyclop // validation enforces source-specific evidence invariants in one place
+//nolint:gocognit,cyclop,maintidx // validation enforces source-specific evidence invariants in one place
 func ValidateObservation(observation Observation) error {
 	if observation.Harness == "" {
 		return fmt.Errorf("%w: harness is required", ErrInvalidObservation)
@@ -385,6 +465,14 @@ func ValidateObservation(observation Observation) error {
 	if observation.Tmux != nil && observation.Tmux.PanePID < 0 {
 		return fmt.Errorf("%w: tmux pane pid is invalid", ErrInvalidObservation)
 	}
+	if observation.Multiplexer != nil {
+		if observation.Multiplexer.PanePID < 0 {
+			return fmt.Errorf("%w: multiplexer pane pid is invalid", ErrInvalidObservation)
+		}
+		if !observation.Multiplexer.Empty() && !validMultiplexerKind(observation.Multiplexer.Kind) {
+			return fmt.Errorf("%w: multiplexer kind %q is invalid", ErrInvalidObservation, observation.Multiplexer.Kind)
+		}
+	}
 	if observation.Catalog != nil && observation.Catalog.ProcessPID < 0 {
 		return fmt.Errorf("%w: catalog process pid is invalid", ErrInvalidObservation)
 	}
@@ -403,6 +491,7 @@ func ValidateObservation(observation Observation) error {
 	pairOK := (observation.Source == ObservationSourceNative && observation.Evidence == ObservationEvidenceNativeEvent) ||
 		(observation.Source == ObservationSourceProcess && observation.Evidence == ObservationEvidenceProcessPresence) ||
 		(observation.Source == ObservationSourceTmux && observation.Evidence == ObservationEvidenceTmuxLocation) ||
+		(observation.Source == ObservationSourceMultiplexer && observation.Evidence == ObservationEvidenceMultiplexerLocation) ||
 		(observation.Source == ObservationSourceCatalog && observation.Evidence == ObservationEvidenceCatalogMetadata) ||
 		(observation.Source == ObservationSourceScreen && observation.Evidence == ObservationEvidenceScreenState)
 	if !pairOK {
@@ -434,6 +523,14 @@ func ValidateObservation(observation Observation) error {
 			return fmt.Errorf("%w: complete process identity is required", ErrInvalidObservation)
 		}
 	}
+	if observation.Source == ObservationSourceMultiplexer {
+		if observation.Multiplexer == nil {
+			return fmt.Errorf("%w: multiplexer context is required", ErrInvalidObservation)
+		}
+		if observation.Process == nil || !observation.Process.Complete() {
+			return fmt.Errorf("%w: complete process identity is required", ErrInvalidObservation)
+		}
+	}
 	if observation.Source == ObservationSourceCatalog && observation.Catalog == nil {
 		return fmt.Errorf("%w: catalog metadata is required", ErrInvalidObservation)
 	}
@@ -454,6 +551,15 @@ func ValidateObservation(observation Observation) error {
 	return nil
 }
 
+func validMultiplexerKind(kind MultiplexerKind) bool {
+	switch kind {
+	case MultiplexerTmux, MultiplexerZellij, MultiplexerHerdr:
+		return true
+	default:
+		return false
+	}
+}
+
 func sessionIDForObservation(observation Observation) string {
 	parts := []string{string(observation.Harness)}
 	switch {
@@ -470,6 +576,7 @@ func sessionIDForObservation(observation Observation) string {
 	return string(observation.Harness) + "-" + hex.EncodeToString(sum[:8])
 }
 
+//nolint:cyclop // each filter dimension is intentionally independent
 func filterSessions(sessions []Session, filter Filter) []Session {
 	filtered := make([]Session, 0, len(sessions))
 	for _, session := range sessions {
@@ -485,6 +592,9 @@ func filterSessions(sessions []Session, filter Filter) []Session {
 		if filter.TmuxSession != "" && session.Tmux.SessionName != filter.TmuxSession && session.Tmux.SessionID != filter.TmuxSession {
 			continue
 		}
+		if filter.MultiplexerSession != "" && session.Multiplexer.SessionName != filter.MultiplexerSession && session.Multiplexer.SessionID != filter.MultiplexerSession {
+			continue
+		}
 		filtered = append(filtered, session)
 	}
 	sortSessions(filtered)
@@ -494,13 +604,18 @@ func filterSessions(sessions []Session, filter Filter) []Session {
 func sortSessions(sessions []Session) {
 	sort.Slice(sessions, func(i, j int) bool {
 		left, right := sessions[i], sessions[j]
-		if left.Tmux.SessionName != right.Tmux.SessionName {
-			return left.Tmux.SessionName < right.Tmux.SessionName
+		if left.Multiplexer.Kind != right.Multiplexer.Kind {
+			return left.Multiplexer.Kind < right.Multiplexer.Kind
 		}
-		if cmp := compareNumericStrings(left.Tmux.WindowIndex, right.Tmux.WindowIndex); cmp != 0 {
+		if left.Multiplexer.SessionName != right.Multiplexer.SessionName {
+			return left.Multiplexer.SessionName < right.Multiplexer.SessionName
+		}
+		leftContainerIndex := firstNonEmptyString(left.Multiplexer.WindowIndex, left.Multiplexer.TabIndex)
+		rightContainerIndex := firstNonEmptyString(right.Multiplexer.WindowIndex, right.Multiplexer.TabIndex)
+		if cmp := compareNumericStrings(leftContainerIndex, rightContainerIndex); cmp != 0 {
 			return cmp < 0
 		}
-		if cmp := compareNumericStrings(left.Tmux.PaneIndex, right.Tmux.PaneIndex); cmp != 0 {
+		if cmp := compareNumericStrings(left.Multiplexer.PaneIndex, right.Multiplexer.PaneIndex); cmp != 0 {
 			return cmp < 0
 		}
 		if left.Harness != right.Harness {
@@ -511,6 +626,15 @@ func sortSessions(sessions []Session) {
 		}
 		return left.UpdatedAt.Before(right.UpdatedAt)
 	})
+}
+
+func firstNonEmptyString(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func compareNumericStrings(left, right string) int {

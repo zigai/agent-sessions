@@ -11,8 +11,11 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/zigai/agent-sessions/v2/internal/agentstate"
+	"github.com/zigai/agent-sessions/v2/pkg/herdrctx"
+	"github.com/zigai/agent-sessions/v2/pkg/muxctx"
 	"github.com/zigai/agent-sessions/v2/pkg/registry"
 	"github.com/zigai/agent-sessions/v2/pkg/tmuxctx"
+	"github.com/zigai/agent-sessions/v2/pkg/zellijctx"
 )
 
 const maxOfflineScreenBytes = 1 << 20
@@ -146,7 +149,7 @@ func (app *application) newExplainCommand() *cobra.Command {
 		}
 		return app.writeExplanation(cmd.Context(), session, configDir)
 	}}
-	command.Flags().StringVar(&paneID, "pane", "", "tmux pane id")
+	command.Flags().StringVar(&paneID, "pane", "", "multiplexer pane id")
 	command.Flags().StringVar(&configDir, "config-dir", "", "detection manifest override directory")
 	return command
 }
@@ -159,11 +162,11 @@ func (app *application) resolvePaneSession(ctx context.Context, paneID string) (
 	var match registry.Session
 	found := false
 	for _, session := range sessions {
-		if session.Tmux.PaneID != paneID {
+		if session.Multiplexer.PaneID != paneID {
 			continue
 		}
 		if found {
-			return registry.Session{}, fmt.Errorf("%w: pane %q exists on multiple tmux servers", errSessionReference, paneID)
+			return registry.Session{}, fmt.Errorf("%w: pane %q exists in multiple multiplexer sessions", errSessionReference, paneID)
 		}
 		match, found = session, true
 	}
@@ -183,7 +186,7 @@ func (app *application) writeExplanation(ctx context.Context, session registry.S
 		authority = agentstate.AuthorityScreen
 		fallbackReason = hookEvaluation.Reason
 	}
-	result := explainResult{SessionID: session.ID, Harness: session.Harness, PaneID: session.Tmux.PaneID, Process: session.Process, ProcessMatch: processMatchExplanation(session), SelectedAuthority: authority, FallbackReason: fallbackReason, FinalActivity: activityString(session.Activity), RegistryActivity: session.Activity, RegistryDecision: session.ActivityDecision}
+	result := explainResult{SessionID: session.ID, Harness: session.Harness, PaneID: session.Multiplexer.PaneID, Process: session.Process, ProcessMatch: processMatchExplanation(session), SelectedAuthority: authority, FallbackReason: fallbackReason, FinalActivity: activityString(session.Activity), RegistryActivity: session.Activity, RegistryDecision: session.ActivityDecision}
 	result.Hook = hookExplanation{Event: "", Integration: "", ObservedAt: time.Time{}, Age: "", ProcessMatches: hookEvaluation.ProcessMatches, Fresh: hookEvaluation.Fresh, FreshnessReason: hookEvaluation.Reason, Active: hookEvaluation.Active}
 	if native := session.Observations.Native; native != nil {
 		result.Hook.Event = native.Event
@@ -212,8 +215,11 @@ func processMatchExplanation(session registry.Session) string {
 	if session.Process == nil {
 		return "unavailable"
 	}
-	if session.Process.Foreground && session.Process.TTY != "" && session.Process.TTY == session.Tmux.PaneTTY {
+	if session.Process.Foreground && session.Process.TTY != "" && session.Process.TTY == session.Multiplexer.PaneTTY {
 		return "foreground_tty_process"
+	}
+	if session.Observations.Multiplexer != nil && session.Observations.Multiplexer.Process.Equal(*session.Process) {
+		return "pid_start_identity"
 	}
 	if session.Observations.Tmux != nil && session.Observations.Tmux.Process.Equal(*session.Process) {
 		return "pid_start_identity"
@@ -221,7 +227,31 @@ func processMatchExplanation(session registry.Session) string {
 	return "unverified"
 }
 
+//nolint:cyclop // live capture dispatches across supported native multiplexer APIs
 func evaluateLiveSessionScreen(ctx context.Context, session registry.Session, configDir string) (agentstate.Decision, bool, error) {
+	if session.Multiplexer.Kind != registry.MultiplexerTmux {
+		pane := muxctx.Pane{Location: session.Multiplexer}
+		var snapshot muxctx.ScreenSnapshot
+		var err error
+		switch session.Multiplexer.Kind {
+		case registry.MultiplexerTmux:
+			return agentstate.Decision{}, false, fmt.Errorf("%w: %s", errTmuxPaneNotLive, session.Multiplexer.PaneID)
+		case registry.MultiplexerZellij:
+			snapshot, err = zellijctx.CapturePane(ctx, pane)
+		case registry.MultiplexerHerdr:
+			snapshot, err = herdrctx.CapturePane(ctx, pane)
+		default:
+			return agentstate.Decision{}, false, fmt.Errorf("%w: %s", errTmuxPaneNotLive, session.Multiplexer.PaneID)
+		}
+		if err != nil {
+			return agentstate.Decision{}, false, fmt.Errorf("capture %s pane: %w", session.Multiplexer.Kind, err)
+		}
+		manifest, err := (agentstate.Loader{ConfigDir: configDir}).Load(session.Harness)
+		if err != nil {
+			return agentstate.Decision{}, false, fmt.Errorf("load detection manifest: %w", err)
+		}
+		return agentstate.Evaluate(manifest, agentstate.NormalizeSnapshot(snapshot.Text, snapshot.Title)), true, nil
+	}
 	panes, err := tmuxctx.ListPanes(ctx)
 	if err != nil {
 		return agentstate.Decision{}, false, fmt.Errorf("list tmux panes: %w", err)

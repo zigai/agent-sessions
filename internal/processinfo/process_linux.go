@@ -166,6 +166,17 @@ func readLinuxProcess(dir string, pid int, boot string) (Process, error) {
 	}
 	if environ, err := os.ReadFile(filepath.Join(dir, "environ")); err == nil {
 		info.AgentHint = linuxEnvironmentValue(environ, "AGENT_SESSIONS_AGENT")
+		switch {
+		case linuxEnvironmentValue(environ, "HERDR_PANE_ID") != "":
+			info.MultiplexerKind = "herdr"
+			info.MultiplexerServer = linuxEnvironmentValue(environ, "HERDR_SOCKET_PATH")
+			info.MultiplexerSession = linuxEnvironmentValue(environ, "HERDR_SESSION")
+			info.MultiplexerPane = linuxEnvironmentValue(environ, "HERDR_PANE_ID")
+		case linuxEnvironmentValue(environ, "ZELLIJ_PANE_ID") != "":
+			info.MultiplexerKind = "zellij"
+			info.MultiplexerSession = linuxEnvironmentValue(environ, "ZELLIJ_SESSION_NAME")
+			info.MultiplexerPane = linuxEnvironmentValue(environ, "ZELLIJ_PANE_ID")
+		}
 	}
 	return info, nil
 }
@@ -246,7 +257,11 @@ func parseLinuxStat(stat string) (Process, error) {
 	if _, err := strconv.ParseUint(fields[startIndex], 10, 64); err != nil {
 		return Process{}, errInvalidProcessStartTime
 	}
-	return Process{PID: pid, PPID: ppid, ProcessGroupID: pgrp, Foreground: ttpgid > 0 && pgrp == ttpgid, StartIdentity: fields[startIndex], Executable: "", CWD: "", TTY: "", Args: nil, AgentHint: ""}, nil
+	return Process{
+		PID: pid, PPID: ppid, ProcessGroupID: pgrp, Foreground: ttpgid > 0 && pgrp == ttpgid,
+		StartIdentity: fields[startIndex], Executable: "", CWD: "", TTY: "", AgentHint: "",
+		MultiplexerKind: "", MultiplexerServer: "", MultiplexerSession: "", MultiplexerPane: "", Args: nil,
+	}, nil
 }
 
 func classifyProcessError(path string, err error) error {

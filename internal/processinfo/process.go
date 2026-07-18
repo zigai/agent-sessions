@@ -2,19 +2,24 @@ package processinfo
 
 import "fmt"
 
-// Process is a point-in-time snapshot of a process. Args is transient inventory
-// data and must not be persisted by callers.
+// Process is a point-in-time snapshot of a process. Args, AgentHint, and the
+// multiplexer hints are transient inventory data and must not be persisted by
+// callers.
 type Process struct {
-	PID            int
-	PPID           int
-	ProcessGroupID int
-	Foreground     bool
-	StartIdentity  string
-	Executable     string
-	CWD            string
-	TTY            string
-	AgentHint      string
-	Args           []string `json:"-"`
+	PID                int
+	PPID               int
+	ProcessGroupID     int
+	Foreground         bool
+	StartIdentity      string
+	Executable         string
+	CWD                string
+	TTY                string
+	AgentHint          string
+	MultiplexerKind    string
+	MultiplexerServer  string
+	MultiplexerSession string
+	MultiplexerPane    string
+	Args               []string `json:"-"`
 }
 
 // UnsupportedError reports that process enumeration is unavailable on the

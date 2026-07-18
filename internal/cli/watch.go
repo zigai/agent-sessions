@@ -73,6 +73,7 @@ type watchEvent struct {
 	NativeEvent      string             `json:"native_event,omitempty"`
 	CWD              string             `json:"cwd,omitempty"`
 	Tmux             string             `json:"tmux,omitempty"`
+	Multiplexer      string             `json:"multiplexer,omitempty"`
 }
 
 //nolint:gocognit,cyclop // watch orchestration keeps filesystem, registry, and timer transitions together
@@ -240,7 +241,7 @@ func diffWatchEvents(p, n map[string]registry.Session, at time.Time) []watchEven
 		if !activityEqual(v.Activity, old.Activity) {
 			o = append(o, watchEventFromSession(watchActionActivityChanged, v, old, at))
 		}
-		if v.Tmux != old.Tmux {
+		if v.Multiplexer != old.Multiplexer || v.Tmux != old.Tmux {
 			o = append(o, watchEventFromSession(watchActionLocationChanged, v, old, at))
 		}
 		if nativeEvent(v) != nativeEvent(old) {
@@ -271,7 +272,7 @@ func nativeEvent(s registry.Session) string {
 }
 
 func watchEventFromSession(a string, s, p registry.Session, at time.Time) watchEvent {
-	e := watchEvent{Time: at.UTC(), Action: a, ID: s.ID, Harness: s.Harness, Presence: s.Presence, Activity: s.Activity, SessionID: s.SessionID, SessionPath: s.SessionPath, Label: watchSessionLabel(s), NativeEvent: nativeEvent(s), CWD: s.CWD, Tmux: watchTmuxLabel(s.Tmux)}
+	e := watchEvent{Time: at.UTC(), Action: a, ID: s.ID, Harness: s.Harness, Presence: s.Presence, Activity: s.Activity, SessionID: s.SessionID, SessionPath: s.SessionPath, Label: watchSessionLabel(s), NativeEvent: nativeEvent(s), CWD: s.CWD, Tmux: watchTmuxLabel(s.Tmux), Multiplexer: watchMultiplexerLabel(s.Multiplexer)}
 	if !s.UpdatedAt.IsZero() {
 		e.Time = s.UpdatedAt
 	}
@@ -309,8 +310,8 @@ func watchSessionLabel(s registry.Session) string {
 	if s.SessionPath != "" {
 		return s.SessionPath
 	}
-	if s.Tmux.PaneID != "" {
-		return s.Tmux.PaneID
+	if s.Multiplexer.PaneID != "" {
+		return s.Multiplexer.PaneID
 	}
 	return s.ID
 }
@@ -327,6 +328,23 @@ func watchTmuxLabel(c registry.TmuxContext) string {
 		p = append(p, c.PaneID)
 	}
 	return strings.Join(p, ":")
+}
+
+func watchMultiplexerLabel(context registry.MultiplexerContext) string {
+	if context.Empty() {
+		return ""
+	}
+	parts := []string{string(context.Kind)}
+	if session := multiplexerSessionLabel(context); session != "-" {
+		parts = append(parts, session)
+	}
+	if container := multiplexerContainerLabel(context); container != "-" {
+		parts = append(parts, container)
+	}
+	if context.PaneID != "" {
+		parts = append(parts, context.PaneID)
+	}
+	return strings.Join(parts, ":")
 }
 
 func (app *application) writeWatchEvents(e []watchEvent, f string) error {

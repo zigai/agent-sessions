@@ -21,8 +21,10 @@ import (
 	"github.com/zigai/agent-sessions/v2/internal/agentstate"
 	"github.com/zigai/agent-sessions/v2/internal/processinfo"
 	harnesspkg "github.com/zigai/agent-sessions/v2/pkg/harness"
+	"github.com/zigai/agent-sessions/v2/pkg/herdrctx"
 	"github.com/zigai/agent-sessions/v2/pkg/registry"
 	"github.com/zigai/agent-sessions/v2/pkg/tmuxctx"
+	"github.com/zigai/agent-sessions/v2/pkg/zellijctx"
 )
 
 var (
@@ -222,6 +224,7 @@ type preparedReport struct {
 }
 type reportRuntimeContext struct {
 	tmux              registry.TmuxContext
+	multiplexer       registry.MultiplexerContext
 	processes         []processinfo.Process
 	defaultObservedAt time.Time
 }
@@ -294,8 +297,9 @@ func (app *application) runReport(ctx context.Context, stdin io.Reader, options 
 		return app.runQueuedReport(ctx, stdin, options)
 	}
 	prepared, err := app.prepareReport(stdin, options, reportRuntimeContext{
-		tmux:      reportTmuxContext(ctx, options.noTmux),
-		processes: reportProcessAncestors(ctx, options.pid),
+		tmux:        reportTmuxContext(ctx, options.noTmux),
+		multiplexer: reportMultiplexerContext(),
+		processes:   reportProcessAncestors(ctx, options.pid),
 	})
 	if err != nil {
 		return err
@@ -407,6 +411,10 @@ func (app *application) prepareReport(stdin io.Reader, options reportOptions, ru
 		tmux := runtime.tmux
 		observation.Tmux = &tmux
 	}
+	if observation.Source == registry.ObservationSourceNative && !runtime.multiplexer.Empty() {
+		multiplexer := runtime.multiplexer
+		observation.Multiplexer = &multiplexer
+	}
 	if observation.Source == registry.ObservationSourceNative && presence != "" {
 		observation.Presence = &presence
 	}
@@ -483,6 +491,23 @@ func reportTmuxContext(ctx context.Context, noTmux bool) registry.TmuxContext {
 		return registry.TmuxContext{}
 	}
 	return t
+}
+
+func reportMultiplexerContext() registry.MultiplexerContext {
+	if context := herdrctx.Current(); !context.Empty() {
+		return context
+	}
+	return zellijctx.Current()
+}
+
+func reportMultiplexerContextFromEnv(env map[string]string) registry.MultiplexerContext {
+	if context := herdrctx.CurrentWithEnv(herdrctx.Env{
+		Enabled: env["HERDR_ENV"], SessionName: env["HERDR_SESSION"], SocketPath: env["HERDR_SOCKET_PATH"],
+		WorkspaceID: env["HERDR_WORKSPACE_ID"], TabID: env["HERDR_TAB_ID"], PaneID: env["HERDR_PANE_ID"],
+	}); !context.Empty() {
+		return context
+	}
+	return zellijctx.CurrentWithEnv(zellijctx.Env{SessionName: env["ZELLIJ_SESSION_NAME"], PaneID: env["ZELLIJ_PANE_ID"]})
 }
 
 func reportProcessAncestors(ctx context.Context, pid int) []processinfo.Process {
@@ -564,7 +589,7 @@ func psProcessArgs(ctx context.Context, pid int) []string {
 
 // list.
 type listOptions struct {
-	harness, presence, activity, tmuxSession, sortBy, watchFormat                             string
+	harness, presence, activity, tmuxSession, multiplexerSession, sortBy, watchFormat         string
 	summary, summarySet, watch, absoluteTime, absoluteSet, sortSet, desc, descSet, noSnapshot bool
 	noSnapshotSet, formatSet                                                                  bool
 }
@@ -588,8 +613,9 @@ func (app *application) newListCommand() *cobra.Command {
 	f.StringVar(&o.presence, "presence", "", "filter by presence")
 	f.StringVar(&o.activity, "activity", "", "filter by activity")
 	f.StringVar(&o.tmuxSession, "tmux-session", "", "filter by tmux session")
-	f.StringVar(&o.sortBy, "sort", "", "sort by: tmux, updated, presence-changed, activity-changed, created, harness, presence, activity, cwd, id")
-	f.BoolVar(&o.summary, "summary", false, "summarize agent counts by tmux session")
+	f.StringVar(&o.multiplexerSession, "multiplexer-session", "", "filter by multiplexer session")
+	f.StringVar(&o.sortBy, "sort", "", "sort by: multiplexer, tmux, updated, presence-changed, activity-changed, created, harness, presence, activity, cwd, id")
+	f.BoolVar(&o.summary, "summary", false, "summarize agent counts by multiplexer session")
 	f.BoolVar(&o.watch, "watch", false, "watch registry changes")
 	f.BoolVar(&o.absoluteTime, "absolute-time", false, "show full timestamps")
 	f.BoolVar(&o.desc, "desc", false, "sort descending")
@@ -643,7 +669,7 @@ func validateSnapshotListOptions(options listOptions) error {
 }
 
 func buildFilter(o listOptions) (registry.Filter, error) {
-	f := registry.Filter{TmuxSession: o.tmuxSession}
+	f := registry.Filter{TmuxSession: o.tmuxSession, MultiplexerSession: o.multiplexerSession}
 	if o.harness != "" {
 		h, e := harnesspkg.Normalize(o.harness)
 		if e != nil {
@@ -689,14 +715,14 @@ func (app *application) runListSessions(ctx context.Context, o listOptions) erro
 		return app.writeJSON(ss)
 	}
 	w := tabwriter.NewWriter(app.stdout, 0, 0, tabPadding, ' ', 0)
-	if _, e = fmt.Fprintln(w, "ID\tAGENT\tSESSION\tPRESENCE\tACTIVITY\tTMUX\tWINDOW\tPANE\tCWD\tUPDATED"); e != nil {
+	if _, e = fmt.Fprintln(w, "ID\tAGENT\tSESSION\tPRESENCE\tACTIVITY\tMULTIPLEXER\tMUX SESSION\tCONTAINER\tPANE\tCWD\tUPDATED"); e != nil {
 		return fmt.Errorf("write list header: %w", e)
 	}
 	now := time.Now().UTC()
 	displayIDs := abbreviatedRegistryIDs(ss)
 	for _, s := range ss {
 		activity := listActivity(s)
-		_, e = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", displayIDs[s.ID], s.Harness, sessionDisplayLabel(s), s.Presence, activity, tmuxSessionLabel(s.Tmux), tmuxWindowLabel(s.Tmux), s.Tmux.PaneID, formatHumanPath(s.CWD), formatUpdatedAt(s.UpdatedAt, now, o.absoluteTime))
+		_, e = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", displayIDs[s.ID], s.Harness, sessionDisplayLabel(s), s.Presence, activity, multiplexerKindLabel(s.Multiplexer), multiplexerSessionLabel(s.Multiplexer), multiplexerContainerLabel(s.Multiplexer), s.Multiplexer.PaneID, formatHumanPath(s.CWD), formatUpdatedAt(s.UpdatedAt, now, o.absoluteTime))
 		if e != nil {
 			return fmt.Errorf("write list row: %w", e)
 		}
@@ -778,8 +804,8 @@ func sessionDisplayLabel(session registry.Session) string {
 	if session.SessionPath != "" {
 		return filepath.Base(session.SessionPath)
 	}
-	if session.Tmux.PaneID != "" {
-		return session.Tmux.PaneID
+	if session.Multiplexer.PaneID != "" {
+		return session.Multiplexer.PaneID
 	}
 	if session.CWD != "" {
 		return filepath.Base(session.CWD)
@@ -804,12 +830,12 @@ func (app *application) runListSummary(ctx context.Context, o listOptions) error
 
 func (app *application) writeSummaryTable(ss []registry.Summary) error {
 	w := tabwriter.NewWriter(app.stdout, 0, 0, tabPadding, ' ', 0)
-	if _, e := fmt.Fprintln(w, "TMUX\tTOTAL\tLIVE\tGONE\tPRESENCE_UNKNOWN\tRUNNING\tWAITING\tIDLE\tACTIVITY_UNKNOWN"); e != nil {
+	if _, e := fmt.Fprintln(w, "MULTIPLEXER\tSESSION\tTOTAL\tLIVE\tGONE\tPRESENCE_UNKNOWN\tRUNNING\tWAITING\tIDLE\tACTIVITY_UNKNOWN"); e != nil {
 		return fmt.Errorf("write summary header: %w", e)
 	}
 	labels := summaryTableLabels(ss)
 	for i, s := range ss {
-		if _, e := fmt.Fprintf(w, "%s\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\n", labels[i], s.Total, s.Live, s.Gone, s.PresenceUnknown, s.Running, s.Waiting, s.Idle, s.ActivityUnknown); e != nil {
+		if _, e := fmt.Fprintf(w, "%s\t%s\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\n", multiplexerSummaryKind(s), labels[i], s.Total, s.Live, s.Gone, s.PresenceUnknown, s.Running, s.Waiting, s.Idle, s.ActivityUnknown); e != nil {
 			return fmt.Errorf("write summary row: %w", e)
 		}
 	}
@@ -823,7 +849,11 @@ func (app *application) writeSummaryTable(ss []registry.Summary) error {
 func summaryTableLabels(ss []registry.Summary) []string {
 	out := make([]string, 0, len(ss))
 	for _, s := range ss {
-		if s.TmuxSessionName != "" {
+		if s.MultiplexerSessionName != "" {
+			out = append(out, s.MultiplexerSessionName)
+		} else if s.MultiplexerSessionID != "" {
+			out = append(out, s.MultiplexerSessionID)
+		} else if s.TmuxSessionName != "" {
 			out = append(out, s.TmuxSessionName)
 		} else if s.TmuxSessionID != "" {
 			out = append(out, s.TmuxSessionID)
@@ -859,6 +889,7 @@ func (app *application) writeSessionDetails(session registry.Session) error {
 		{"CWD", session.CWD},
 		{"Project root", session.ProjectRoot},
 		{"Resume command", strings.Join(session.ResumeCommand, " ")},
+		{"Multiplexer", watchMultiplexerLabel(session.Multiplexer)},
 		{"Tmux", watchTmuxLabel(session.Tmux)},
 		{"Created", session.CreatedAt.Format(time.RFC3339)},
 		{"Updated", session.UpdatedAt.Format(time.RFC3339)},
@@ -920,7 +951,7 @@ func sortListSessions(ss []registry.Session, o listOptions) error {
 }
 
 func listSortLess(k string) (sessionCompareFunc, error) {
-	if c, ok := map[string]sessionCompareFunc{"tmux": compareSessionTmux, "updated": compareSessionUpdated, "presence-changed": func(a, b registry.Session) int { return compareTime(a.PresenceChangedAt, b.PresenceChangedAt) }, "activity-changed": func(a, b registry.Session) int { return compareTime(a.ActivityChangedAt, b.ActivityChangedAt) }, "created": compareSessionCreated, "harness": func(a, b registry.Session) int { return strings.Compare(string(a.Harness), string(b.Harness)) }, "presence": func(a, b registry.Session) int { return strings.Compare(string(a.Presence), string(b.Presence)) }, "activity": func(a, b registry.Session) int { return strings.Compare(appReportActivity(a), appReportActivity(b)) }, "cwd": func(a, b registry.Session) int { return strings.Compare(a.CWD, b.CWD) }, "id": compareSessionID}[k]; ok {
+	if c, ok := map[string]sessionCompareFunc{"multiplexer": compareSessionMultiplexer, "tmux": compareSessionTmux, "updated": compareSessionUpdated, "presence-changed": func(a, b registry.Session) int { return compareTime(a.PresenceChangedAt, b.PresenceChangedAt) }, "activity-changed": func(a, b registry.Session) int { return compareTime(a.ActivityChangedAt, b.ActivityChangedAt) }, "created": compareSessionCreated, "harness": func(a, b registry.Session) int { return strings.Compare(string(a.Harness), string(b.Harness)) }, "presence": func(a, b registry.Session) int { return strings.Compare(string(a.Presence), string(b.Presence)) }, "activity": func(a, b registry.Session) int { return strings.Compare(appReportActivity(a), appReportActivity(b)) }, "cwd": func(a, b registry.Session) int { return strings.Compare(a.CWD, b.CWD) }, "id": compareSessionID}[k]; ok {
 		return c, nil
 	}
 	return nil, fmt.Errorf("%w: %q", errInvalidListSort, k)
@@ -935,8 +966,26 @@ func normalizeListSort(s string) string {
 		return "presence-changed"
 	case "activity-changed-at", "activity-since":
 		return "activity-changed"
+	case "mux":
+		return "multiplexer"
 	}
 	return s
+}
+
+func compareSessionMultiplexer(a, b registry.Session) int {
+	if comparison := strings.Compare(string(a.Multiplexer.Kind), string(b.Multiplexer.Kind)); comparison != 0 {
+		return comparison
+	}
+	if comparison := strings.Compare(a.Multiplexer.SessionName, b.Multiplexer.SessionName); comparison != 0 {
+		return comparison
+	}
+	if comparison := strings.Compare(multiplexerContainerLabel(a.Multiplexer), multiplexerContainerLabel(b.Multiplexer)); comparison != 0 {
+		return comparison
+	}
+	if comparison := strings.Compare(a.Multiplexer.PaneID, b.Multiplexer.PaneID); comparison != 0 {
+		return comparison
+	}
+	return strings.Compare(a.ID, b.ID)
 }
 
 func compareSessionTmux(a, b registry.Session) int {
@@ -1091,6 +1140,59 @@ func tmuxWindowLabel(c registry.TmuxContext) string {
 		return c.WindowIndex
 	}
 	return "-"
+}
+
+func multiplexerKindLabel(context registry.MultiplexerContext) string {
+	if context.Kind == "" {
+		return "-"
+	}
+	return string(context.Kind)
+}
+
+func multiplexerSessionLabel(context registry.MultiplexerContext) string {
+	if context.SessionName != "" {
+		return context.SessionName
+	}
+	if context.SessionID != "" {
+		return context.SessionID
+	}
+	return "-"
+}
+
+func multiplexerContainerLabel(context registry.MultiplexerContext) string {
+	if context.Kind == registry.MultiplexerTmux {
+		return tmuxWindowLabel(context.TmuxContext())
+	}
+	var parts []string
+	if context.WorkspaceName != "" {
+		parts = append(parts, context.WorkspaceName)
+	} else if context.WorkspaceID != "" {
+		parts = append(parts, context.WorkspaceID)
+	}
+	tab := context.TabName
+	if tab == "" {
+		tab = context.TabID
+	}
+	if tab == "" {
+		tab = context.TabIndex
+	}
+	if tab != "" {
+		parts = append(parts, tab)
+	}
+	if len(parts) == 0 {
+		return "-"
+	}
+	return strings.Join(parts, "/")
+}
+
+func multiplexerSummaryKind(summary registry.Summary) string {
+	if summary.MultiplexerKind != "" {
+		return string(summary.MultiplexerKind)
+	}
+	if summary.TmuxSessionID != "" || summary.TmuxSessionName != "" {
+		return string(registry.MultiplexerTmux)
+	}
+	return "unknown"
 }
 
 func formatUpdatedAt(t, now time.Time, absolute bool) string {

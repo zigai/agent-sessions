@@ -154,6 +154,9 @@ func reportManagedHook(ctx context.Context, store registry.Store, result harness
 	if collected, err := tmuxctx.Current(ctx); err == nil {
 		observation.Tmux = &collected
 	}
+	if collected := reportMultiplexerContext(); !collected.Empty() {
+		observation.Multiplexer = &collected
+	}
 	if _, err := store.Observe(ctx, observation); err != nil {
 		return fmt.Errorf("recording managed hook observation: %w", err)
 	}
