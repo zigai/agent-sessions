@@ -7,6 +7,11 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/zigai/agent-sessions/v2/internal/processinfo"
+	"github.com/zigai/agent-sessions/v2/pkg/registry"
+	"github.com/zigai/agent-sessions/v2/pkg/tmuxctx"
 )
 
 func TestDecodeCatalogArrayAndEnvelope(t *testing.T) {
@@ -30,6 +35,49 @@ func TestDefaultCatalogListRejectsUnknownHarness(t *testing.T) {
 	t.Setenv(catalogFileEnv, "")
 	if _, err := DefaultCatalogList(context.Background()); err == nil {
 		t.Fatal("expected unknown harness error")
+	}
+}
+
+func TestDefaultCatalogListCanonicalizesHarnessAlias(t *testing.T) {
+	t.Setenv(catalogJSONEnv, `[{"harness":"claude-code","session_id":"alias"}]`)
+	t.Setenv(catalogFileEnv, "")
+
+	entries, err := DefaultCatalogList(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Harness != "claude" {
+		t.Fatalf("canonical entries = %#v", entries)
+	}
+}
+
+func TestObserverCycleAcceptsCanonicalizedCatalogAlias(t *testing.T) {
+	t.Setenv(catalogJSONEnv, `[{"harness":"claude-code","session_id":"alias","current":true}]`)
+	t.Setenv(catalogFileEnv, "")
+	path := filepath.Join(t.TempDir(), "sessions.json")
+	store := registry.NewFileStore(path)
+	watcher := New(Options{
+		Store:       store,
+		StorePath:   path,
+		HealthPath:  path + ".health",
+		ProcessList: func(context.Context) ([]processinfo.Process, error) { return nil, nil },
+		PaneList:    func(context.Context) ([]tmuxctx.Pane, error) { return nil, nil },
+		CatalogList: DefaultCatalogList,
+		Now:         func() time.Time { return time.Now().UTC() },
+	})
+	result, err := watcher.RunOnce(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Degraded {
+		t.Fatalf("catalog alias degraded observer cycle: %#v", result)
+	}
+	sessions, err := store.List(context.Background(), registry.Filter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 1 || sessions[0].Harness != registry.HarnessClaude {
+		t.Fatalf("catalog sessions = %#v", sessions)
 	}
 }
 

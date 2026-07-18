@@ -29,6 +29,7 @@ var (
 	errObserverContextNil       = errors.New("observer context is nil")
 	errDetectionOverrideInvalid = errors.New("agent detection override is invalid")
 	errObserverCycleDegraded    = errors.New("observer cycle degraded")
+	ErrAlreadyRunning           = errors.New("observer is already running")
 )
 
 type (
@@ -105,7 +106,6 @@ type trackedProcess struct {
 	seenAt       time.Time
 	missingSince time.Time
 	missingCount int
-	goneReported bool
 }
 
 type Observer struct {
@@ -131,6 +131,7 @@ type Observer struct {
 	lastHealthWrite time.Time
 	lockPath        string
 	lockFile        *os.File
+	running         bool
 }
 
 //nolint:cyclop // constructor applies defaults for each injectable observer dependency
@@ -188,7 +189,7 @@ func New(options Options) *Observer {
 		screenCapture: screenCapture, manifestLoader: agentstate.Loader{ConfigDir: options.DetectionConfigDir},
 		now: now, errorWriter: errorWriter, quiet: options.Quiet, tracked: make(map[processKey]trackedProcess),
 		mu: sync.Mutex{}, startedAt: time.Time{}, initialized: false, health: Health{PID: 0, StartIdentity: "", Interval: 0, GracePeriod: 0, StartedAt: time.Time{}, LastAttemptAt: time.Time{}, LastSuccessAt: time.Time{}, LastEnumerationErrorCategory: "", LastEnumerationError: "", Cycles: 0, Observations: 0, Sessions: 0, Degraded: false},
-		lastHealthWrite: time.Time{}, lockPath: lockPath, lockFile: nil,
+		lastHealthWrite: time.Time{}, lockPath: lockPath, lockFile: nil, running: false,
 	}
 }
 
@@ -254,15 +255,15 @@ func (o *Observer) runCycle(ctx context.Context) (Result, error) {
 	if err := o.initializeTracked(ctx); err != nil {
 		result.Degraded = true
 		result.Error = err.Error()
-		o.recordHealth(at, true, "registry", err, result)
-		return result, fmt.Errorf("initializing observer state: %w", err)
+		healthErr := o.recordHealth(at, true, "registry", err, result)
+		return result, joinObserverHealthError(fmt.Errorf("initializing observer state: %w", err), healthErr)
 	}
 	processes, err := o.processList(ctx)
 	if err != nil {
 		result.Degraded = true
 		result.Error = err.Error()
-		o.recordHealth(at, true, "process-enumeration", err, result)
-		return result, fmt.Errorf("listing processes: %w", err)
+		healthErr := o.recordHealth(at, true, "process-enumeration", err, result)
+		return result, joinObserverHealthError(fmt.Errorf("listing processes: %w", err), healthErr)
 	}
 	result.Processes = len(processes)
 	panes, paneErr := o.paneList(ctx)
@@ -281,8 +282,8 @@ func (o *Observer) runCycle(ctx context.Context) (Result, error) {
 	if sessionErr != nil {
 		result.Degraded = true
 		result.Error = sessionErr.Error()
-		o.recordHealth(at, true, "registry", sessionErr, result)
-		return result, fmt.Errorf("listing sessions for state detection: %w", sessionErr)
+		healthErr := o.recordHealth(at, true, "registry", sessionErr, result)
+		return result, joinObserverHealthError(fmt.Errorf("listing sessions for state detection: %w", sessionErr), healthErr)
 	}
 
 	catalogByPID := make(map[int]CatalogEntry)
@@ -304,7 +305,7 @@ func (o *Observer) runCycle(ctx context.Context) (Result, error) {
 			continue
 		}
 		key := processKey{harness: harnessID, pid: process.PID, start: process.StartIdentity}
-		current[key] = trackedProcess{process: process, seenAt: at, missingSince: time.Time{}, missingCount: 0, goneReported: false}
+		current[key] = trackedProcess{process: process, seenAt: at, missingSince: time.Time{}, missingCount: 0}
 		processByPID[process.PID] = process
 		harnessByPID[process.PID] = harnessID
 		present := true
@@ -352,7 +353,10 @@ func (o *Observer) runCycle(ctx context.Context) (Result, error) {
 			Catalog: metadata, ObservedAt: at,
 		})
 	}
+	nextTracked := current
 	if o.initialized {
+		nextTracked = make(map[processKey]trackedProcess, len(current)+len(o.tracked))
+		maps.Copy(nextTracked, current)
 		for key, old := range o.tracked {
 			if _, ok := current[key]; ok {
 				continue
@@ -365,43 +369,52 @@ func (o *Observer) runCycle(ctx context.Context) (Result, error) {
 			if o.grace == 0 {
 				eligible = old.missingCount >= defaultMissingSnapshots
 			}
-			if eligible && !old.goneReported {
+			if eligible {
 				present := false
 				observations = append(observations, registry.Observation{ //nolint:exhaustruct // absence observations intentionally omit unrelated evidence dimensions
 					Source: registry.ObservationSourceProcess, Evidence: registry.ObservationEvidenceProcessPresence,
 					Harness: key.harness, ProcessPresent: &present, Process: processIdentity(old.process), ObservedAt: at,
 				})
-				old.goneReported = true
 				result.Gone++
+				continue
 			}
-			o.tracked[key] = old
+			nextTracked[key] = old
 		}
 	}
 	if len(observations) > 0 {
 		sessions, observeErr := o.store.ObserveBatch(ctx, observations)
 		if observeErr != nil {
-			o.recordHealth(at, true, "registry", observeErr, result)
-			return result, fmt.Errorf("recording observations: %w", observeErr)
+			healthErr := o.recordHealth(at, true, "registry", observeErr, result)
+			return result, joinObserverHealthError(fmt.Errorf("recording observations: %w", observeErr), healthErr)
 		}
 		result.Sessions = len(sessions)
 		result.Changed = len(sessions)
 	}
-	o.mu.Lock()
-	maps.Copy(o.tracked, current)
+	o.tracked = nextTracked
 	o.initialized = true
-	o.mu.Unlock()
 	result.Observations = len(observations)
-	o.recordCycleHealth(at, result)
+	if err := o.recordCycleHealth(at, result); err != nil {
+		result.Degraded = true
+		result.Error = err.Error()
+		return result, fmt.Errorf("recording observer health: %w", err)
+	}
 	return result, nil
 }
 
 //nolint:funcorder // cycle health handling stays next to reconciliation
-func (o *Observer) recordCycleHealth(at time.Time, result Result) {
+func (o *Observer) recordCycleHealth(at time.Time, result Result) error {
 	if result.Degraded {
-		o.recordHealth(at, true, "reconciliation", fmt.Errorf("%w: %s", errObserverCycleDegraded, result.Error), result)
-		return
+		return o.recordHealth(at, true, "reconciliation", fmt.Errorf("%w: %s", errObserverCycleDegraded, result.Error), result)
 	}
-	o.recordHealth(at, false, "", nil, result)
+	return o.recordHealth(at, false, "", nil, result)
+}
+
+func joinObserverHealthError(primary, healthErr error) error {
+	if healthErr == nil {
+		return primary
+	}
+
+	return errors.Join(primary, fmt.Errorf("recording observer health: %w", healthErr))
 }
 
 func resolveHarness(process processinfo.Process) (registry.Harness, bool) {
@@ -672,7 +685,6 @@ func (o *Observer) initializeTracked(ctx context.Context) error {
 			seenAt:       observation.ObservedAt,
 			missingSince: observation.ObservedAt,
 			missingCount: defaultMissingSnapshots - 1,
-			goneReported: false,
 		}
 	}
 	o.initialized = true
@@ -689,22 +701,29 @@ func (o *Observer) listCatalog(ctx context.Context) ([]CatalogEntry, error) {
 
 //nolint:funcorder // private helpers are grouped with lock and reconciliation internals
 func (o *Observer) acquireLock() error {
+	o.mu.Lock()
+	if o.running {
+		o.mu.Unlock()
+		return ErrAlreadyRunning
+	}
+	o.running = true
+	o.mu.Unlock()
+
 	if o.lockPath == "" {
 		return nil
 	}
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	if o.lockFile != nil {
-		return nil
-	}
 	if err := os.MkdirAll(filepath.Dir(o.lockPath), 0o700); err != nil {
+		o.clearRunning()
 		return fmt.Errorf("create observer lock directory: %w", err)
 	}
 	file, err := openObserverLock(o.lockPath)
 	if err != nil {
+		o.clearRunning()
 		return fmt.Errorf("observer already running or lock unavailable: %w", err)
 	}
+	o.mu.Lock()
 	o.lockFile = file
+	o.mu.Unlock()
 	return nil
 }
 
@@ -713,6 +732,7 @@ func (o *Observer) releaseLock() {
 	o.mu.Lock()
 	file := o.lockFile
 	o.lockFile = nil
+	o.running = false
 	o.mu.Unlock()
 	if file == nil {
 		return
@@ -722,7 +742,7 @@ func (o *Observer) releaseLock() {
 }
 
 //nolint:cyclop,funcorder // health persistence handles degraded categories and atomic writes
-func (o *Observer) recordHealth(at time.Time, degraded bool, category string, err error, result Result) {
+func (o *Observer) recordHealth(at time.Time, degraded bool, category string, err error, result Result) error {
 	o.mu.Lock()
 	wasDegraded := o.health.Degraded
 	if o.startedAt.IsZero() {
@@ -747,31 +767,48 @@ func (o *Observer) recordHealth(at time.Time, degraded bool, category string, er
 	}
 	health := o.health
 	shouldWrite := o.lastHealthWrite.IsZero() || at.Sub(o.lastHealthWrite) >= 30*time.Second || err != nil || degraded != wasDegraded
-	if shouldWrite {
-		o.lastHealthWrite = at
-	}
 	o.mu.Unlock()
 	if !shouldWrite || o.healthPath == "" {
-		return
+		return nil
 	}
 	data, marshalErr := json.MarshalIndent(health, "", "  ")
 	if marshalErr != nil {
-		return
+		return fmt.Errorf("encoding observer health: %w", marshalErr)
 	}
 	if err := os.MkdirAll(filepath.Dir(o.healthPath), 0o700); err != nil {
-		return
+		return fmt.Errorf("creating observer health directory: %w", err)
 	}
 	tmp := o.healthPath + ".tmp"
 	if err := os.WriteFile(tmp, append(data, '\n'), 0o600); err != nil {
-		return
+		return fmt.Errorf("writing observer health: %w", err)
 	}
-	_ = os.Rename(tmp, o.healthPath)
+	if err := os.Rename(tmp, o.healthPath); err != nil {
+		cleanupErr := os.Remove(tmp)
+		if cleanupErr != nil && !errors.Is(cleanupErr, os.ErrNotExist) {
+			cleanupErr = fmt.Errorf("removing temporary observer health file: %w", cleanupErr)
+		} else {
+			cleanupErr = nil
+		}
+
+		return errors.Join(fmt.Errorf("publishing observer health: %w", err), cleanupErr)
+	}
+	o.mu.Lock()
+	o.lastHealthWrite = at
+	o.mu.Unlock()
+
+	return nil
 }
 
 func (o *Observer) Health() Health {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	return o.health
+}
+
+func (o *Observer) clearRunning() {
+	o.mu.Lock()
+	o.running = false
+	o.mu.Unlock()
 }
 
 func (r Result) String() string {

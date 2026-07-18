@@ -46,9 +46,11 @@ func DefaultCatalogList(ctx context.Context) ([]CatalogEntry, error) {
 		if entries[index].Harness == "" {
 			return nil, fmt.Errorf("catalog entry %d: %w", index, errCatalogEntryHarness)
 		}
-		if _, err := registry.NormalizeHarness(string(entries[index].Harness)); err != nil {
+		normalized, err := registry.NormalizeHarness(string(entries[index].Harness))
+		if err != nil {
 			return nil, fmt.Errorf("catalog entry %d: %w", index, err)
 		}
+		entries[index].Harness = normalized
 	}
 	return entries, nil
 }

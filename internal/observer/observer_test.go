@@ -2,6 +2,9 @@ package observer
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -10,6 +13,32 @@ import (
 	"github.com/zigai/agent-sessions/v2/pkg/registry"
 	"github.com/zigai/agent-sessions/v2/pkg/tmuxctx"
 )
+
+var errFailGoneObservation = errors.New("fail gone observation once")
+
+type failGoneOnceStore struct {
+	registry.Store
+
+	failed bool
+}
+
+func (store *failGoneOnceStore) ObserveBatch(ctx context.Context, observations []registry.Observation) ([]registry.Session, error) {
+	if !store.failed {
+		for _, observation := range observations {
+			if observation.ProcessPresent != nil && !*observation.ProcessPresent {
+				store.failed = true
+				return nil, errFailGoneObservation
+			}
+		}
+	}
+
+	sessions, err := store.Store.ObserveBatch(ctx, observations)
+	if err != nil {
+		return nil, fmt.Errorf("delegate gone-observation store: %w", err)
+	}
+
+	return sessions, nil
+}
 
 //nolint:cyclop // lifecycle test covers the two-snapshot disappearance contract
 func TestObserverDefaultMissingRequiresTwoSnapshots(t *testing.T) {
@@ -57,6 +86,123 @@ func TestObserverDefaultMissingRequiresTwoSnapshots(t *testing.T) {
 	}
 	if session.Presence != registry.PresenceGone || session.Activity != nil {
 		t.Fatalf("gone session: %#v", session)
+	}
+}
+
+func TestObserverRetriesFailedGoneObservationAndEvictsTrackedProcess(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "sessions.json")
+	baseStore := registry.NewFileStore(path)
+	store := &failGoneOnceStore{Store: baseStore}
+	at := time.Now().UTC().Add(-time.Minute)
+	process := processinfo.Process{PID: 1234, PPID: 1, ProcessGroupID: 1234, StartIdentity: "boot:A", Executable: "/usr/bin/codex", CWD: "/work", TTY: "/dev/pts/1"}
+	processes := []processinfo.Process{process}
+	watcher := New(Options{
+		Store: store,
+		Now:   func() time.Time { return at },
+		ProcessList: func(context.Context) ([]processinfo.Process, error) {
+			return processes, nil
+		},
+		PaneList:    func(context.Context) ([]tmuxctx.Pane, error) { return nil, nil },
+		CatalogList: func(context.Context) ([]CatalogEntry, error) { return nil, nil },
+	})
+	if _, err := watcher.RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	processes = nil
+	at = at.Add(time.Second)
+	if _, err := watcher.RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	at = at.Add(time.Second)
+	failed, err := watcher.RunOnce(context.Background())
+	if !errors.Is(err, errFailGoneObservation) || failed.Gone != 1 {
+		t.Fatalf("failed gone cycle = %#v, err=%v", failed, err)
+	}
+	if len(watcher.tracked) != 1 {
+		t.Fatalf("failed gone cycle retired tracked process: %#v", watcher.tracked)
+	}
+	at = at.Add(time.Second)
+	retried, err := watcher.RunOnce(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retried.Gone != 1 || len(watcher.tracked) != 0 {
+		t.Fatalf("successful retry = %#v, tracked=%#v", retried, watcher.tracked)
+	}
+	sessions, err := baseStore.List(context.Background(), registry.Filter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 1 || sessions[0].Presence != registry.PresenceGone {
+		t.Fatalf("sessions after retry = %#v", sessions)
+	}
+}
+
+func TestObserverRejectsConcurrentRunsOnOneInstance(t *testing.T) {
+	t.Parallel()
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	watcher := New(Options{
+		Store: registry.NewFileStore(filepath.Join(t.TempDir(), "sessions.json")),
+		ProcessList: func(context.Context) ([]processinfo.Process, error) {
+			close(entered)
+			<-release
+			return nil, nil
+		},
+		PaneList:    func(context.Context) ([]tmuxctx.Pane, error) { return nil, nil },
+		CatalogList: func(context.Context) ([]CatalogEntry, error) { return nil, nil },
+	})
+	firstDone := make(chan error, 1)
+	go func() {
+		_, err := watcher.RunOnce(context.Background())
+		firstDone <- err
+	}()
+	<-entered
+	if _, err := watcher.RunOnce(context.Background()); !errors.Is(err, ErrAlreadyRunning) {
+		t.Fatalf("concurrent RunOnce() error = %v, want ErrAlreadyRunning", err)
+	}
+	close(release)
+	if err := <-firstDone; err != nil {
+		t.Fatalf("first RunOnce() error = %v", err)
+	}
+}
+
+func TestObserverRetriesHealthWriteAfterPersistenceFailure(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	blockedParent := filepath.Join(root, "blocked")
+	if err := os.WriteFile(blockedParent, []byte("not a directory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	healthPath := filepath.Join(blockedParent, "health.json")
+	at := time.Now().UTC()
+	watcher := New(Options{
+		Store:       registry.NewFileStore(filepath.Join(root, "sessions.json")),
+		HealthPath:  healthPath,
+		Now:         func() time.Time { return at },
+		ProcessList: func(context.Context) ([]processinfo.Process, error) { return nil, nil },
+		PaneList:    func(context.Context) ([]tmuxctx.Pane, error) { return nil, nil },
+		CatalogList: func(context.Context) ([]CatalogEntry, error) { return nil, nil },
+	})
+	if _, err := watcher.RunOnce(context.Background()); err == nil {
+		t.Fatal("expected health persistence failure")
+	}
+	if err := os.Remove(blockedParent); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(blockedParent, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	at = at.Add(time.Second)
+	if _, err := watcher.RunOnce(context.Background()); err != nil {
+		t.Fatalf("health write retry error = %v", err)
+	}
+	if _, err := os.Stat(healthPath); err != nil {
+		t.Fatalf("health file was not retried: %v", err)
 	}
 }
 
