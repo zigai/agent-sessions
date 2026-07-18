@@ -139,6 +139,30 @@ func TestStorePersistsSchemaV2Envelope(t *testing.T) {
 	}
 }
 
+func TestStoreResetRecoversMalformedState(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "sessions.json")
+	if err := os.WriteFile(path, []byte(`{"schema_version":2,"sessions":`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store := NewFileStore(path)
+	result, err := store.Reset(context.Background())
+	if err != nil {
+		t.Fatalf("Reset() error = %v", err)
+	}
+	if result.Cleared != 0 || result.Remaining != 0 {
+		t.Fatalf("Reset() result = %#v", result)
+	}
+	sessions, err := store.List(context.Background(), Filter{})
+	if err != nil {
+		t.Fatalf("List() after reset error = %v", err)
+	}
+	if len(sessions) != 0 {
+		t.Fatalf("List() after reset = %#v", sessions)
+	}
+}
+
 func TestStoreRejectsSchemaV1(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "sessions.json")

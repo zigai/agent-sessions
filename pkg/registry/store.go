@@ -785,30 +785,38 @@ func (s *FileStore) Reset(ctx context.Context) (ResetResult, error) {
 	if err != nil {
 		return ResetResult{}, err
 	}
-	defer func() { _ = lock.Close() }()
 	old, err := os.ReadFile(s.path)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return ResetResult{}, fmt.Errorf("reading store: %w", err)
+		return ResetResult{}, closeStoreLock(lock, fmt.Errorf("reading store: %w", err))
 	}
-	if len(old) > 0 {
-		var envelope map[string]json.RawMessage
-		if err := json.Unmarshal(old, &envelope); err != nil {
-			return ResetResult{}, fmt.Errorf("parsing store %s: %w", s.path, err)
-		}
-		if raw, ok := envelope["sessions"]; ok {
-			var sessions map[string]json.RawMessage
-			if err := json.Unmarshal(raw, &sessions); err == nil {
-				result.Cleared = len(sessions)
-			}
-		}
-	}
+	result.Cleared = storedSessionCount(old)
 	snap := newSnapshot()
 	snap.UpdatedAt = now
 	result.Remaining = 0
-	if err := writeSnapshotAtomic(s.path, snap); err != nil {
+	if err := closeStoreLock(lock, writeSnapshotAtomic(s.path, snap)); err != nil {
 		return ResetResult{}, err
 	}
 	return result, nil
+}
+
+func storedSessionCount(data []byte) int {
+	if len(data) == 0 {
+		return 0
+	}
+	var envelope map[string]json.RawMessage
+	if err := json.Unmarshal(data, &envelope); err != nil {
+		return 0
+	}
+	raw, ok := envelope["sessions"]
+	if !ok {
+		return 0
+	}
+	var sessions map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &sessions); err != nil {
+		return 0
+	}
+
+	return len(sessions)
 }
 
 func (s *FileStore) withSnapshot(mutator func(*snapshot) error) error {
