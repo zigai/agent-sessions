@@ -32,7 +32,8 @@ func List(ctx context.Context) ([]Process, error) {
 	processes := make([]Process, 0, len(kinfo))
 	for _, process := range kinfo {
 		pid := int(process.Proc.P_pid)
-		if pid <= 0 || process.Eproc.Ppid < 0 || process.Eproc.Pgid < 0 || process.Proc.P_starttime.Sec <= 0 || process.Proc.P_starttime.Usec < 0 || process.Proc.P_starttime.Usec >= 1_000_000 {
+		startIdentity, validStart := darwinProcessStartIdentity(process)
+		if pid <= 0 || process.Eproc.Ppid < 0 || process.Eproc.Pgid < 0 || !validStart {
 			return nil, &TableError{Path: "kern.proc.uid", Err: fmt.Errorf("invalid process record pid=%d", pid)}
 		}
 		pids = append(pids, strconv.Itoa(pid))
@@ -40,7 +41,7 @@ func List(ctx context.Context) ([]Process, error) {
 			PID:            pid,
 			PPID:           int(process.Eproc.Ppid),
 			ProcessGroupID: int(process.Eproc.Pgid),
-			StartIdentity:  fmt.Sprintf("%d:%06d", process.Proc.P_starttime.Sec, process.Proc.P_starttime.Usec),
+			StartIdentity:  startIdentity,
 			Executable:     darwinCString(process.Proc.P_comm[:]),
 		})
 	}
@@ -186,16 +187,31 @@ func classifyDarwinError(path string, err error) error {
 	return fmt.Errorf("reading process information at %s: %w", path, err)
 }
 
-// StartIdentity returns the process start identity reported by ps.
+func darwinProcessStartIdentity(process unix.KinfoProc) (string, bool) {
+	start := process.Proc.P_starttime
+	if start.Sec <= 0 || start.Usec < 0 || start.Usec >= 1_000_000 {
+		return "", false
+	}
+
+	return fmt.Sprintf("%d:%06d", start.Sec, start.Usec), true
+}
+
+// StartIdentity returns the kernel process-start identity used by List and
+// Find, so callers can safely compare identities across both lookup paths.
 func StartIdentity(ctx context.Context, pid int) string {
-	if pid <= 0 {
+	if pid <= 0 || ctx.Err() != nil {
 		return ""
 	}
-	output, err := exec.CommandContext(ctx, "/bin/ps", "-o", "lstart=", "-p", strconv.Itoa(pid)).Output()
-	if err != nil {
+	process, err := unix.SysctlKinfoProc("kern.proc.pid", pid)
+	if err != nil || process == nil || int(process.Proc.P_pid) != pid {
 		return ""
 	}
-	return strings.TrimSpace(string(output))
+	identity, ok := darwinProcessStartIdentity(*process)
+	if !ok {
+		return ""
+	}
+
+	return identity
 }
 
 // CommandName returns the executable command name for pid on macOS.

@@ -2,6 +2,7 @@ package tmuxctx
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -12,6 +13,17 @@ func TestContextFromEnvBuildsMinimalContext(t *testing.T) {
 	ctx := ContextFromEnv(Env{TMUX: "/tmp/tmux-1000/default,123,0", TMUXPane: "%4"})
 	if !ctx.Inside || ctx.ServerSocket != "/tmp/tmux-1000/default" || ctx.PaneID != "%4" {
 		t.Fatalf("unexpected minimal tmux context: %#v", ctx)
+	}
+}
+
+func TestCurrentWithEnvPreservesCancellation(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := CurrentWithEnv(ctx, Env{TMUX: "/tmp/tmux/default,1,0", TMUXPane: "%1"})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("CurrentWithEnv() error = %v, want context.Canceled", err)
 	}
 }
 

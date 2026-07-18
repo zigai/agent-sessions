@@ -35,4 +35,7 @@ func TestCurrentProcessInfo(t *testing.T) {
 	if process.PID != pid || process.StartIdentity == "" || process.Executable == "" {
 		t.Fatalf("current process = %#v, want complete identity", process)
 	}
+	if got := StartIdentity(ctx, pid); got != process.StartIdentity {
+		t.Fatalf("StartIdentity = %q, Find identity = %q", got, process.StartIdentity)
+	}
 }

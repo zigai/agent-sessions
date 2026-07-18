@@ -68,6 +68,9 @@ func Current(ctx context.Context) (registry.TmuxContext, error) {
 }
 
 func CurrentWithEnv(ctx context.Context, env Env) (registry.TmuxContext, error) {
+	if err := ctx.Err(); err != nil {
+		return registry.TmuxContext{}, fmt.Errorf("current tmux context: %w", err)
+	}
 	if env.TMUX == "" && env.TMUXPane == "" {
 		return registry.TmuxContext{}, ErrNoTmuxContext
 	}
@@ -75,6 +78,9 @@ func CurrentWithEnv(ctx context.Context, env Env) (registry.TmuxContext, error) 
 	format := currentFormat()
 	output, err := runTmuxWithEnv(ctx, env, currentDisplayMessageArgs(format, env.TMUXPane)...)
 	if err != nil {
+		if contextErr := ctx.Err(); contextErr != nil {
+			return registry.TmuxContext{}, fmt.Errorf("current tmux context: %w", contextErr)
+		}
 		if paneID := env.TMUXPane; paneID != "" {
 			return ContextFromEnv(env), nil
 		}
