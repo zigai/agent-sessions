@@ -3,6 +3,7 @@
   {"agent":"codex","name":"tool-running","screen":"Running command · esc to interrupt","want":"running"},
   {"agent":"codex","name":"prompt-submission","screen":"Prompt submitted · esc to interrupt","want":"running"},
   {"agent":"codex","name":"completion","screen":"Task completed\n› next task\n90% context left","want":"idle"},
+  {"agent":"codex","name":"completion-context-used","screen":"Task completed\n› next task\nContext 63% used","want":"idle"},
   {"agent":"codex","name":"cancelled","screen":"Command cancelled\n› try another task\n89% context left","want":"idle"},
   {"agent":"codex","name":"uncertain","screen":"ordinary shell output","want":"unknown"},
   {"agent":"claude","name":"permission","screen":"Do you want to proceed?","want":"waiting"},

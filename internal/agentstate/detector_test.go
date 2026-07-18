@@ -53,7 +53,7 @@ func TestBundledManifestsClassifyTargetAgents(t *testing.T) {
 		want    registry.Activity
 		rule    string
 	}{
-		{registry.HarnessCodex, "› implement this\n87% context left", registry.ActivityIdle, "input_prompt"},
+		{registry.HarnessCodex, "› implement this\nContext 63% used", registry.ActivityIdle, "input_prompt"},
 		{registry.HarnessCodex, "Would you like to run the following command?", registry.ActivityWaiting, "permission_prompt"},
 		{registry.HarnessClaude, "Thinking… esc to interrupt", registry.ActivityRunning, "working_interruptible"},
 		{registry.HarnessClaude, "❯ \n? for shortcuts", registry.ActivityIdle, "input_prompt"},

@@ -22,7 +22,7 @@ func TestObserverDetectsScreenStateForFourTargetAgents(t *testing.T) {
 		screen  string
 		want    registry.Activity
 	}{
-		{registry.HarnessCodex, "codex", "› next task\n90% context left", registry.ActivityIdle},
+		{registry.HarnessCodex, "codex", "› next task\nContext 63% used", registry.ActivityIdle},
 		{registry.HarnessClaude, "claude", "Do you want to proceed?", registry.ActivityWaiting},
 		{registry.HarnessOpenCode, "opencode", "Working · esc to interrupt", registry.ActivityRunning},
 		{registry.HarnessPi, "pi", "Type a message · Enter to send", registry.ActivityIdle},
@@ -152,7 +152,7 @@ func TestObserverScreenDetectionRecoversMissedPermissionTransition(t *testing.T)
 	if _, err := observer.RunOnce(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	screen = "› continue\n88% context left"
+	screen = "› continue\nContext 63% used"
 	at = at.Add(time.Second)
 	if _, err := observer.RunOnce(context.Background()); err != nil {
 		t.Fatal(err)
