@@ -63,6 +63,35 @@ func TestQueuedReportEnvelopePreservesNoTmux(t *testing.T) {
 	}
 }
 
+func TestQueuedDefaultsOnlyEnvelopeDoesNotPersistStdin(t *testing.T) {
+	t.Parallel()
+
+	const secret = "prompt text that must not be queued"
+	prepared, err := (&application{}).prepareReport(strings.NewReader(`{"session_id":"session","cwd":"/tmp","hook_event_name":"Stop","model":"gpt-5","prompt":"`+secret+`"}`), reportOptions{
+		harness: "codex", activity: "idle", rawDefaultsOnly: true,
+	}, reportRuntimeContext{defaultObservedAt: time.Now().UTC()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	envelope := queuedReportEnvelope("/tmp/state.json", prepared, false, time.Now().UTC(), reportqueue.RuntimeContext{}, registry.TmuxContext{})
+	data, err := json.Marshal(envelope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(data, []byte(secret)) || bytes.Contains(data, []byte("stdin_base64")) {
+		t.Fatalf("defaults-only queue envelope retained stdin: %s", data)
+	}
+}
+
+func TestStartQueueDrainerReportsSpawnFailure(t *testing.T) {
+	t.Parallel()
+
+	err := startQueueDrainer(context.Background(), filepath.Join(t.TempDir(), "missing-drainer"), nil)
+	if err == nil {
+		t.Fatal("expected queue drainer start error")
+	}
+}
+
 func TestValidateQueuedObservationRejectsMissingIdentity(t *testing.T) {
 	err := validateQueuedObservation(registry.Observation{Harness: registry.HarnessClaude})
 	if err == nil {

@@ -27,7 +27,6 @@ type Envelope struct {
 	Report              Report               `json:"report"`
 	RawPayloadSet       bool                 `json:"raw_payload_set,omitempty"`
 	NoTmux              bool                 `json:"no_tmux,omitempty"`
-	Stdin               []byte               `json:"stdin_base64,omitempty"`
 	Runtime             RuntimeContext       `json:"runtime"`
 	Attempt             int                  `json:"attempt,omitempty"`
 	NextAttemptAt       time.Time            `json:"next_attempt_at,omitzero"`

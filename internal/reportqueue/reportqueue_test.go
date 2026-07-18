@@ -464,7 +464,6 @@ func testEnvelope(storePath string, sessionID string, activity registry.Activity
 		Report:              ReportFromRegistry(testRegistryObservation(sessionID, activity, observedAt)),
 		RawPayloadSet:       false,
 		NoTmux:              false,
-		Stdin:               nil,
 		Runtime:             RuntimeContext{CWD: "", ParentArgs: nil, Env: nil},
 		Attempt:             0,
 		NextAttemptAt:       time.Time{},

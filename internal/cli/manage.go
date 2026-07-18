@@ -197,7 +197,7 @@ func (app *application) runManageStopSessions(ctx context.Context, ss []registry
 		}
 		entry.Method = t.Method
 		entry.Target = t.Target
-		k := t.Method + "\x00" + t.Target
+		k := t.Method + "\x00" + t.ServerIdentity + "\x00" + t.Target
 		if seen[k] {
 			entry.Reason = "duplicate target"
 			r.Skipped++

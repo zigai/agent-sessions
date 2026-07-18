@@ -124,7 +124,9 @@ func inCommandGroup(command *cobra.Command, groupID string) *cobra.Command {
 }
 
 func Execute() {
-	kickQueueDrainerForArgs(os.Args[1:])
+	if err := kickQueueDrainerForArgs(os.Args[1:]); err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "warning: %v\n", err)
+	}
 	if handled, err := tryExecuteFastPath(context.Background(), os.Args[1:], os.Stdin, os.Stdout, os.Stderr); handled {
 		if err != nil {
 			_, _ = fmt.Fprintln(os.Stderr, err)
@@ -216,7 +218,6 @@ type reportOptions struct {
 type preparedReport struct {
 	harness     registry.Harness
 	observation registry.Observation
-	stdin       []byte
 	ignored     bool
 }
 type reportRuntimeContext struct {
@@ -331,14 +332,18 @@ func (app *application) prepareReport(stdin io.Reader, options reportOptions, ru
 	if err != nil {
 		return preparedReport{}, err
 	}
-	rawPayload, defaultsPayload, stdinData, err := readStdinPayloadData(stdin, options.rawStdin, options.rawDefaultsOnly)
+	rawPayload, defaultsPayload, err := readStdinPayloadData(stdin, options.rawStdin, options.rawDefaultsOnly)
 	if err != nil {
 		return preparedReport{}, err
 	}
 	if !harnesspkg.PayloadCompatibleWithHarness(harness, defaultsPayload) {
-		return preparedReport{harness: harness, stdin: stdinData, ignored: true}, nil
+		return preparedReport{harness: harness, ignored: true}, nil
 	}
-	applyPayloadDefaults(&options, attrs, harnesspkg.DefaultsFromPayload(harness, defaultsPayload))
+	defaults, err := harnesspkg.DefaultsFromPayloadWithError(harness, defaultsPayload)
+	if err != nil {
+		return preparedReport{}, fmt.Errorf("derive payload defaults: %w", err)
+	}
+	applyPayloadDefaults(&options, attrs, defaults)
 	applyReportRuntimeDefaults(&options)
 	presence, err := registry.NormalizePresence(options.presence)
 	if err != nil {
@@ -414,7 +419,7 @@ func (app *application) prepareReport(stdin io.Reader, options reportOptions, ru
 	if options.cwd != "" || options.projectRoot != "" || len(options.resumeCommand) > 0 {
 		observation.Catalog = &registry.CatalogMetadata{ResumeCommand: append([]string(nil), options.resumeCommand...), CWD: options.cwd, ProjectRoot: options.projectRoot}
 	}
-	return preparedReport{harness: harness, observation: observation, stdin: stdinData}, nil
+	return preparedReport{harness: harness, observation: observation}, nil
 }
 
 func normalizeReportLifecycle(value string) (registry.NativeLifecycle, error) {
@@ -1000,17 +1005,17 @@ func parseAttributes(values []string) (map[string]string, error) {
 	return a, nil
 }
 
-func readStdinPayloadData(stdin io.Reader, storeRaw, defaultsOnly bool) (json.RawMessage, json.RawMessage, []byte, error) {
+func readStdinPayloadData(stdin io.Reader, storeRaw, defaultsOnly bool) (json.RawMessage, json.RawMessage, error) {
 	if !storeRaw && !defaultsOnly {
-		return nil, nil, nil, nil
+		return nil, nil, nil
 	}
 	d, err := readPayloadInput(stdin)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("read stdin payload: %w", err)
+		return nil, nil, fmt.Errorf("read stdin payload: %w", err)
 	}
 	d = []byte(strings.TrimSpace(string(d)))
 	if len(d) == 0 {
-		return nil, nil, nil, nil
+		return nil, nil, nil
 	}
 	var p json.RawMessage
 	if json.Valid(d) {
@@ -1018,14 +1023,14 @@ func readStdinPayloadData(stdin io.Reader, storeRaw, defaultsOnly bool) (json.Ra
 	} else {
 		encoded, err := json.Marshal(string(d))
 		if err != nil {
-			return nil, nil, nil, fmt.Errorf("encode stdin payload: %w", err)
+			return nil, nil, fmt.Errorf("encode stdin payload: %w", err)
 		}
 		p = encoded
 	}
 	if storeRaw {
-		return p, p, d, nil
+		return p, p, nil
 	}
-	return nil, p, d, nil
+	return nil, p, nil
 }
 
 func applyPayloadDefaults(o *reportOptions, a map[string]string, d harnesspkg.PayloadDefaults) {

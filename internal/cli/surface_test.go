@@ -255,6 +255,26 @@ func TestRegistryPathAndResetCommands(t *testing.T) {
 	}
 }
 
+func TestRegistryResetCommandRecoversMalformedState(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "sessions.json")
+	if err := os.WriteFile(path, []byte(`{"schema_version":2,"sessions":`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	root := NewRootCommand(&stdout, &bytes.Buffer{})
+	root.SetArgs([]string{"--store", path, "registry", "reset"})
+	if err := root.ExecuteContext(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout.String(), "cleared=0") {
+		t.Fatalf("registry reset output = %q", stdout.String())
+	}
+	if _, err := registry.NewFileStore(path).List(context.Background(), registry.Filter{}); err != nil {
+		t.Fatalf("registry remains unreadable after reset: %v", err)
+	}
+}
+
 func TestListDefaultsToLatestUpdateLastWithUsefulLabelsAndShortIDs(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "sessions.json")
 	store := registry.NewFileStore(path)
@@ -424,6 +444,57 @@ func TestIntegrationsInstallStatusRemoveRoundTrip(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "missing") {
 		t.Fatalf("removed integration status = %q", stdout.String())
+	}
+}
+
+func TestCodexInstallAndStatusSurfaceHookTrustStep(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("CODEX_HOME", filepath.Join(home, ".codex"))
+	t.Setenv(registry.StateDirEnv, filepath.Join(home, "state"))
+
+	var stdout bytes.Buffer
+	executeSurfaceCommand(t, &stdout, "integrations", "install", "codex", "--binary", "/bin/agent-sessions-v1")
+	requireSurfaceOutput(t, stdout.String(), "Codex install omitted trust activation", "next:", "/hooks")
+
+	executeSurfaceCommand(t, &stdout, "integrations", "status", "codex", "--binary", "/bin/agent-sessions-v1")
+	requireSurfaceOutput(t, stdout.String(), "Codex status omitted trust verification", "current", "/hooks", "trust status")
+
+	executeSurfaceCommand(t, &stdout, "--json", "integrations", "install", "codex", "--binary", "/bin/agent-sessions-v2")
+	requireCodexUpdateTrustJSON(t, stdout.Bytes())
+}
+
+func executeSurfaceCommand(t *testing.T, stdout *bytes.Buffer, args ...string) {
+	t.Helper()
+	stdout.Reset()
+	root := NewRootCommand(stdout, &bytes.Buffer{})
+	root.SetArgs(args)
+	if err := root.ExecuteContext(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func requireSurfaceOutput(t *testing.T, output string, message string, fragments ...string) {
+	t.Helper()
+	for _, fragment := range fragments {
+		if !strings.Contains(output, fragment) {
+			t.Fatalf("%s: %q", message, output)
+		}
+	}
+}
+
+func requireCodexUpdateTrustJSON(t *testing.T, data []byte) {
+	t.Helper()
+	var results []map[string]any
+	if err := json.Unmarshal(data, &results); err != nil {
+		t.Fatalf("Codex update JSON = %q, %v", data, err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("Codex update JSON = %q, want one result", data)
+	}
+	nextStep, ok := results[0]["next_step"].(string)
+	if !ok || results[0]["changed"] != true || !strings.Contains(nextStep, "/hooks") {
+		t.Fatalf("Codex update omitted trust activation: %#v", results[0])
 	}
 }
 

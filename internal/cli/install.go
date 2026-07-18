@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -49,13 +50,13 @@ func (app *application) runInstallHooksCommand(cmd *cobra.Command, harnessName s
 		if cmd.Flags().Changed("target-binary") {
 			return errTargetBinaryWithAll
 		}
-		return app.runInstallAll(binary, targetBinary, dryRun, force, useShim)
+		return app.runInstallAll(cmd.Context(), binary, targetBinary, dryRun, force, useShim)
 	}
 	harness, err := harnesspkg.Normalize(harnessName)
 	if err != nil {
 		return fmt.Errorf("normalizing harness: %w", err)
 	}
-	result, err := install.Run(install.Options{Harness: harness, Binary: binary, TargetBinary: targetBinary, DryRun: dryRun, Force: force, UseShim: useShim})
+	result, err := install.RunContext(cmd.Context(), install.Options{Harness: harness, Binary: binary, TargetBinary: targetBinary, DryRun: dryRun, Force: force, UseShim: useShim})
 	if err != nil {
 		return fmt.Errorf("installing hooks: %w", err)
 	}
@@ -74,8 +75,8 @@ func (app *application) runInstallHooksCommand(cmd *cobra.Command, harnessName s
 	return nil
 }
 
-func (app *application) runInstallAll(binary string, targetBinary string, dryRun bool, force bool, useShim bool) error {
-	results, err := install.RunAll(install.Options{
+func (app *application) runInstallAll(ctx context.Context, binary string, targetBinary string, dryRun bool, force bool, useShim bool) error {
+	results, err := install.RunAllContext(ctx, install.Options{
 		Harness:      "",
 		Binary:       binary,
 		TargetBinary: targetBinary,

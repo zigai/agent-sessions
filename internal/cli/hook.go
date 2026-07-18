@@ -101,7 +101,7 @@ func (app *application) runManagedHook(
 	}
 
 	if options.queue {
-		app.queueManagedHook(ctx, result, data, parentArgs)
+		app.queueManagedHook(ctx, result, parentArgs)
 	} else if err := reportManagedHook(ctx, app.registryStore(), result); err != nil {
 		app.warnf("warning: %v\n", err)
 	}
@@ -112,7 +112,6 @@ func (app *application) runManagedHook(
 func (app *application) queueManagedHook(
 	ctx context.Context,
 	result harnesspkg.HookResult,
-	stdin []byte,
 	parentArgs []string,
 ) {
 	if !result.ReportOK {
@@ -133,7 +132,6 @@ func (app *application) queueManagedHook(
 		Kind:          reportqueue.KindReport,
 		Report:        reportqueue.ReportFromRegistry(observation),
 		RawPayloadSet: len(observation.RawPayload) > 0,
-		Stdin:         []byte(strings.TrimSpace(string(stdin))),
 		Runtime:       runtime,
 		CachedTmux:    cachedTmux,
 	}, reportqueue.EnqueueOptions{Now: func() time.Time { return now }})

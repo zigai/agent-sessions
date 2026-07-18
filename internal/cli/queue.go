@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"os/exec"
 	"strconv"
@@ -150,7 +151,13 @@ func (app *application) queuedReportTmux(ctx context.Context, q reportqueue.Queu
 	}
 	return e.CachedTmux
 }
-func (app *application) kickQueueDrainer(ctx context.Context, p string) { kickQueueDrainer(ctx, p) }
+
+func (app *application) kickQueueDrainer(ctx context.Context, path string) {
+	if err := kickQueueDrainer(ctx, path); err != nil {
+		app.warnf("warning: %v\n", err)
+	}
+}
+
 func (app *application) runQueuedReport(ctx context.Context, stdin io.Reader, o reportOptions) error {
 	p, e := app.prepareReport(stdin, o, reportRuntimeContext{
 		processes:         reportProcessAncestors(ctx, o.pid),
@@ -198,7 +205,6 @@ func queuedReportEnvelope(
 		Report:        reportqueue.ReportFromRegistry(prepared.observation),
 		RawPayloadSet: len(prepared.observation.RawPayload) > 0,
 		NoTmux:        noTmux,
-		Stdin:         prepared.stdin,
 		Runtime:       runtime,
 		CachedTmux:    cachedTmux,
 	}
@@ -223,16 +229,35 @@ func queuedReportRuntime(q reportqueue.Queue, now time.Time, parentArgs []string
 	return runtime, cachedTmux
 }
 
-func kickQueueDrainer(ctx context.Context, p string) {
-	b, e := os.Executable()
-	if e != nil || strings.HasSuffix(b, ".test") {
-		return
+func kickQueueDrainer(ctx context.Context, path string) error {
+	binary, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("locating queue drainer executable: %w", err)
 	}
-	a := []string{}
-	if p != "" {
-		a = append(a, "--store", p)
+	if strings.HasSuffix(binary, ".test") {
+		return nil
 	}
-	a = append(a, drainQueueCommandName, "--max-items", strconv.Itoa(drainQueueBatchSize))
-	cmd := exec.CommandContext(ctx, b, a...)
-	_ = cmd.Start()
+	args := []string{}
+	if path != "" {
+		args = append(args, "--store", path)
+	}
+	args = append(args, drainQueueCommandName, "--max-items", strconv.Itoa(drainQueueBatchSize))
+
+	return startQueueDrainer(ctx, binary, args)
+}
+
+func startQueueDrainer(ctx context.Context, binary string, args []string) error {
+	cmd := exec.CommandContext(context.WithoutCancel(ctx), binary, args...)
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("starting queue drainer: %w", err)
+	}
+	go func() {
+		// The queue is durable and a later CLI invocation retries failed drains;
+		// this owner exists to wait and release the child process resources.
+		if err := cmd.Wait(); err != nil {
+			slog.WarnContext(context.WithoutCancel(ctx), "queue drainer exited unsuccessfully", "error", err)
+		}
+	}()
+
+	return nil
 }

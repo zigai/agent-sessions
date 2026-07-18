@@ -42,8 +42,8 @@ func TestPrepareReportCarriesIndependentDimensions(t *testing.T) {
 	if prepared.observation.Tmux == nil || prepared.observation.Tmux.SessionName != "dev" || prepared.observation.Tmux.PaneID != "%4" {
 		t.Fatalf("tmux context missing: %#v", prepared.observation.Tmux)
 	}
-	if string(prepared.stdin) == "" {
-		t.Fatal("raw stdin was not preserved")
+	if len(prepared.observation.RawPayload) == 0 {
+		t.Fatal("raw payload was not preserved")
 	}
 }
 

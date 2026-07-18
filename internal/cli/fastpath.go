@@ -281,11 +281,11 @@ func fastValue(args []string, i int, f fastPathFlag) (string, int, error) {
 	return args[i+1], i + 1, nil
 }
 
-func kickQueueDrainerForArgs(args []string) {
+func kickQueueDrainerForArgs(args []string) error {
 	for _, arg := range args {
 		if arg == drainQueueCommandName || arg == queueStatusCommandName {
-			return
+			return nil
 		}
 	}
-	kickQueueDrainer(context.Background(), "")
+	return kickQueueDrainer(context.Background(), "")
 }

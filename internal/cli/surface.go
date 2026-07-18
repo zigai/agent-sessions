@@ -45,7 +45,7 @@ func (app *application) newSetupCommand() *cobra.Command {
 		Short: "Connect agents and start background tracking",
 		Args:  cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			integrations, err := app.installIntegrations(args, options)
+			integrations, err := app.installIntegrations(cmd.Context(), args, options)
 			if err != nil {
 				return err
 			}
@@ -91,7 +91,7 @@ func (app *application) newIntegrationsInstallCommand() *cobra.Command {
 		if cmd.Flags().Changed("target-binary") && len(args) == 1 && strings.EqualFold(args[0], "all") {
 			return errTargetBinaryWithAll
 		}
-		results, err := app.installIntegrations(args, options)
+		results, err := app.installIntegrations(cmd.Context(), args, options)
 		if app.outputJSON {
 			if writeErr := app.writeJSON(results); writeErr != nil {
 				return writeErr
@@ -112,7 +112,7 @@ func (app *application) newIntegrationsInstallCommand() *cobra.Command {
 
 func (app *application) newIntegrationsRemoveCommand() *cobra.Command {
 	options := integrationCommandOptions{}
-	command := &cobra.Command{Use: "remove <agent...|all>", Short: "Remove agent-sessions-owned integrations", Args: cobra.MinimumNArgs(1), RunE: func(_ *cobra.Command, args []string) error {
+	command := &cobra.Command{Use: "remove <agent...|all>", Short: "Remove agent-sessions-owned integrations", Args: cobra.MinimumNArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
 		harnesses, err := selectedHarnesses(args, false)
 		if err != nil {
 			return err
@@ -120,9 +120,9 @@ func (app *application) newIntegrationsRemoveCommand() *cobra.Command {
 		results := make([]install.Result, 0, len(harnesses))
 		var failures []error
 		for _, harnessID := range harnesses {
-			result, removeErr := install.Remove(install.Options{Harness: harnessID, Binary: options.binary, DryRun: options.dryRun})
+			result, removeErr := install.RemoveContext(cmd.Context(), install.Options{Harness: harnessID, Binary: options.binary, DryRun: options.dryRun})
 			if removeErr != nil {
-				result = install.Result{Harness: string(harnessID), Message: "remove failed", Error: removeErr.Error()}
+				result = failedIntegrationResult(harnessID, "remove failed", removeErr)
 				failures = append(failures, removeErr)
 			}
 			results = append(results, result)
@@ -142,42 +142,75 @@ func (app *application) newIntegrationsRemoveCommand() *cobra.Command {
 
 func (app *application) newIntegrationsStatusCommand() *cobra.Command {
 	binary := defaultInstallBinary()
-	command := &cobra.Command{Use: "status [agent...]", Short: "Show integration installation state", Args: cobra.ArbitraryArgs, RunE: func(_ *cobra.Command, args []string) error {
-		harnesses, err := selectedHarnesses(args, true)
-		if err != nil {
-			return err
-		}
-		results := make([]install.IntegrationStatus, 0, len(harnesses))
-		failed := false
-		for _, harnessID := range harnesses {
-			status, inspectErr := install.Inspect(harnessID, binary)
-			if inspectErr != nil {
-				failed = true
-				status = install.IntegrationStatus{Harness: harnessID, Status: install.ArtifactForeign, Message: inspectErr.Error()}
-			}
-			results = append(results, status)
-		}
-		if app.outputJSON {
-			if err := app.writeJSON(results); err != nil {
-				return err
-			}
-		} else {
-			for _, result := range results {
-				if err := app.writef("%s\t%s\t%s\n", result.Harness, result.Status, result.Message); err != nil {
-					return err
-				}
-			}
-		}
-		if failed {
-			return errIntegrationStatusFail
-		}
-		return nil
+	command := &cobra.Command{Use: "status [agent...]", Short: "Show integration installation state", Args: cobra.ArbitraryArgs, RunE: func(cmd *cobra.Command, args []string) error {
+		return app.runIntegrationsStatus(cmd.Context(), args, binary)
 	}}
 	command.Flags().StringVar(&binary, "binary", binary, "expected agent-sessions binary")
 	return command
 }
 
-func (app *application) installIntegrations(args []string, options integrationCommandOptions) ([]install.Result, error) {
+func (app *application) runIntegrationsStatus(ctx context.Context, args []string, binary string) error {
+	harnesses, err := selectedHarnesses(args, true)
+	if err != nil {
+		return err
+	}
+	results, failed := inspectIntegrationStatuses(ctx, harnesses, binary)
+	if err := app.writeIntegrationStatuses(results); err != nil {
+		return err
+	}
+	if failed {
+		return errIntegrationStatusFail
+	}
+
+	return nil
+}
+
+func inspectIntegrationStatuses(ctx context.Context, harnesses []registry.Harness, binary string) ([]install.IntegrationStatus, bool) {
+	results := make([]install.IntegrationStatus, 0, len(harnesses))
+	failed := false
+	for _, harnessID := range harnesses {
+		status, err := install.InspectContext(ctx, harnessID, binary)
+		if err != nil {
+			failed = true
+			status = install.IntegrationStatus{
+				Harness:  harnessID,
+				Status:   install.ArtifactForeign,
+				Paths:    nil,
+				Message:  err.Error(),
+				NextStep: "",
+			}
+		}
+		results = append(results, status)
+	}
+
+	return results, failed
+}
+
+func (app *application) writeIntegrationStatuses(results []install.IntegrationStatus) error {
+	if app.outputJSON {
+		return app.writeJSON(results)
+	}
+	for _, result := range results {
+		if err := app.writeIntegrationStatus(result); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (app *application) writeIntegrationStatus(result install.IntegrationStatus) error {
+	if err := app.writef("%s\t%s\t%s\n", result.Harness, result.Status, result.Message); err != nil {
+		return err
+	}
+	if result.NextStep != "" {
+		return app.writef("  next: %s\n", result.NextStep)
+	}
+
+	return nil
+}
+
+func (app *application) installIntegrations(ctx context.Context, args []string, options integrationCommandOptions) ([]install.Result, error) {
 	harnesses, err := selectedHarnesses(args, false)
 	if err != nil {
 		return nil, err
@@ -185,14 +218,26 @@ func (app *application) installIntegrations(args []string, options integrationCo
 	results := make([]install.Result, 0, len(harnesses))
 	var failures []error
 	for _, harnessID := range harnesses {
-		result, installErr := install.Run(install.Options{Harness: harnessID, Binary: options.binary, TargetBinary: options.targetBinary, DryRun: options.dryRun, Force: options.force, UseShim: options.shim})
+		result, installErr := install.RunContext(ctx, install.Options{Harness: harnessID, Binary: options.binary, TargetBinary: options.targetBinary, DryRun: options.dryRun, Force: options.force, UseShim: options.shim})
 		if installErr != nil {
-			result = install.Result{Harness: string(harnessID), Message: "install failed", Error: installErr.Error()}
+			result = failedIntegrationResult(harnessID, "install failed", installErr)
 			failures = append(failures, installErr)
 		}
 		results = append(results, result)
 	}
 	return results, errors.Join(failures...)
+}
+
+func failedIntegrationResult(harnessID registry.Harness, message string, err error) install.Result {
+	return install.Result{
+		Harness:  string(harnessID),
+		Path:     "",
+		Changed:  false,
+		Message:  message,
+		NextStep: "",
+		Snippet:  "",
+		Error:    err.Error(),
+	}
 }
 
 func (app *application) writeIntegrationResults(results []install.Result) error {
@@ -206,6 +251,11 @@ func (app *application) writeIntegrationResults(results []install.Result) error 
 		if err := app.writef("%s: %s (%s)\n", result.Harness, result.Message, result.Path); err != nil {
 			return err
 		}
+		if result.NextStep != "" {
+			if err := app.writef("  next: %s\n", result.NextStep); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }
@@ -213,7 +263,7 @@ func (app *application) writeIntegrationResults(results []install.Result) error 
 func selectedHarnesses(args []string, emptyMeansAll bool) ([]registry.Harness, error) {
 	if len(args) == 0 {
 		if emptyMeansAll {
-			return append([]registry.Harness(nil), install.AllHarnesses...), nil
+			return install.AllHarnesses(), nil
 		}
 		return nil, errAgentRequired
 	}
@@ -225,7 +275,7 @@ func selectedHarnesses(args []string, emptyMeansAll bool) ([]registry.Harness, e
 		}
 	}
 	if len(args) == 1 && strings.EqualFold(args[0], "all") {
-		return append([]registry.Harness(nil), install.AllHarnesses...), nil
+		return install.AllHarnesses(), nil
 	}
 	seen := make(map[registry.Harness]bool)
 	result := make([]registry.Harness, 0, len(args))
