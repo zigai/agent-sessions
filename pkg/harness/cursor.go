@@ -85,6 +85,7 @@ func cursorHookCommand[T hookTransition](binary string, transition T, event stri
 func cursorPayloadDefaults(payload map[string]any) PayloadDefaults {
 	attributes := make(map[string]string)
 	addAttributeString(attributes, "cursor_hook_event", payloadString(payload, "hook_event_name"))
+	addAttributeString(attributes, "cursor_start_source", payloadString(payload, "source"))
 	addAttributeString(attributes, "cursor_model", payloadString(payload, "model"))
 	addAttributeString(attributes, "cursor_version", payloadString(payload, "cursor_version"))
 	addAttributeString(attributes, "cursor_composer_mode", payloadString(payload, "composer_mode"))

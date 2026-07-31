@@ -12,6 +12,7 @@ const (
 	HookTimeoutSeconds          = 5
 	HookTypeCommand             = "command"
 	HookEventSessionStart       = "SessionStart"
+	HookEventSessionEnd         = "SessionEnd"
 	HookEventUserPromptSubmit   = "UserPromptSubmit"
 	HookEventPostToolUse        = "PostToolUse"
 	HookEventPostToolUseFailure = "PostToolUseFailure"

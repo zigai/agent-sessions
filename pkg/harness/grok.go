@@ -170,6 +170,7 @@ func grokHookCommand[T hookTransition](binary string, transition T, event string
 func grokPayloadDefaults(payload map[string]any) PayloadDefaults {
 	attributes := make(map[string]string)
 	addAttributeString(attributes, "grok_hook_event", payloadStringAny(payload, "hookEventName", "hook_event_name"))
+	addAttributeString(attributes, "grok_start_source", payloadString(payload, "source"))
 	addAttributeString(attributes, "grok_tool_name", payloadStringAny(payload, "toolName", "tool_name"))
 	addAttributeString(attributes, "grok_notification_type", payloadStringAny(
 		payload,

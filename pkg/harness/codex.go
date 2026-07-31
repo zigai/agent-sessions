@@ -85,6 +85,11 @@ func (codexHarness) InstallPlan(binary string) InstallPlan {
 					Matcher: "",
 					Command: ReportHookCommand(binary, registry.HarnessCodex, registry.ActivityIdle, HookEventStop, codexIntegrationSource),
 				},
+				{
+					Event:   HookEventSessionEnd,
+					Matcher: "other",
+					Command: ReportHookCommand(binary, registry.HarnessCodex, registry.PresenceGone, HookEventSessionEnd, codexIntegrationSource),
+				},
 			},
 		}}, ShimAction{}},
 	}
@@ -113,6 +118,7 @@ func codexPayloadDefaults(payload map[string]any) PayloadDefaults {
 	addAttributeString(attributes, "codex_permission_mode", payloadString(payload, "permission_mode"))
 	addAttributeString(attributes, "codex_model", payloadString(payload, "model"))
 	addAttributeString(attributes, "codex_turn_id", payloadString(payload, "turn_id"))
+	addAttributeString(attributes, "codex_session_end_reason", payloadString(payload, "reason"))
 
 	return PayloadDefaults{
 		SessionID:   payloadString(payload, "session_id"),

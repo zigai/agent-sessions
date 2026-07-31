@@ -195,6 +195,7 @@ func gooseMarkerContent() string {
 func goosePayloadDefaults(payload map[string]any) PayloadDefaults {
 	attributes := make(map[string]string)
 	addAttributeString(attributes, "goose_event", payloadString(payload, "event"))
+	addAttributeString(attributes, "goose_start_source", payloadString(payload, "source"))
 	addAttributeString(attributes, "goose_tool_name", payloadString(payload, "tool_name"))
 	addAttributeString(attributes, "goose_matcher_context", payloadString(payload, "matcher_context"))
 

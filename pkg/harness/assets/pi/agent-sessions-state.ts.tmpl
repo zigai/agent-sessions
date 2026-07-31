@@ -60,6 +60,7 @@ function report(transition: string, ctx?: any, event?: any): void {
   if (currentCwd) {
     args.push("--cwd", currentCwd);
   }
+  addEvent(args, event?.type);
   addAttribute(args, "pi_event", event?.type);
   addAttribute(args, "pi_reason", event?.reason);
 

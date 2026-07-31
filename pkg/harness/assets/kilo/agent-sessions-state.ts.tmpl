@@ -54,6 +54,8 @@ function stateForEvent(event: any): string | undefined {
   switch (event?.type) {
     case "session.created":
       return "idle";
+    case "session.deleted":
+      return "gone";
     case "session.idle":
       return "idle";
     case "permission.asked":
@@ -138,7 +140,7 @@ function addEvent(args: string[], value: unknown): void {
     const observedAt = new Date().toISOString();
     refreshSessionRef(event);
 
-    const args = ["report", "kilo", "--activity", state, "--observed-at", observedAt, "--queue", "--quiet"];
+    const args = ["report", "kilo", state === "gone" ? "--presence" : "--activity", state, "--observed-at", observedAt, "--queue", "--quiet"];
     addEvent(args, event?.type);
     args.push("--attribute", `agent_sessions_integration_version={{INTEGRATION_VERSION}}`);
     if (currentSessionId) {

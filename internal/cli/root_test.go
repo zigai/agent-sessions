@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -73,6 +74,181 @@ func TestPrepareReportCarriesNativeLifecycle(t *testing.T) {
 	}
 	if prepared.observation.Lifecycle == nil || *prepared.observation.Lifecycle != registry.NativeLifecycleResume {
 		t.Fatalf("native lifecycle missing: %#v", prepared.observation)
+	}
+}
+
+func TestPrepareReportInfersLifecycleFromNativeEvents(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		options     reportOptions
+		payload     string
+		lifecycle   registry.NativeLifecycle
+		presence    registry.Presence
+		nativeEvent string
+	}{
+		{
+			name: "codex startup",
+			options: reportOptions{
+				harness: "codex", activity: "idle", rawDefaultsOnly: true,
+			},
+			payload:     `{"session_id":"codex-start","cwd":"/work","hook_event_name":"SessionStart","source":"startup","model":"gpt-5"}`,
+			lifecycle:   registry.NativeLifecycleStart,
+			presence:    registry.PresenceLive,
+			nativeEvent: "SessionStart",
+		},
+		{
+			name: "codex resume",
+			options: reportOptions{
+				harness: "codex", activity: "idle", rawDefaultsOnly: true,
+			},
+			payload:     `{"session_id":"codex-resume","cwd":"/work","hook_event_name":"SessionStart","source":"resume","model":"gpt-5"}`,
+			lifecycle:   registry.NativeLifecycleResume,
+			presence:    registry.PresenceLive,
+			nativeEvent: "SessionStart",
+		},
+		{
+			name: "codex end",
+			options: reportOptions{
+				harness: "codex", rawDefaultsOnly: true,
+			},
+			payload:     `{"session_id":"codex-end","cwd":"/work","hook_event_name":"SessionEnd","reason":"other","model":"gpt-5"}`,
+			lifecycle:   registry.NativeLifecycleEnd,
+			presence:    registry.PresenceGone,
+			nativeEvent: "SessionEnd",
+		},
+		{
+			name: "pi resume",
+			options: reportOptions{
+				harness: "pi", activity: "idle", event: "session_start", sessionPath: "/tmp/pi-session.json",
+				attributes: []string{"pi_reason=resume"},
+			},
+			lifecycle:   registry.NativeLifecycleResume,
+			presence:    registry.PresenceLive,
+			nativeEvent: "session_start",
+		},
+		{
+			name: "opencode deleted",
+			options: reportOptions{
+				harness: "opencode", event: "session.deleted", sessionID: "open-session",
+			},
+			lifecycle:   registry.NativeLifecycleEnd,
+			presence:    registry.PresenceGone,
+			nativeEvent: "session.deleted",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			prepared, err := (&application{}).prepareReport(
+				strings.NewReader(test.payload),
+				test.options,
+				reportRuntimeContext{defaultObservedAt: time.Now().UTC()},
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			observation := prepared.observation
+			if observation.Lifecycle == nil || *observation.Lifecycle != test.lifecycle {
+				t.Fatalf("lifecycle = %#v, want %q", observation.Lifecycle, test.lifecycle)
+			}
+			if observation.Presence == nil || *observation.Presence != test.presence {
+				t.Fatalf("presence = %#v, want %q", observation.Presence, test.presence)
+			}
+			if observation.NativeEvent != test.nativeEvent {
+				t.Fatalf("native event = %q, want %q", observation.NativeEvent, test.nativeEvent)
+			}
+		})
+	}
+}
+
+func TestInferredNativeEndCannotBeResurrectedByProcessEvidence(t *testing.T) {
+	t.Parallel()
+
+	store := registry.NewFileStore(filepath.Join(t.TempDir(), "sessions.json"))
+	app := &application{}
+	at := time.Date(2026, 7, 30, 12, 0, 0, 0, time.UTC)
+	process := &registry.ProcessIdentity{PID: 42, StartIdentity: "boot:42"}
+
+	start, err := app.prepareReport(
+		strings.NewReader(`{"session_id":"codex-session","cwd":"/work","hook_event_name":"SessionStart","source":"startup","model":"gpt-5"}`),
+		reportOptions{harness: "codex", activity: "idle", rawDefaultsOnly: true},
+		reportRuntimeContext{defaultObservedAt: at},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	start.observation.Process = process
+	session, err := store.Observe(context.Background(), start.observation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if session.Presence != registry.PresenceLive {
+		t.Fatalf("start presence = %q, want live", session.Presence)
+	}
+
+	end, err := app.prepareReport(
+		strings.NewReader(`{"session_id":"codex-session","cwd":"/work","hook_event_name":"SessionEnd","reason":"other","model":"gpt-5"}`),
+		reportOptions{harness: "codex", rawDefaultsOnly: true},
+		reportRuntimeContext{defaultObservedAt: at.Add(time.Second)},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	end.observation.Process = process
+	session, err = store.Observe(context.Background(), end.observation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if session.Presence != registry.PresenceGone || session.Activity != nil {
+		t.Fatalf("end state = %#v", session)
+	}
+
+	present := true
+	session, err = store.Observe(context.Background(), registry.Observation{
+		Source: registry.ObservationSourceProcess, Evidence: registry.ObservationEvidenceProcessPresence,
+		Harness: registry.HarnessCodex, Identity: registry.ObservationIdentity{SessionID: "codex-session"},
+		ProcessPresent: &present, Process: process, ObservedAt: at.Add(2 * time.Second),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if session.Presence != registry.PresenceGone {
+		t.Fatalf("process evidence resurrected ended session: %#v", session)
+	}
+}
+
+func TestPrepareReportAddsNativeResumeCommand(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		options reportOptions
+		want    []string
+	}{
+		{
+			name:    "codex id",
+			options: reportOptions{harness: "codex", event: "turn", sessionID: "codex-session"},
+			want:    []string{"codex", "resume", "codex-session"},
+		},
+		{
+			name:    "pi path",
+			options: reportOptions{harness: "pi", event: "agent_settled", sessionPath: "/tmp/pi-session.json"},
+			want:    []string{"pi", "--session", "/tmp/pi-session.json"},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			prepared, err := (&application{}).prepareReport(nil, test.options, reportRuntimeContext{defaultObservedAt: time.Now().UTC()})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if prepared.observation.Catalog == nil || !slices.Equal(prepared.observation.Catalog.ResumeCommand, test.want) {
+				t.Fatalf("resume command = %#v, want %#v", prepared.observation.Catalog, test.want)
+			}
+		})
 	}
 }
 

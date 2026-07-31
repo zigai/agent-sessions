@@ -349,6 +349,7 @@ func (app *application) prepareReport(stdin io.Reader, options reportOptions, ru
 	}
 	applyPayloadDefaults(&options, attrs, defaults)
 	applyReportRuntimeDefaults(&options)
+	applyNativeLifecycleDefaults(&options, attrs)
 	presence, err := registry.NormalizePresence(options.presence)
 	if err != nil {
 		return preparedReport{}, fmt.Errorf("normalize presence: %w", err)
@@ -427,7 +428,106 @@ func (app *application) prepareReport(stdin io.Reader, options reportOptions, ru
 	if options.cwd != "" || options.projectRoot != "" || len(options.resumeCommand) > 0 {
 		observation.Catalog = &registry.CatalogMetadata{ResumeCommand: append([]string(nil), options.resumeCommand...), CWD: options.cwd, ProjectRoot: options.projectRoot}
 	}
+	observation = harnesspkg.WithResumeCommand(observation)
 	return preparedReport{harness: harness, observation: observation}, nil
+}
+
+func applyNativeLifecycleDefaults(options *reportOptions, attributes map[string]string) {
+	if strings.EqualFold(options.evidence, "process") {
+		return
+	}
+
+	event := firstReportAttribute(attributes,
+		"pi_event",
+		"omp_event",
+		"codex_hook_event",
+		"claude_hook_event",
+		"cursor_hook_event",
+		"copilot_hook_event",
+		"droid_hook_event",
+		"kimi_code_hook_event",
+		"grok_hook_event",
+		"goose_event",
+	)
+	if strings.TrimSpace(options.event) != "" {
+		event = options.event
+	} else if event != "" {
+		options.event = event
+	}
+
+	switch normalizedNativeLifecycleEvent(event) {
+	case "start":
+		if options.lifecycle == "" {
+			options.lifecycle = string(registry.NativeLifecycleStart)
+			if nativeLifecycleSourceIsResume(attributes) {
+				options.lifecycle = string(registry.NativeLifecycleResume)
+			}
+		}
+		applyStringDefault(&options.presence, string(registry.PresenceLive))
+	case "resume":
+		applyStringDefault(&options.lifecycle, string(registry.NativeLifecycleResume))
+		applyStringDefault(&options.presence, string(registry.PresenceLive))
+	case "end":
+		applyStringDefault(&options.lifecycle, string(registry.NativeLifecycleEnd))
+		applyStringDefault(&options.presence, string(registry.PresenceGone))
+	}
+}
+
+func normalizedNativeLifecycleEvent(event string) string {
+	normalized := strings.Map(func(character rune) rune {
+		switch {
+		case character >= 'A' && character <= 'Z':
+			return character + ('a' - 'A')
+		case character >= 'a' && character <= 'z', character >= '0' && character <= '9':
+			return character
+		default:
+			return -1
+		}
+	}, strings.TrimSpace(event))
+
+	switch normalized {
+	case "sessionstart", "sessioncreated", "onsessionstart":
+		return "start"
+	case "sessionswitch", "sessionbranch", "sessiontree":
+		return "resume"
+	case "sessionend", "sessionshutdown", "sessiondeleted", "onsessionfinalize":
+		return "end"
+	default:
+		return ""
+	}
+}
+
+func nativeLifecycleSourceIsResume(attributes map[string]string) bool {
+	source := firstReportAttribute(attributes,
+		"codex_start_source",
+		"claude_start_source",
+		"cursor_start_source",
+		"copilot_start_source",
+		"droid_source",
+		"kimi_code_start_source",
+		"grok_start_source",
+		"goose_start_source",
+		"pi_reason",
+		"omp_reason",
+		"omp_approval_reason",
+		"source",
+		"reason",
+	)
+	switch strings.ToLower(strings.TrimSpace(source)) {
+	case "resume", "resumed":
+		return true
+	default:
+		return false
+	}
+}
+
+func firstReportAttribute(attributes map[string]string, keys ...string) string {
+	for _, key := range keys {
+		if value := strings.TrimSpace(attributes[key]); value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func normalizeReportLifecycle(value string) (registry.NativeLifecycle, error) {

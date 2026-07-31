@@ -70,7 +70,7 @@ func capabilitiesFor(id registry.Harness) Capabilities {
 	case registry.HarnessClaude:
 		capabilities.SessionStart, capabilities.SessionEnd, capabilities.RunningIdle, capabilities.WaitingPermission, capabilities.NativeCatalog = true, true, true, true, true
 	case registry.HarnessCodex:
-		capabilities.SessionStart, capabilities.RunningIdle, capabilities.WaitingPermission = true, true, true
+		capabilities.SessionStart, capabilities.SessionEnd, capabilities.RunningIdle, capabilities.WaitingPermission = true, true, true, true
 	case registry.HarnessCursor:
 		capabilities.SessionStart, capabilities.SessionEnd, capabilities.RunningIdle = true, true, true
 	case registry.HarnessCopilot:
@@ -88,11 +88,11 @@ func capabilitiesFor(id registry.Harness) Capabilities {
 	case registry.HarnessOmp:
 		capabilities.SessionStart, capabilities.SessionEnd, capabilities.RunningIdle, capabilities.WaitingPermission, capabilities.NativeCatalog = true, true, true, true, true
 	case registry.HarnessOpenCode:
-		capabilities.SessionStart, capabilities.RunningIdle, capabilities.WaitingPermission, capabilities.NativeCatalog = true, true, true, true
+		capabilities.SessionStart, capabilities.SessionEnd, capabilities.RunningIdle, capabilities.WaitingPermission, capabilities.NativeCatalog = true, true, true, true, true
 	case registry.HarnessAgy:
 		capabilities.RunningIdle, capabilities.WaitingPermission = true, true
 	case registry.HarnessKilo:
-		capabilities.SessionStart, capabilities.RunningIdle, capabilities.WaitingPermission, capabilities.NativeCatalog = true, true, true, true
+		capabilities.SessionStart, capabilities.SessionEnd, capabilities.RunningIdle, capabilities.WaitingPermission, capabilities.NativeCatalog = true, true, true, true, true
 	case registry.HarnessDroid:
 		capabilities.SessionStart, capabilities.SessionEnd, capabilities.RunningIdle = true, true, true
 	case registry.HarnessOpenClaw:
