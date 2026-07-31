@@ -8,7 +8,6 @@ import (
 	"os"
 	"runtime"
 	"strings"
-	"text/tabwriter"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -60,12 +59,11 @@ type doctorResult struct {
 
 func (app *application) newDoctorCommand() *cobra.Command {
 	var verbose bool
-	var all bool
 	command := &cobra.Command{
 		Use:   "doctor",
 		Short: "Check whether agent-sessions is set up and working",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			result := app.runDoctor(cmd.Context(), verbose || all)
+			result := app.runDoctor(cmd.Context(), verbose)
 			if err := app.writeDoctorResult(result); err != nil {
 				return err
 			}
@@ -76,42 +74,50 @@ func (app *application) newDoctorCommand() *cobra.Command {
 		},
 	}
 	command.Flags().BoolVarP(&verbose, "verbose", "v", false, "include all integrations and capability details")
-	command.Flags().BoolVar(&all, "all", false, "include all integrations and capability details")
 	return command
 }
 
 func (app *application) writeDoctorResult(result doctorResult) error {
+	const (
+		doctorCheckNameWidth    = 32
+		doctorCheckStatusWidth  = 9
+		doctorCheckMessageWidth = 75
+	)
 	if app.outputJSON {
 		return app.writeJSON(result)
 	}
-	writer := tabwriter.NewWriter(app.stdout, 0, 0, tabPadding, ' ', 0)
-	if _, err := fmt.Fprintln(writer, "CHECK\tSTATUS\tMESSAGE"); err != nil {
-		return fmt.Errorf("write doctor header: %w", err)
-	}
+	rows := make([][]string, 0, len(result.Checks))
 	for _, check := range result.Checks {
-		if _, err := fmt.Fprintf(writer, "%s\t%s\t%s\n", check.Name, check.Status, check.Message); err != nil {
-			return fmt.Errorf("write doctor check: %w", err)
-		}
+		rows = append(rows, []string{check.Name, string(check.Status), check.Message})
 	}
-	if err := writer.Flush(); err != nil {
-		return fmt.Errorf("flush doctor checks: %w", err)
+	if err := app.writeWrappedHumanTable(
+		[]humanColumn{{heading: "CHECK", width: doctorCheckNameWidth}, {heading: "STATUS", width: doctorCheckStatusWidth}, {heading: "MESSAGE", width: doctorCheckMessageWidth}},
+		rows,
+	); err != nil {
+		return err
 	}
 	return app.writeDoctorCapabilities(result.Capabilities)
 }
 
 func (app *application) writeDoctorCapabilities(capabilities []doctorCapability) error {
+	const (
+		doctorCapabilityAgentWidth   = 12
+		doctorCapabilityEventWidth   = 5
+		doctorCapabilityRunningWidth = 8
+		doctorCapabilityWaitingWidth = 7
+		doctorCapabilitySignalWidth  = 7
+	)
 	if len(capabilities) == 0 {
 		return nil
 	}
-	if err := app.writeln("HARNESS\tSESSION_START\tSESSION_END\tRUNNING_IDLE\tWAITING_PERMISSION\tPROCESS_IDENTITY\tNATIVE_CATALOG\tTTY_TMUX"); err != nil {
-		return err
-	}
+	rows := make([][]string, 0, len(capabilities))
 	for _, capability := range capabilities {
-		if err := app.writef("%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", capability.Harness, yesNo(capability.SessionStart), yesNo(capability.SessionEnd), yesNo(capability.RunningIdle), yesNo(capability.Waiting), yesNo(capability.ProcessIdentity), yesNo(capability.NativeCatalog), yesNo(capability.TTYTmuxContext)); err != nil {
-			return err
-		}
+		rows = append(rows, []string{capability.Harness, yesNo(capability.SessionStart), yesNo(capability.SessionEnd), yesNo(capability.RunningIdle), yesNo(capability.Waiting), yesNo(capability.ProcessIdentity), yesNo(capability.NativeCatalog), yesNo(capability.TTYTmuxContext)})
 	}
-	return nil
+	return app.writeHumanTable(
+		[]humanColumn{{heading: "AGENT", width: doctorCapabilityAgentWidth}, {heading: "START", width: doctorCapabilityEventWidth}, {heading: "END", width: doctorCapabilityEventWidth}, {heading: "RUN/IDLE", width: doctorCapabilityRunningWidth}, {heading: "WAIT", width: doctorCapabilityWaitingWidth}, {heading: "PROCESS", width: doctorCapabilitySignalWidth}, {heading: "CATALOG", width: doctorCapabilitySignalWidth}, {heading: "TTY/MUX", width: doctorCapabilitySignalWidth}},
+		rows,
+	)
 }
 
 //nolint:gocognit,gocritic,nestif,cyclop // the doctor command intentionally reports independent checks in one ordered result

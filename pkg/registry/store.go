@@ -41,7 +41,7 @@ func (e *UnsupportedSchemaError) Error() string {
 	if e.Version != 0 {
 		version = strconv.Itoa(e.Version)
 	}
-	return fmt.Sprintf("unsupported store schema %s at %s; use manage reset --store %s or move/remove the file", version, e.Path, e.Path)
+	return fmt.Sprintf("unsupported store schema %s at %s; run agent-sessions --store %s registry reset or move/remove the file", version, e.Path, e.Path)
 }
 
 type snapshot struct {

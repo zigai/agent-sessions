@@ -15,7 +15,7 @@ import (
 	"github.com/zigai/agent-sessions/v2/pkg/registry"
 )
 
-func TestRootHelpShowsSimplifiedSurfaceAndHidesCompatibilityCommands(t *testing.T) {
+func TestRootHelpShowsCanonicalSurfaceAndHidesInternalCommands(t *testing.T) {
 	var stdout bytes.Buffer
 	root := NewRootCommand(&stdout, &bytes.Buffer{})
 	root.SetArgs([]string{"--help"})
@@ -29,9 +29,9 @@ func TestRootHelpShowsSimplifiedSurfaceAndHidesCompatibilityCommands(t *testing.
 			t.Errorf("root help does not show %q:\n%s", command, help)
 		}
 	}
-	for _, command := range []string{"install-hooks", "observe", "service", "report", "get", "manage", "gc", "queue", "drain", "path"} {
+	for _, command := range []string{"install-hooks", "observe", "service", "report", "get", "manage", "gc", "queue", "drain", "path", "agy-hook"} {
 		if strings.Contains(help, "  "+command+" ") {
-			t.Errorf("root help exposes compatibility command %q:\n%s", command, help)
+			t.Errorf("root help exposes internal or removed command %q:\n%s", command, help)
 		}
 	}
 }
@@ -66,26 +66,30 @@ func assertRootHelpGroups(t *testing.T, help string) {
 	}
 }
 
-func TestCompatibilityCommandsRemainCallable(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "sessions.json")
-	for _, args := range [][]string{{"--store", path, "path"}, {"--store", path, "get", "missing"}, {"--store", path, "gc", "--all"}} {
+func TestLegacyCommandsAndFlagsAreRemoved(t *testing.T) {
+	for _, args := range [][]string{
+		{"path"},
+		{"get", "missing"},
+		{"gc", "--all"},
+		{"manage", "reset"},
+		{"install-hooks", "codex"},
+		{"agy-hook"},
+		{"observe", "--once"},
+		{"service", "status"},
+		{"list", "--watch"},
+		{"list", "--harness", "codex"},
+		{"doctor", "--all"},
+	} {
 		root := NewRootCommand(&bytes.Buffer{}, &bytes.Buffer{})
 		root.SetArgs(args)
-		err := root.ExecuteContext(context.Background())
-		if args[2] == "get" {
-			if err == nil {
-				t.Fatal("legacy get missing unexpectedly succeeded")
-			}
-			continue
-		}
-		if err != nil {
-			t.Fatalf("legacy %s is not callable: %v", args[2], err)
+		if err := root.ExecuteContext(context.Background()); err == nil {
+			t.Errorf("legacy invocation unexpectedly succeeded: %v", args)
 		}
 	}
 }
 
-func TestEveryHiddenCompatibilityCommandHasCallableHelp(t *testing.T) {
-	commands := []string{"report", "get", "gc", "manage", "path", "install-hooks", "agy-hook", "drain-queue", "queue-status", "observe", "service"}
+func TestEveryHiddenInternalCommandHasCallableHelp(t *testing.T) {
+	commands := []string{"report", "drain-queue", "queue-status"}
 	for _, command := range commands {
 		var stdout bytes.Buffer
 		root := NewRootCommand(&stdout, &bytes.Buffer{})
@@ -95,7 +99,7 @@ func TestEveryHiddenCompatibilityCommandHasCallableHelp(t *testing.T) {
 			continue
 		}
 		if !strings.Contains(stdout.String(), "Usage:") {
-			t.Errorf("%s compatibility help missing usage: %q", command, stdout.String())
+			t.Errorf("%s internal help missing usage: %q", command, stdout.String())
 		}
 	}
 }
@@ -117,8 +121,57 @@ func TestRuntimeFailureDoesNotPrintUsage(t *testing.T) {
 	if err := root.ExecuteContext(context.Background()); err == nil {
 		t.Fatal("expected invocation error")
 	}
-	if !strings.Contains(stdout.String(), "Usage:") {
-		t.Fatalf("invocation error omitted usage: %q", stdout.String())
+	if stdout.Len() != 0 {
+		t.Fatalf("invocation error wrote stdout: %q", stdout.String())
+	}
+}
+
+func TestJSONInvocationFailureLeavesStdoutEmpty(t *testing.T) {
+	for _, args := range [][]string{{"--json", "show"}, {"--json", "list", "--not-a-flag"}, {"--json", "unknown"}, {"--json", "report", "--harness", "codex", "--presence", "live"}} {
+		var stdout bytes.Buffer
+		var stderr bytes.Buffer
+		if code := executeCLI(context.Background(), args, strings.NewReader(""), &stdout, &stderr); code == 0 {
+			t.Fatalf("invalid invocation succeeded: %v", args)
+		}
+		if stdout.Len() != 0 {
+			t.Fatalf("%v wrote stdout %q", args, stdout.String())
+		}
+		if stderr.Len() == 0 {
+			t.Fatalf("%v omitted stderr error", args)
+		}
+	}
+}
+
+func TestQueueDrainerRunsOnlyAfterValidParsingAndUsesResolvedStore(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "sessions.json")
+	var drained []string
+	newApplication := func() *application {
+		return &application{
+			stdout: &bytes.Buffer{},
+			stderr: &bytes.Buffer{},
+			queueDrainer: func(_ context.Context, storePath string) error {
+				drained = append(drained, storePath)
+				return nil
+			},
+		}
+	}
+
+	for _, args := range [][]string{{"--help"}, {"--version"}, {"help", "list"}, {"list", "--help"}, {"show"}, {"unknown"}, {"list", "--bad-flag"}, {"completion", "bash"}, {"__complete", "list"}, {"__completeNoDesc", "list"}} {
+		root := newRootCommand(newApplication())
+		root.SetArgs(args)
+		_ = root.ExecuteContext(context.Background())
+	}
+	if len(drained) != 0 {
+		t.Fatalf("invalid or informational commands drained queues: %v", drained)
+	}
+
+	root := newRootCommand(newApplication())
+	root.SetArgs([]string{"--store", path, "registry", "path"})
+	if err := root.ExecuteContext(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(drained) != 1 || drained[0] != path {
+		t.Fatalf("drainer paths = %v, want %q", drained, path)
 	}
 }
 
@@ -164,14 +217,14 @@ func TestSubcommandFlagsAreScoped(t *testing.T) {
 
 func TestIntegrationsInstallRejectsTargetBinaryWithoutShim(t *testing.T) {
 	t.Parallel()
-	for _, args := range [][]string{{"integrations", "install", "codex", "--target-binary", "/bin/codex"}, {"install-hooks", "codex", "--target-binary", "/bin/codex"}} {
+	for _, args := range [][]string{{"integrations", "install", "codex", "--target-binary", "/bin/codex"}} {
 		root := NewRootCommand(&bytes.Buffer{}, &bytes.Buffer{})
 		root.SetArgs(args)
 		if err := root.ExecuteContext(context.Background()); !errors.Is(err, errTargetBinaryNeedsShim) {
 			t.Errorf("%v target binary error = %v", args, err)
 		}
 	}
-	for _, args := range [][]string{{"integrations", "install", "all", "--shim", "--target-binary", "/bin/agent"}, {"install-hooks", "all", "--shim", "--target-binary", "/bin/agent"}} {
+	for _, args := range [][]string{{"integrations", "install", "all", "--shim", "--target-binary", "/bin/agent"}} {
 		root := NewRootCommand(&bytes.Buffer{}, &bytes.Buffer{})
 		root.SetArgs(args)
 		if err := root.ExecuteContext(context.Background()); !errors.Is(err, errTargetBinaryWithAll) {
@@ -250,7 +303,7 @@ func TestRegistryPathAndResetCommands(t *testing.T) {
 	if err := root.ExecuteContext(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(stdout.String(), "cleared=1") {
+	if !strings.Contains(stdout.String(), "Cleared:    1") {
 		t.Fatalf("registry reset output = %q", stdout.String())
 	}
 }
@@ -267,7 +320,7 @@ func TestRegistryResetCommandRecoversMalformedState(t *testing.T) {
 	if err := root.ExecuteContext(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(stdout.String(), "cleared=0") {
+	if !strings.Contains(stdout.String(), "Cleared:    0") {
 		t.Fatalf("registry reset output = %q", stdout.String())
 	}
 	if _, err := registry.NewFileStore(path).List(context.Background(), registry.Filter{}); err != nil {
@@ -328,7 +381,7 @@ func TestListDisplaysAndFiltersZellijLocation(t *testing.T) {
 		t.Fatal(err)
 	}
 	output := stdout.String()
-	for _, expected := range []string{"MULTIPLEXER", "zellij", "work", "agents", "terminal_7"} {
+	for _, expected := range []string{"LOCATION", "zellij", "work"} {
 		if !strings.Contains(output, expected) {
 			t.Fatalf("list output missing %q:\n%s", expected, output)
 		}
@@ -375,7 +428,8 @@ func TestShowResolvesShortIDAndRequiresJSONExplicitly(t *testing.T) {
 	}
 }
 
-func TestStopSelectsOneSessionOrAll(t *testing.T) {
+func createSkippedStopSession(t *testing.T) (string, registry.Session) {
+	t.Helper()
 	path := filepath.Join(t.TempDir(), "sessions.json")
 	store := registry.NewFileStore(path)
 	present := true
@@ -387,29 +441,43 @@ func TestStopSelectsOneSessionOrAll(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	return path, session
+}
 
+func TestStopExplicitSkippedTargetReturnsReasonAndError(t *testing.T) {
+	path, session := createSkippedStopSession(t)
 	var stdout bytes.Buffer
 	root := NewRootCommand(&stdout, &bytes.Buffer{})
 	root.SetArgs([]string{"--store", path, "stop", shortRegistryID(session.ID), "--dry-run"})
-	if err := root.ExecuteContext(context.Background()); err != nil {
-		t.Fatal(err)
+	if err := root.ExecuteContext(context.Background()); !errors.Is(err, errStopTargetSkipped) {
+		t.Fatalf("single skipped stop error = %v", err)
 	}
-	if !strings.Contains(stdout.String(), "stoppable=0") || !strings.Contains(stdout.String(), "skipped=1") {
+	if !strings.Contains(stdout.String(), "process no longer exists") || !strings.Contains(stdout.String(), "skipped=1") {
 		t.Fatalf("single stop output = %q", stdout.String())
 	}
-	stdout.Reset()
-	root = NewRootCommand(&stdout, &bytes.Buffer{})
+}
+
+func TestStopAllKeepsSkippedResultsMachineReadable(t *testing.T) {
+	path, _ := createSkippedStopSession(t)
+	var stdout bytes.Buffer
+	root := NewRootCommand(&stdout, &bytes.Buffer{})
 	root.SetArgs([]string{"--store", path, "--json", "stop", "--all", "--dry-run"})
 	if err := root.ExecuteContext(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	var result map[string]any
-	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil || result["Stoppable"] != float64(0) || result["Skipped"] != float64(1) || result["dry_run"] != true {
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil || result["stoppable"] != float64(0) || result["skipped"] != float64(1) || result["dry_run"] != true {
 		t.Fatalf("stop JSON = %q, %v", stdout.String(), err)
 	}
+	if _, exists := result["Stoppable"]; exists {
+		t.Fatalf("stop JSON retained exported Go field casing: %q", stdout.String())
+	}
+}
 
+func TestStopRejectsInvalidSelection(t *testing.T) {
+	path, session := createSkippedStopSession(t)
 	for _, args := range [][]string{{"stop"}, {"stop", shortRegistryID(session.ID), "--all"}} {
-		root = NewRootCommand(&bytes.Buffer{}, &bytes.Buffer{})
+		root := NewRootCommand(&bytes.Buffer{}, &bytes.Buffer{})
 		root.SetArgs(append([]string{"--store", path}, args...))
 		if err := root.ExecuteContext(context.Background()); err == nil {
 			t.Fatalf("invalid stop selection accepted: %v", args)
@@ -430,7 +498,7 @@ func TestIntegrationsInstallStatusRemoveRoundTrip(t *testing.T) {
 	if err := root.ExecuteContext(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if strings.HasPrefix(strings.TrimSpace(stdout.String()), "{") || !strings.Contains(stdout.String(), "claude:") {
+	if strings.HasPrefix(strings.TrimSpace(stdout.String()), "{") || !strings.Contains(stdout.String(), "AGENT") || !strings.Contains(stdout.String(), "claude") {
 		t.Fatalf("install output = %q", stdout.String())
 	}
 
@@ -492,6 +560,44 @@ func TestCodexInstallAndStatusSurfaceHookTrustStep(t *testing.T) {
 	requireCodexUpdateTrustJSON(t, stdout.Bytes())
 }
 
+func TestIntegrationsInstallShowsGeneratedContentOnlyWhenRequested(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("CODEX_HOME", filepath.Join(home, ".codex"))
+	t.Setenv(registry.StateDirEnv, filepath.Join(home, "state"))
+
+	var concise bytes.Buffer
+	root := NewRootCommand(&concise, &bytes.Buffer{})
+	root.SetArgs([]string{"integrations", "install", "codex", "--binary", "/bin/agent-sessions", "--dry-run"})
+	if err := root.ExecuteContext(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(concise.String(), `"hooks":`) || !strings.Contains(concise.String(), "dry run") {
+		t.Fatalf("concise install output = %q", concise.String())
+	}
+
+	var detailed bytes.Buffer
+	root = NewRootCommand(&detailed, &bytes.Buffer{})
+	root.SetArgs([]string{"integrations", "install", "codex", "--binary", "/bin/agent-sessions", "--dry-run", "--show-content"})
+	if err := root.ExecuteContext(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(detailed.String(), "codex generated content:") || !strings.Contains(detailed.String(), `"hooks":`) {
+		t.Fatalf("detailed install output omitted generated content: %q", detailed.String())
+	}
+
+	var machine bytes.Buffer
+	root = NewRootCommand(&machine, &bytes.Buffer{})
+	root.SetArgs([]string{"--json", "integrations", "install", "codex", "--binary", "/bin/agent-sessions", "--dry-run", "--show-content"})
+	if err := root.ExecuteContext(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	var results []map[string]any
+	if err := json.Unmarshal(machine.Bytes(), &results); err != nil || len(results) != 1 {
+		t.Fatalf("install JSON is not an array: %q, %v", machine.String(), err)
+	}
+}
+
 func executeSurfaceCommand(t *testing.T, stdout *bytes.Buffer, args ...string) {
 	t.Helper()
 	stdout.Reset()
@@ -504,6 +610,7 @@ func executeSurfaceCommand(t *testing.T, stdout *bytes.Buffer, args ...string) {
 
 func requireSurfaceOutput(t *testing.T, output string, message string, fragments ...string) {
 	t.Helper()
+	output = strings.Join(strings.Fields(output), " ")
 	for _, fragment := range fragments {
 		if !strings.Contains(output, fragment) {
 			t.Fatalf("%s: %q", message, output)
@@ -538,7 +645,7 @@ func TestSetupDryRunCombinesIntegrationAndMonitor(t *testing.T) {
 	if err := root.ExecuteContext(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(stdout.String(), "codex:") || !strings.Contains(stdout.String(), "monitor:") || strings.HasPrefix(strings.TrimSpace(stdout.String()), "{") {
+	if !strings.Contains(stdout.String(), "codex") || !strings.Contains(stdout.String(), "monitor:") || strings.HasPrefix(strings.TrimSpace(stdout.String()), "{") {
 		t.Fatalf("setup output = %q", stdout.String())
 	}
 	if _, err := os.Stat(filepath.Join(home, ".codex", "hooks.json")); !os.IsNotExist(err) {
@@ -586,7 +693,7 @@ func TestMonitorLifecycleCommandsUseHumanOutputUnlessJSONRequested(t *testing.T)
 		if err := root.ExecuteContext(context.Background()); err != nil {
 			t.Fatalf("%v failed: %v", args, err)
 		}
-		if strings.HasPrefix(strings.TrimSpace(stdout.String()), "{") || !strings.Contains(stdout.String(), "manager=") {
+		if strings.HasPrefix(strings.TrimSpace(stdout.String()), "{") || !strings.Contains(stdout.String(), "Manager:") {
 			t.Fatalf("%v default output = %q", args, stdout.String())
 		}
 	}
@@ -608,7 +715,7 @@ func TestMonitorRunOnceSupportsHumanAndJSONOutput(t *testing.T) {
 	var human bytes.Buffer
 	root := NewRootCommand(&human, &bytes.Buffer{})
 	root.SetArgs([]string{"--store", storePath, "monitor", "run", "--once"})
-	if err := root.ExecuteContext(context.Background()); err != nil {
+	if err := root.ExecuteContext(context.Background()); err != nil && !errors.Is(err, errObserverRunDegraded) {
 		t.Fatal(err)
 	}
 	if strings.HasPrefix(strings.TrimSpace(human.String()), "{") || !strings.Contains(human.String(), "processes=") {
@@ -618,7 +725,7 @@ func TestMonitorRunOnceSupportsHumanAndJSONOutput(t *testing.T) {
 	var machine bytes.Buffer
 	root = NewRootCommand(&machine, &bytes.Buffer{})
 	root.SetArgs([]string{"--store", storePath, "--json", "monitor", "run", "--once"})
-	if err := root.ExecuteContext(context.Background()); err != nil {
+	if err := root.ExecuteContext(context.Background()); err != nil && !errors.Is(err, errObserverRunDegraded) {
 		t.Fatal(err)
 	}
 	var result map[string]any
@@ -638,7 +745,7 @@ func TestDoctorIsConciseUnlessVerbose(t *testing.T) {
 	root := NewRootCommand(&concise, &bytes.Buffer{})
 	root.SetArgs([]string{"--store", path, "doctor"})
 	_ = root.ExecuteContext(context.Background())
-	if strings.Contains(concise.String(), "SESSION_START") || strings.Contains(concise.String(), "integration.codex") {
+	if strings.Contains(concise.String(), "RUN/IDLE") || strings.Contains(concise.String(), "integration.codex") {
 		t.Fatalf("concise doctor contains full matrix:\n%s", concise.String())
 	}
 	installRoot := NewRootCommand(&bytes.Buffer{}, &bytes.Buffer{})
@@ -650,7 +757,7 @@ func TestDoctorIsConciseUnlessVerbose(t *testing.T) {
 	root = NewRootCommand(&concise, &bytes.Buffer{})
 	root.SetArgs([]string{"--store", path, "doctor"})
 	_ = root.ExecuteContext(context.Background())
-	if !strings.Contains(concise.String(), "integration.codex") || strings.Contains(concise.String(), "SESSION_START") {
+	if !strings.Contains(concise.String(), "integration.codex") || strings.Contains(concise.String(), "RUN/IDLE") {
 		t.Fatalf("concise doctor omitted installed integration or added matrix:\n%s", concise.String())
 	}
 
@@ -658,7 +765,7 @@ func TestDoctorIsConciseUnlessVerbose(t *testing.T) {
 	root = NewRootCommand(&verbose, &bytes.Buffer{})
 	root.SetArgs([]string{"--store", path, "doctor", "--verbose"})
 	_ = root.ExecuteContext(context.Background())
-	if !strings.Contains(verbose.String(), "SESSION_START") || !strings.Contains(verbose.String(), "integration.codex") {
+	if !strings.Contains(verbose.String(), "START") || !strings.Contains(verbose.String(), "integration.codex") {
 		t.Fatalf("verbose doctor omitted details:\n%s", verbose.String())
 	}
 

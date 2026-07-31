@@ -17,6 +17,30 @@ import (
 
 const expectedSessionSchemaVersion = 2
 
+func TestJSONWritersPreservePrettyDocumentsAndSingleLineStreams(t *testing.T) {
+	t.Parallel()
+	value := map[string]any{"outer": map[string]bool{"value": true}}
+
+	var stdout bytes.Buffer
+	app := &application{stdout: &stdout}
+	if err := app.writeJSON(value); err != nil {
+		t.Fatal(err)
+	}
+	wantDocument := "{\n  \"outer\": {\n    \"value\": true\n  }\n}\n"
+	if stdout.String() != wantDocument {
+		t.Fatalf("formatted JSON = %q, want %q", stdout.String(), wantDocument)
+	}
+
+	stdout.Reset()
+	if err := app.writeJSONLine(value); err != nil {
+		t.Fatal(err)
+	}
+	wantLine := "{\"outer\":{\"value\":true}}\n"
+	if stdout.String() != wantLine {
+		t.Fatalf("JSON line = %q, want %q", stdout.String(), wantLine)
+	}
+}
+
 //nolint:cyclop // assertions independently verify each report dimension
 func TestPrepareReportCarriesIndependentDimensions(t *testing.T) {
 	t.Parallel()
@@ -368,6 +392,24 @@ func TestPrepareReportProcessEvidenceRequiresCompleteIdentity(t *testing.T) {
 	}
 }
 
+func TestPrepareReportProcessEvidenceDoesNotCarryNativeAuthority(t *testing.T) {
+	t.Parallel()
+	process := processinfo.Process{PID: 42, PPID: 10, ProcessGroupID: 42, StartIdentity: "boot:42", Executable: "/usr/bin/codex", CWD: "/work", TTY: "/dev/pts/4"}
+	prepared, err := (&application{}).prepareReport(nil, reportOptions{
+		harness: "codex", presence: "live", evidence: "process", pid: process.PID, event: "process.start",
+	}, reportRuntimeContext{processes: []processinfo.Process{process}, defaultObservedAt: time.Now().UTC()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	observation := prepared.observation
+	if observation.Source != registry.ObservationSourceProcess || observation.ActivityAuthoritative != nil || observation.Activity != nil || observation.NativeEvent != "" {
+		t.Fatalf("process observation retained native fields: %#v", observation)
+	}
+	if err := registry.ValidateObservation(observation); err != nil {
+		t.Fatalf("process observation is invalid: %v", err)
+	}
+}
+
 func TestShimProcessReportsInferIdentityAndTransitionState(t *testing.T) {
 	t.Parallel()
 
@@ -509,6 +551,22 @@ func TestReportCommandDefaultsToHumanOutput(t *testing.T) {
 	}
 }
 
+func TestReportHumanOutputDistinguishesReportedAndEffectiveActivity(t *testing.T) {
+	t.Parallel()
+	var stdout bytes.Buffer
+	root := NewRootCommand(&stdout, &bytes.Buffer{})
+	root.SetArgs([]string{"--store", filepath.Join(t.TempDir(), "sessions.json"), "report", "codex", "--session-id", "activity", "--event", "turn_complete", "--activity", "waiting", "--no-tmux"})
+	if err := root.ExecuteContext(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	output := stdout.String()
+	for _, expected := range []string{"REPORTED", "EFFECTIVE", "AUTHORITATIVE", "waiting", "unknown", "no"} {
+		if !strings.Contains(output, expected) {
+			t.Fatalf("report output omitted %q: %s", expected, output)
+		}
+	}
+}
+
 func TestReportCommandEmitsJSONOnlyWhenRequested(t *testing.T) {
 	t.Parallel()
 	var stdout bytes.Buffer
@@ -551,7 +609,7 @@ func TestReportJSONCoversIgnoredAndQueuedResults(t *testing.T) {
 	}
 }
 
-func TestGetCommandUsesHumanOutputUnlessJSONRequested(t *testing.T) {
+func TestShowCommandUsesHumanOutputUnlessJSONRequested(t *testing.T) {
 	t.Parallel()
 	path := t.TempDir() + "/sessions.json"
 	store := registry.NewFileStore(path)
@@ -568,7 +626,7 @@ func TestGetCommandUsesHumanOutputUnlessJSONRequested(t *testing.T) {
 
 	var human bytes.Buffer
 	root := NewRootCommand(&human, &bytes.Buffer{})
-	root.SetArgs([]string{"--store", path, "get", session.ID})
+	root.SetArgs([]string{"--store", path, "show", session.ID})
 	if err := root.ExecuteContext(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -578,7 +636,7 @@ func TestGetCommandUsesHumanOutputUnlessJSONRequested(t *testing.T) {
 
 	var machine bytes.Buffer
 	root = NewRootCommand(&machine, &bytes.Buffer{})
-	root.SetArgs([]string{"--store", path, "--json", "get", session.ID})
+	root.SetArgs([]string{"--store", path, "--json", "show", session.ID})
 	if err := root.ExecuteContext(context.Background()); err != nil {
 		t.Fatal(err)
 	}

@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -47,9 +49,10 @@ type hookExplanation struct {
 }
 
 type screenExplanation struct {
-	Evaluated bool                `json:"evaluated"`
-	Decision  agentstate.Decision `json:"decision"`
-	Error     string              `json:"error,omitempty"`
+	Evaluated         bool                `json:"evaluated"`
+	UnavailableReason string              `json:"unavailable_reason,omitempty"`
+	Decision          agentstate.Decision `json:"decision"`
+	Error             string              `json:"error,omitempty"`
 }
 
 type explainResult struct {
@@ -103,7 +106,14 @@ func (app *application) runDetect(command *cobra.Command, options detectOptions)
 	if app.outputJSON {
 		return app.writeJSON(decision)
 	}
-	return app.writef("activity=%s reason=%s rule=%s manifest=%s version=%d warning=%s\n", decision.Activity, decision.Reason, decision.RuleID, decision.ManifestSource, decision.ManifestVersion, decision.Warning)
+	return app.writeHumanDetails([]humanDetail{
+		{label: "Activity", value: string(decision.Activity)},
+		{label: "Reason", value: decision.Reason},
+		{label: "Rule", value: decision.RuleID},
+		{label: "Manifest", value: decision.ManifestSource},
+		{label: "Manifest version", value: strconv.Itoa(decision.ManifestVersion)},
+		{label: "Warning", value: decision.Warning},
+	})
 }
 
 func readScreenInput(command *cobra.Command, path string) ([]byte, error) {
@@ -194,21 +204,65 @@ func (app *application) writeExplanation(ctx context.Context, session registry.S
 		result.Hook.ObservedAt = native.ObservedAt
 		result.Hook.Age = now.Sub(native.ObservedAt).Round(time.Millisecond).String()
 	}
-	if authority == agentstate.AuthorityScreen {
-		decision, evaluated, screenErr := evaluateLiveSessionScreen(ctx, session, configDir)
-		result.Screen = screenExplanation{Evaluated: evaluated, Decision: decision}
-		if screenErr != nil {
-			result.Screen.Error = screenErr.Error()
-			result.FinalActivity = string(registry.ActivityUnknown)
-		}
-		if evaluated {
-			result.FinalActivity = string(decision.Activity)
-		}
+	screen, finalActivity, screenErr := explanationScreen(ctx, session, configDir, authority, result.FinalActivity)
+	result.Screen = screen
+	result.FinalActivity = finalActivity
+	if err := app.writeExplanationResult(result); err != nil {
+		return err
 	}
+	if screenErr != nil {
+		return fmt.Errorf("evaluate live screen: %w", screenErr)
+	}
+	return nil
+}
+
+func explanationScreen(ctx context.Context, session registry.Session, configDir string, authority agentstate.Authority, currentActivity string) (screenExplanation, string, error) {
+	if authority != agentstate.AuthorityScreen {
+		return screenExplanation{}, currentActivity, nil
+	}
+	if strings.TrimSpace(session.Multiplexer.PaneID) == "" {
+		return screenExplanation{UnavailableReason: "no_live_pane"}, string(registry.ActivityUnknown), nil
+	}
+	decision, evaluated, err := evaluateLiveSessionScreen(ctx, session, configDir)
+	screen := screenExplanation{Evaluated: evaluated, Decision: decision}
+	if err != nil {
+		screen.Error = err.Error()
+		return screen, string(registry.ActivityUnknown), err
+	}
+	if evaluated {
+		return screen, string(decision.Activity), nil
+	}
+	return screen, currentActivity, nil
+}
+
+func (app *application) writeExplanationResult(result explainResult) error {
 	if app.outputJSON {
 		return app.writeJSON(result)
 	}
-	return app.writef("session=%s harness=%s pane=%s process_match=%s authority=%s fallback=%s final_activity=%s registry_activity=%s hook_event=%s hook_integration=%s hook_age=%s hook_fresh=%t hook_reason=%s screen_activity=%s screen_reason=%s screen_rule=%s manifest=%s manifest_version=%d screen_warning=%s screen_error=%s\n", result.SessionID, result.Harness, result.PaneID, result.ProcessMatch, result.SelectedAuthority, result.FallbackReason, result.FinalActivity, activityString(result.RegistryActivity), result.Hook.Event, result.Hook.Integration, result.Hook.Age, result.Hook.Fresh, result.Hook.FreshnessReason, result.Screen.Decision.Activity, result.Screen.Decision.Reason, result.Screen.Decision.RuleID, result.Screen.Decision.ManifestSource, result.Screen.Decision.ManifestVersion, result.Screen.Decision.Warning, result.Screen.Error)
+	return app.writeHumanDetails([]humanDetail{
+		{label: "Session", value: result.SessionID},
+		{label: "Agent", value: string(result.Harness)},
+		{label: "Pane", value: result.PaneID},
+		{label: "Process match", value: result.ProcessMatch},
+		{label: "Authority", value: string(result.SelectedAuthority)},
+		{label: "Fallback", value: result.FallbackReason},
+		{label: "Final activity", value: result.FinalActivity},
+		{label: "Registry activity", value: activityString(result.RegistryActivity)},
+		{label: "Hook event", value: result.Hook.Event},
+		{label: "Hook integration", value: result.Hook.Integration},
+		{label: "Hook age", value: result.Hook.Age},
+		{label: "Hook fresh", value: strconv.FormatBool(result.Hook.Fresh)},
+		{label: "Hook reason", value: result.Hook.FreshnessReason},
+		{label: "Screen evaluated", value: strconv.FormatBool(result.Screen.Evaluated)},
+		{label: "Screen unavailable", value: result.Screen.UnavailableReason},
+		{label: "Screen activity", value: string(result.Screen.Decision.Activity)},
+		{label: "Screen reason", value: result.Screen.Decision.Reason},
+		{label: "Screen rule", value: result.Screen.Decision.RuleID},
+		{label: "Manifest", value: result.Screen.Decision.ManifestSource},
+		{label: "Manifest version", value: strconv.Itoa(result.Screen.Decision.ManifestVersion)},
+		{label: "Screen warning", value: result.Screen.Decision.Warning},
+		{label: "Screen error", value: result.Screen.Error},
+	})
 }
 
 func processMatchExplanation(session registry.Session) string {

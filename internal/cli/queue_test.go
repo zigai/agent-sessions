@@ -142,7 +142,7 @@ func TestQueueStatusUsesHumanOutputUnlessJSONRequested(t *testing.T) {
 	if err := root.ExecuteContext(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(human.String(), "pending=") || strings.HasPrefix(strings.TrimSpace(human.String()), "{") {
+	if !strings.HasPrefix(human.String(), "Root:") || !strings.Contains(human.String(), "Pending:") || strings.HasPrefix(strings.TrimSpace(human.String()), "{") {
 		t.Fatalf("expected human queue status, got %q", human.String())
 	}
 
@@ -155,5 +155,18 @@ func TestQueueStatusUsesHumanOutputUnlessJSONRequested(t *testing.T) {
 	var status reportqueue.StatusResult
 	if err := json.Unmarshal(machine.Bytes(), &status); err != nil {
 		t.Fatalf("expected JSON queue status: %v; output=%q", err, machine.String())
+	}
+}
+
+func TestDrainQueueReportsHumanResult(t *testing.T) {
+	t.Parallel()
+	var stdout bytes.Buffer
+	root := NewRootCommand(&stdout, &bytes.Buffer{})
+	root.SetArgs([]string{"--store", filepath.Join(t.TempDir(), "sessions.json"), drainQueueCommandName})
+	if err := root.ExecuteContext(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout.String(), "Processed:") || !strings.Contains(stdout.String(), "Succeeded:") {
+		t.Fatalf("drain output = %q", stdout.String())
 	}
 }

@@ -22,6 +22,7 @@ import (
 
 var (
 	errManageStopAllFailed = errors.New("one or more sessions failed to stop")
+	errStopTargetSkipped   = errors.New("session was not stopped")
 	errUnknownStopMethod   = errors.New("unknown stop method")
 )
 
@@ -54,9 +55,12 @@ type stopTarget struct {
 	PID                            int
 }
 type manageStopAllResult struct {
-	Stoppable, Stopped, Skipped, Failed int
-	DryRun                              bool                      `json:"dry_run,omitempty"`
-	Results                             []manageStopSessionResult `json:"results,omitempty"`
+	Stoppable int                       `json:"stoppable"`
+	Stopped   int                       `json:"stopped"`
+	Skipped   int                       `json:"skipped"`
+	Failed    int                       `json:"failed"`
+	DryRun    bool                      `json:"dry_run,omitempty"`
+	Results   []manageStopSessionResult `json:"results,omitempty"`
 }
 type manageStopSessionResult struct {
 	ID       string             `json:"id"`
@@ -109,13 +113,7 @@ func (defaultSessionStopSignaler) SendProcessInterrupt(pid int) error {
 	return nil
 }
 
-func (app *application) newManageCommand() *cobra.Command {
-	c := &cobra.Command{Use: "manage", Short: "Manage registry and agent sessions", Hidden: true}
-	c.AddCommand(app.newManageResetCommand(), app.newManageStopAllCommand())
-	return c
-}
-
-func (app *application) newManageResetCommand() *cobra.Command {
+func (app *application) newRegistryResetCommand() *cobra.Command {
 	return &cobra.Command{Use: "reset", Short: "Reset the registry state file", RunE: func(cmd *cobra.Command, _ []string) error {
 		s := app.store()
 		r, e := s.Reset(cmd.Context())
@@ -126,29 +124,12 @@ func (app *application) newManageResetCommand() *cobra.Command {
 		if app.outputJSON {
 			return app.writeJSON(o)
 		}
-		return app.writef("cleared=%d remaining=%d path=%s\n", o.Cleared, o.Remaining, o.Path)
+		return app.writeHumanDetails([]humanDetail{
+			{label: "Cleared", value: strconv.Itoa(o.Cleared)},
+			{label: "Remaining", value: strconv.Itoa(o.Remaining)},
+			{label: "Path", value: o.Path},
+		})
 	}}
-}
-
-func (app *application) newManageStopAllCommand() *cobra.Command {
-	o := manageStopAllOptions{}
-	c := &cobra.Command{Use: "stop-all", Short: "Send graceful stop signals to live sessions", SilenceUsage: true, RunE: func(cmd *cobra.Command, _ []string) error {
-		r, e := app.runManageStopAll(cmd.Context(), o)
-		if we := app.writeManageStopAllResult(r); we != nil {
-			return we
-		}
-		return e
-	}}
-	c.Flags().BoolVar(&o.dryRun, "dry-run", false, "show sessions without sending signals")
-	return c
-}
-
-func (app *application) runManageStopAll(ctx context.Context, o manageStopAllOptions) (manageStopAllResult, error) {
-	ss, e := app.store().List(ctx, registry.Filter{Presence: registry.PresenceLive})
-	if e != nil {
-		return manageStopAllResult{}, fmt.Errorf("list live sessions: %w", e)
-	}
-	return app.runManageStopSessions(ctx, ss, o)
 }
 
 func (app *application) runStop(ctx context.Context, args []string, all bool, dryRun bool) error {
@@ -169,6 +150,13 @@ func (app *application) runStop(ctx context.Context, args []string, all bool, dr
 	result, err := app.runManageStopSessions(ctx, sessions, manageStopAllOptions{dryRun: dryRun})
 	if writeErr := app.writeManageStopAllResult(result); writeErr != nil {
 		return writeErr
+	}
+	if err == nil && !all && result.Stoppable == 0 && result.Stopped == 0 && result.Skipped > 0 {
+		reason := "no safe stop target"
+		if len(result.Results) > 0 && result.Results[0].Reason != "" {
+			reason = result.Results[0].Reason
+		}
+		return fmt.Errorf("%w: %s", errStopTargetSkipped, reason)
 	}
 	return err
 }
@@ -336,8 +324,32 @@ func sendStopSignal(ctx context.Context, s sessionStopSignaler, t stopTarget) er
 }
 
 func (app *application) writeManageStopAllResult(r manageStopAllResult) error {
+	const (
+		stopIDWidth       = 16
+		stopAgentWidth    = 10
+		stopPresenceWidth = 8
+		stopActivityWidth = 8
+		stopStatusWidth   = 10
+		stopMethodWidth   = 14
+		stopTargetWidth   = 12
+		stopDetailWidth   = 28
+	)
 	if app.outputJSON {
 		return app.writeJSON(r)
 	}
-	return app.writef("stoppable=%d stopped=%d skipped=%d failed=%d\n", r.Stoppable, r.Stopped, r.Skipped, r.Failed)
+	rows := make([][]string, 0, len(r.Results))
+	for _, result := range r.Results {
+		detail := result.Reason
+		if result.Error != "" {
+			detail = result.Error
+		}
+		rows = append(rows, []string{result.ID, string(result.Harness), string(result.Presence), activityString(result.Activity), result.Status, result.Method, result.Target, detail})
+	}
+	if err := app.writeHumanTable(
+		[]humanColumn{{heading: "ID", width: stopIDWidth}, {heading: "AGENT", width: stopAgentWidth}, {heading: "PRESENCE", width: stopPresenceWidth}, {heading: "ACTIVITY", width: stopActivityWidth}, {heading: "STATUS", width: stopStatusWidth}, {heading: "METHOD", width: stopMethodWidth}, {heading: "TARGET", width: stopTargetWidth}, {heading: "DETAIL", width: stopDetailWidth}},
+		rows,
+	); err != nil {
+		return err
+	}
+	return app.writef("Summary: stoppable=%d stopped=%d skipped=%d failed=%d\n", r.Stoppable, r.Stopped, r.Skipped, r.Failed)
 }

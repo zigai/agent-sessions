@@ -147,3 +147,14 @@ func TestFormatWatchPlainUsesNullableActivity(t *testing.T) {
 		t.Fatalf("unexpected watch plain format: %q", got)
 	}
 }
+
+func TestFormatEmptyWatchSnapshotIsExplicit(t *testing.T) {
+	t.Parallel()
+	event := watchEvent{Time: time.Unix(0, 0).UTC(), Action: watchActionSnapshotEmpty}
+	for _, output := range []string{formatWatchPlainEvent(event), formatWatchTableEvent(event)} {
+		if !strings.Contains(output, "snapshot_empty") || !strings.Contains(output, "no sessions") || strings.Contains(output, "null") || strings.Contains(output, "session=") {
+			t.Fatalf("empty snapshot output = %q", output)
+		}
+		assertHumanLinesBounded(t, output)
+	}
+}

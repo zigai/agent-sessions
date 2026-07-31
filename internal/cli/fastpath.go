@@ -41,13 +41,21 @@ func tryExecuteFastPath(ctx context.Context, args []string, stdin io.Reader, std
 		if !ok || e != nil {
 			return ok, e
 		}
-		return true, app.runReport(ctx, stdin, o)
-	case hookCommandName, agyHookCommandName:
+		e = app.runReport(ctx, stdin, o)
+		if e == nil && !o.queue {
+			app.kickQueueDrainer(ctx, app.store().Path())
+		}
+		return true, e
+	case hookCommandName:
 		h, o, ok, e := parseFastManagedHookOptions(c, a)
 		if !ok || e != nil {
 			return ok, e
 		}
-		return true, app.runManagedHook(ctx, stdin, h, o)
+		e = app.runManagedHook(ctx, stdin, h, o)
+		if e == nil && !o.queue {
+			app.kickQueueDrainer(ctx, app.store().Path())
+		}
+		return true, e
 	}
 	return false, nil
 }
@@ -69,7 +77,7 @@ func splitFastPathArgs(args []string) (fastPathGlobals, string, []string, bool) 
 			g.outputJSON = true
 		case strings.HasPrefix(a, "-"):
 			return g, "", nil, false
-		case a == reportCommandName || a == hookCommandName || a == agyHookCommandName:
+		case a == reportCommandName || a == hookCommandName:
 			return g, a, args[i+1:], true
 		default:
 			return g, "", nil, false
@@ -111,9 +119,6 @@ func parseFastReportOptions(args []string) (reportOptions, bool, error) {
 			return args[i], nil
 		}
 		switch f.name {
-		case "--harness":
-			v, e = need()
-			s.o.harness = v
 		case "--presence":
 			v, e = need()
 			s.o.presence = v
@@ -231,13 +236,9 @@ func newFastPathFlag(arg string) fastPathFlag {
 	return fastPathFlag{name: n, inlineValue: v, hasInlineValue: h}
 }
 
-//nolint:cyclop // fast-path parsing validates each flag form explicitly
 func parseFastManagedHookOptions(command string, args []string) (string, managedHookOptions, bool, error) {
 	var o managedHookOptions
 	h := ""
-	if command == agyHookCommandName {
-		h = "agy"
-	}
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		if !strings.HasPrefix(a, "--") {
@@ -279,13 +280,4 @@ func fastValue(args []string, i int, f fastPathFlag) (string, int, error) {
 		return "", i, fmt.Errorf("%w for %s", errFastPathMissingValue, f.name)
 	}
 	return args[i+1], i + 1, nil
-}
-
-func kickQueueDrainerForArgs(args []string) error {
-	for _, arg := range args {
-		if arg == drainQueueCommandName || arg == queueStatusCommandName {
-			return nil
-		}
-	}
-	return kickQueueDrainer(context.Background(), "")
 }

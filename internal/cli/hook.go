@@ -6,9 +6,6 @@ package cli
 // one-way `agent-sessions report` command directly. Keep this file as CLI
 // transport glue; harness protocol rules belong in pkg/harness.
 //
-// The agy-hook command remains hidden as a compatibility alias for
-// already-installed Antigravity plugins.
-
 import (
 	"context"
 	"encoding/json"
@@ -46,25 +43,6 @@ func (app *application) newHookCommand() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&options.event, "event", "", "native hook event name")
-	cmd.Flags().BoolVar(&options.queue, "queue", false, "durably queue the report side effect")
-	_ = cmd.Flags().MarkHidden("queue")
-
-	return cmd
-}
-
-func (app *application) newAgyHookCommand() *cobra.Command {
-	options := managedHookOptions{}
-
-	cmd := &cobra.Command{
-		Use:    "agy-hook",
-		Short:  "Run the managed Antigravity CLI session hook",
-		Hidden: true,
-		Args:   cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			return app.runManagedHook(cmd.Context(), cmd.InOrStdin(), string(registry.HarnessAgy), options)
-		},
-	}
-	cmd.Flags().StringVar(&options.event, "event", "", "Antigravity hook event name")
 	cmd.Flags().BoolVar(&options.queue, "queue", false, "durably queue the report side effect")
 	_ = cmd.Flags().MarkHidden("queue")
 

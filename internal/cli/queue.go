@@ -42,7 +42,14 @@ func (app *application) newDrainQueueCommand() *cobra.Command {
 		if app.outputJSON {
 			return app.writeJSON(r)
 		}
-		return nil
+		return app.writeHumanDetails([]humanDetail{
+			{label: "Processed", value: strconv.Itoa(r.Processed)},
+			{label: "Succeeded", value: strconv.Itoa(r.Succeeded)},
+			{label: "Retried", value: strconv.Itoa(r.Retried)},
+			{label: "Dead", value: strconv.Itoa(r.Dead)},
+			{label: "Recovered", value: strconv.Itoa(r.Recovered)},
+			{label: "Locked", value: strconv.FormatBool(r.Locked)},
+		})
 	}}
 	c.Flags().IntVar(&maxItems, "max-items", 0, "maximum queue items")
 	c.Flags().DurationVar(&lease, "lease-timeout", defaultQueueLeaseTimeout, "processing lease timeout")
@@ -58,7 +65,17 @@ func (app *application) newQueueStatusCommand() *cobra.Command {
 		if app.outputJSON {
 			return app.writeJSON(s)
 		}
-		return app.writef("pending=%d ready=%d deferred=%d processing=%d retries=%d stale-leases=%d dead=%d invalid=%d root=%s\n", s.Pending, s.Ready, s.Deferred, s.Processing, s.Retries, s.StaleLeases, s.Dead, s.Invalid, s.Root)
+		return app.writeHumanDetails([]humanDetail{
+			{label: "Root", value: s.Root},
+			{label: "Pending", value: strconv.Itoa(s.Pending)},
+			{label: "Ready", value: strconv.Itoa(s.Ready)},
+			{label: "Deferred", value: strconv.Itoa(s.Deferred)},
+			{label: "Processing", value: strconv.Itoa(s.Processing)},
+			{label: "Retries", value: strconv.Itoa(s.Retries)},
+			{label: "Stale leases", value: strconv.Itoa(s.StaleLeases)},
+			{label: "Dead", value: strconv.Itoa(s.Dead)},
+			{label: "Invalid", value: strconv.Itoa(s.Invalid)},
+		})
 	}}
 }
 
@@ -159,7 +176,11 @@ func (app *application) queuedReportTmux(ctx context.Context, q reportqueue.Queu
 }
 
 func (app *application) kickQueueDrainer(ctx context.Context, path string) {
-	if err := kickQueueDrainer(ctx, path); err != nil {
+	drainer := app.queueDrainer
+	if drainer == nil {
+		drainer = kickQueueDrainer
+	}
+	if err := drainer(ctx, path); err != nil {
 		app.warnf("warning: %v\n", err)
 	}
 }

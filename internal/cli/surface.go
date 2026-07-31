@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -30,6 +31,7 @@ var (
 type integrationCommandOptions struct {
 	binary, targetBinary string
 	dryRun, force, shim  bool
+	showContent          bool
 }
 
 type setupResult struct {
@@ -63,7 +65,7 @@ func (app *application) newSetupCommand() *cobra.Command {
 			if app.outputJSON {
 				return app.writeJSON(result)
 			}
-			if err := app.writeIntegrationResults(integrations); err != nil {
+			if err := app.writeIntegrationResults(integrations, false); err != nil {
 				return err
 			}
 			return app.writef("monitor: %s\nnext: agent-sessions list\n", monitor.Message)
@@ -96,7 +98,7 @@ func (app *application) newIntegrationsInstallCommand() *cobra.Command {
 			if writeErr := app.writeJSON(results); writeErr != nil {
 				return writeErr
 			}
-		} else if writeErr := app.writeIntegrationResults(results); writeErr != nil {
+		} else if writeErr := app.writeIntegrationResults(results, options.showContent); writeErr != nil {
 			return writeErr
 		}
 		return err
@@ -107,6 +109,7 @@ func (app *application) newIntegrationsInstallCommand() *cobra.Command {
 	flags.BoolVar(&options.dryRun, "dry-run", false, "show changes without writing")
 	flags.BoolVar(&options.force, "force", false, "replace a foreign integration file")
 	flags.BoolVar(&options.shim, "shim", false, "install the documented process-lifetime fallback")
+	flags.BoolVar(&options.showContent, "show-content", false, "print generated integration content")
 	return command
 }
 
@@ -131,7 +134,7 @@ func (app *application) newIntegrationsRemoveCommand() *cobra.Command {
 			if writeErr := app.writeJSON(results); writeErr != nil {
 				return writeErr
 			}
-		} else if writeErr := app.writeIntegrationResults(results); writeErr != nil {
+		} else if writeErr := app.writeIntegrationResults(results, false); writeErr != nil {
 			return writeErr
 		}
 		return errors.Join(failures...)
@@ -187,27 +190,23 @@ func inspectIntegrationStatuses(ctx context.Context, harnesses []registry.Harnes
 }
 
 func (app *application) writeIntegrationStatuses(results []install.IntegrationStatus) error {
+	const (
+		integrationStatusAgentWidth   = 12
+		integrationStatusStateWidth   = 10
+		integrationStatusMessageWidth = 60
+		integrationStatusNextWidth    = 32
+	)
 	if app.outputJSON {
 		return app.writeJSON(results)
 	}
+	rows := make([][]string, 0, len(results))
 	for _, result := range results {
-		if err := app.writeIntegrationStatus(result); err != nil {
-			return err
-		}
+		rows = append(rows, []string{string(result.Harness), string(result.Status), result.Message, result.NextStep})
 	}
-
-	return nil
-}
-
-func (app *application) writeIntegrationStatus(result install.IntegrationStatus) error {
-	if err := app.writef("%s\t%s\t%s\n", result.Harness, result.Status, result.Message); err != nil {
-		return err
-	}
-	if result.NextStep != "" {
-		return app.writef("  next: %s\n", result.NextStep)
-	}
-
-	return nil
+	return app.writeWrappedHumanTable(
+		[]humanColumn{{heading: "AGENT", width: integrationStatusAgentWidth}, {heading: "STATUS", width: integrationStatusStateWidth}, {heading: "MESSAGE", width: integrationStatusMessageWidth}, {heading: "NEXT", width: integrationStatusNextWidth}},
+		rows,
+	)
 }
 
 func (app *application) installIntegrations(ctx context.Context, args []string, options integrationCommandOptions) ([]install.Result, error) {
@@ -240,21 +239,42 @@ func failedIntegrationResult(harnessID registry.Harness, message string, err err
 	}
 }
 
-func (app *application) writeIntegrationResults(results []install.Result) error {
+func (app *application) writeIntegrationResults(results []install.Result, showContent bool) error {
+	const (
+		integrationResultAgentWidth   = 12
+		integrationResultChangedWidth = 7
+		integrationResultPathWidth    = 36
+		integrationResultMessageWidth = 59
+	)
+	rows := make([][]string, 0, len(results))
 	for _, result := range results {
+		message := result.Message
 		if result.Error != "" {
-			if err := app.writef("%s: %s\n", result.Harness, result.Error); err != nil {
-				return err
-			}
-			continue
-		}
-		if err := app.writef("%s: %s (%s)\n", result.Harness, result.Message, result.Path); err != nil {
-			return err
+			message = result.Error
 		}
 		if result.NextStep != "" {
-			if err := app.writef("  next: %s\n", result.NextStep); err != nil {
-				return err
-			}
+			message += "; next: " + result.NextStep
+		}
+		rows = append(rows, []string{result.Harness, strconv.FormatBool(result.Changed), result.Path, message})
+	}
+	if err := app.writeWrappedHumanTable(
+		[]humanColumn{{heading: "AGENT", width: integrationResultAgentWidth}, {heading: "CHANGED", width: integrationResultChangedWidth}, {heading: "PATH", width: integrationResultPathWidth}, {heading: "RESULT", width: integrationResultMessageWidth}},
+		rows,
+	); err != nil {
+		return err
+	}
+	if !showContent {
+		return nil
+	}
+	for _, result := range results {
+		if result.Snippet == "" {
+			continue
+		}
+		if err := app.writef("\n%s generated content:\n", result.Harness); err != nil {
+			return err
+		}
+		if err := app.writeln(result.Snippet); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -295,8 +315,8 @@ func selectedHarnesses(args []string, emptyMeansAll bool) ([]registry.Harness, e
 
 func (app *application) newMonitorCommand() *cobra.Command {
 	command := &cobra.Command{Use: monitorCommand, Short: "Manage background process tracking"}
-	run := app.newObserveCommand()
-	run.Use, run.Short, run.Hidden = "run", "Run process and multiplexer reconciliation", false
+	run := app.newMonitorRunCommand()
+	run.Short = "Run process and multiplexer reconciliation"
 	command.AddCommand(run, app.newMonitorEnableCommand(), app.newMonitorDisableCommand(), app.newMonitorStatusCommand())
 	return command
 }
@@ -367,15 +387,21 @@ func (app *application) writeServiceResult(result service.Result) error {
 	if result.Installed {
 		state = "enabled"
 	}
-	return app.writef("%s: %s (manager=%s path=%s current=%t running=%t)\n", result.Message, state, result.Manager, result.ManagedPath, result.Current, result.Running)
+	return app.writeHumanDetails([]humanDetail{
+		{label: "State", value: state},
+		{label: "Manager", value: result.Manager},
+		{label: "Path", value: result.ManagedPath},
+		{label: "Version", value: strconv.Itoa(result.ManagedVersion)},
+		{label: "Current", value: strconv.FormatBool(result.Current)},
+		{label: "Running", value: strconv.FormatBool(result.Running)},
+		{label: "Changed", value: strconv.FormatBool(result.Changed)},
+		{label: "Message", value: result.Message},
+	})
 }
 
 func (app *application) newRegistryCommand() *cobra.Command {
 	command := &cobra.Command{Use: registryCommandName, Short: "Inspect or clean registry storage"}
-	path := app.newPathCommand()
-	path.Hidden = false
-	reset := app.newManageResetCommand()
-	command.AddCommand(path, reset, app.newRegistryCleanCommand())
+	command.AddCommand(app.newRegistryPathCommand(), app.newRegistryResetCommand(), app.newRegistryCleanCommand())
 	return command
 }
 
@@ -454,13 +480,15 @@ func (app *application) resolveSession(ctx context.Context, reference string) (r
 }
 
 func (app *application) newWatchCommand() *cobra.Command {
-	options := listOptions{watch: true}
+	options := listOptions{}
+	var noSnapshot bool
+	var watchFormat string
 	command := &cobra.Command{Use: "watch", Short: "Stream session changes", RunE: func(cmd *cobra.Command, _ []string) error {
 		filter, err := buildFilter(options)
 		if err != nil {
 			return err
 		}
-		return app.runWatch(cmd.Context(), watchOptions{filter: filter, noSnapshot: options.noSnapshot, format: options.watchFormat, formatSet: cmd.Flags().Changed("format")})
+		return app.runWatch(cmd.Context(), watchOptions{filter: filter, noSnapshot: noSnapshot, format: watchFormat, formatSet: cmd.Flags().Changed("format")})
 	}}
 	flags := command.Flags()
 	flags.StringVar(&options.harness, "agent", "", "filter by agent")
@@ -468,8 +496,8 @@ func (app *application) newWatchCommand() *cobra.Command {
 	flags.StringVar(&options.activity, "activity", "", "filter by activity")
 	flags.StringVar(&options.tmuxSession, "tmux-session", "", "filter by tmux session")
 	flags.StringVar(&options.multiplexerSession, "multiplexer-session", "", "filter by multiplexer session")
-	flags.BoolVar(&options.noSnapshot, "no-snapshot", false, "start with future changes only")
-	flags.StringVar(&options.watchFormat, "format", "", "output format: table or plain")
+	flags.BoolVar(&noSnapshot, "no-snapshot", false, "start with future changes only")
+	flags.StringVar(&watchFormat, "format", "", "output format: table or plain")
 	return command
 }
 

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -68,8 +69,8 @@ func TestExplainReportsFallbackReasonForInactiveIntegration(t *testing.T) {
 	var stdout bytes.Buffer
 	root := NewRootCommand(&stdout, &bytes.Buffer{})
 	root.SetArgs([]string{"--store", path, "--json", "explain", "--pane", "%99"})
-	if err := root.Execute(); err != nil {
-		t.Fatal(err)
+	if err := root.Execute(); !errors.Is(err, errTmuxPaneNotLive) {
+		t.Fatalf("explain missing pane error = %v", err)
 	}
 	var result map[string]any
 	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
@@ -77,6 +78,35 @@ func TestExplainReportsFallbackReasonForInactiveIntegration(t *testing.T) {
 	}
 	if result["selected_authority"] != "screen" || result["fallback_reason"] != "integration_identity_mismatch" || result["final_activity"] != "unknown" {
 		t.Fatalf("fallback explanation = %#v", result)
+	}
+}
+
+func TestExplainWithoutLivePaneReportsUnavailableState(t *testing.T) {
+	t.Parallel()
+	path := t.TempDir() + "/state.json"
+	store := registry.NewFileStore(path)
+	idle := registry.ActivityIdle
+	activityAuthoritative := false
+	session, err := store.Observe(context.Background(), registry.Observation{
+		Source: registry.ObservationSourceNative, Evidence: registry.ObservationEvidenceNativeEvent,
+		Harness: registry.HarnessCodex, Identity: registry.ObservationIdentity{SessionID: "no-pane"},
+		NativeEvent: "turn_complete", Activity: &idle, ActivityAuthoritative: &activityAuthoritative, ObservedAt: time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stdout bytes.Buffer
+	root := NewRootCommand(&stdout, &bytes.Buffer{})
+	root.SetArgs([]string{"--store", path, "--json", "explain", session.ID})
+	if err := root.ExecuteContext(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	var result explainResult
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.Screen.Evaluated || result.Screen.UnavailableReason != "no_live_pane" || result.Screen.Error != "" {
+		t.Fatalf("screen explanation = %#v", result.Screen)
 	}
 }
 

@@ -50,13 +50,13 @@ var (
 )
 
 type watchOptions struct {
-	filter              registry.Filter
-	summary, noSnapshot bool
-	format              string
-	formatSet           bool
-	debounce            time.Duration
-	now                 func() time.Time
-	ready               chan struct{}
+	filter     registry.Filter
+	noSnapshot bool
+	format     string
+	formatSet  bool
+	debounce   time.Duration
+	now        func() time.Time
+	ready      chan struct{}
 }
 type watchEvent struct {
 	Time             time.Time          `json:"time"`
@@ -65,8 +65,8 @@ type watchEvent struct {
 	Harness          registry.Harness   `json:"harness,omitempty"`
 	Presence         registry.Presence  `json:"presence,omitempty"`
 	PreviousPresence registry.Presence  `json:"previous_presence,omitempty"`
-	Activity         *registry.Activity `json:"activity"`
-	PreviousActivity *registry.Activity `json:"previous_activity"`
+	Activity         *registry.Activity `json:"activity,omitempty"`
+	PreviousActivity *registry.Activity `json:"previous_activity,omitempty"`
 	SessionID        string             `json:"session_id,omitempty"`
 	SessionPath      string             `json:"session_path,omitempty"`
 	Label            string             `json:"label,omitempty"`
@@ -368,9 +368,15 @@ func (app *application) writeWatchEvents(e []watchEvent, f string) error {
 }
 
 func formatWatchPlainEvent(e watchEvent) string {
-	return strings.Join([]string{e.Time.UTC().Format(time.RFC3339), e.Action, string(e.Harness), string(e.Presence), appReportActivity(registry.Session{Activity: e.Activity}), "session=" + e.Label}, " ")
+	if e.Action == watchActionSnapshotEmpty {
+		return e.Time.UTC().Format(time.RFC3339) + " snapshot_empty no sessions"
+	}
+	return truncateHumanText(strings.Join([]string{e.Time.UTC().Format(time.RFC3339), e.Action, string(e.Harness), string(e.Presence), appReportActivity(registry.Session{Activity: e.Activity}), "session=" + e.Label}, " "), humanLineWidth)
 }
 
 func formatWatchTableEvent(e watchEvent) string {
-	return fmt.Sprintf("%s  %-18s  %-10s  %-8s  %-8s  %s", e.Time.UTC().Format(time.RFC3339), e.Action, e.Harness, e.Presence, appReportActivity(registry.Session{Activity: e.Activity}), e.Label)
+	if e.Action == watchActionSnapshotEmpty {
+		return e.Time.UTC().Format(time.RFC3339) + "  snapshot_empty      no sessions"
+	}
+	return truncateHumanText(fmt.Sprintf("%s  %-18s  %-10s  %-8s  %-8s  %s", e.Time.UTC().Format(time.RFC3339), e.Action, e.Harness, e.Presence, appReportActivity(registry.Session{Activity: e.Activity}), e.Label), humanLineWidth)
 }

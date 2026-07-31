@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -14,6 +15,8 @@ import (
 	"github.com/zigai/agent-sessions/v2/pkg/registry"
 	"github.com/zigai/agent-sessions/v2/pkg/tmuxctx"
 )
+
+var errTestPaneList = errors.New("pane inventory unavailable")
 
 func TestQuietLongRunningObserverStreamsRequestedJSONLines(t *testing.T) {
 	t.Parallel()
@@ -43,5 +46,33 @@ func TestQuietLongRunningObserverStreamsRequestedJSONLines(t *testing.T) {
 	}
 	if stderr.Len() != 0 {
 		t.Fatalf("quiet observer wrote diagnostics: %q", stderr.String())
+	}
+}
+
+func TestRunObserverOnceReturnsDegradedErrorAfterWritingResult(t *testing.T) {
+	t.Parallel()
+	for _, outputJSON := range []bool{false, true} {
+		var stdout bytes.Buffer
+		app := &application{outputJSON: outputJSON, stdout: &stdout, stderr: &bytes.Buffer{}}
+		watcher := observer.New(observer.Options{
+			Store:       registry.NewFileStore(filepath.Join(t.TempDir(), "sessions.json")),
+			ProcessList: func(context.Context) ([]processinfo.Process, error) { return nil, nil },
+			PaneList:    func(context.Context) ([]tmuxctx.Pane, error) { return nil, errTestPaneList },
+			CatalogList: func(context.Context) ([]observer.CatalogEntry, error) { return nil, nil },
+		})
+		err := app.runObserver(context.Background(), observeOptions{once: true}, watcher)
+		if !errors.Is(err, errObserverRunDegraded) {
+			t.Fatalf("outputJSON=%t error = %v", outputJSON, err)
+		}
+		if outputJSON {
+			var result observer.Result
+			if err := json.Unmarshal(stdout.Bytes(), &result); err != nil || !result.Degraded || result.Error != errTestPaneList.Error() {
+				t.Fatalf("JSON degraded result = %q, %#v, %v", stdout.String(), result, err)
+			}
+			continue
+		}
+		if !strings.Contains(stdout.String(), "degraded=true") || !strings.Contains(stdout.String(), errTestPaneList.Error()) {
+			t.Fatalf("human degraded result = %q", stdout.String())
+		}
 	}
 }
