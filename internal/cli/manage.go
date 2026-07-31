@@ -197,20 +197,6 @@ func (app *application) runManageStopSessions(ctx context.Context, ss []registry
 		}
 		entry.Method = t.Method
 		entry.Target = t.Target
-		k := t.Method + "\x00" + t.ServerIdentity + "\x00" + t.Target
-		if seen[k] {
-			entry.Reason = "duplicate target"
-			r.Skipped++
-			r.Results = append(r.Results, entry)
-			continue
-		}
-		seen[k] = true
-		r.Stoppable++
-		if o.dryRun {
-			entry.Status = "would_stop"
-			r.Results = append(r.Results, entry)
-			continue
-		}
 		v, e := o.signaler.ValidateStopTarget(ctx, s, t)
 		if e != nil {
 			entry.Status = "failed"
@@ -222,7 +208,20 @@ func (app *application) runManageStopSessions(ctx context.Context, ss []registry
 		if !v.OK {
 			entry.Reason = v.Reason
 			r.Skipped++
-			r.Stoppable--
+			r.Results = append(r.Results, entry)
+			continue
+		}
+		k := t.Method + "\x00" + t.ServerIdentity + "\x00" + t.Target
+		if seen[k] {
+			entry.Reason = "duplicate target"
+			r.Skipped++
+			r.Results = append(r.Results, entry)
+			continue
+		}
+		seen[k] = true
+		r.Stoppable++
+		if o.dryRun {
+			entry.Status = "would_stop"
 			r.Results = append(r.Results, entry)
 			continue
 		}
@@ -290,7 +289,7 @@ func validateProcessStopTarget(ctx context.Context, s registry.Session) (stopTar
 }
 
 func tmuxTargetMatchesSession(a, b registry.TmuxContext) bool {
-	if a.ServerSocket != "" && a.ServerSocket != b.ServerSocket {
+	if a.ServerSocket == "" || b.ServerSocket == "" || a.ServerSocket != b.ServerSocket {
 		return false
 	}
 	if a.PanePID > 0 && b.PanePID > 0 && a.PanePID != b.PanePID {
@@ -310,7 +309,7 @@ func harnessCommandMatches(h registry.Harness, c string) bool {
 }
 
 func stopTargetForSession(s registry.Session) (stopTarget, bool) {
-	if s.Tmux.PaneID != "" {
+	if s.Tmux.PaneID != "" && s.Tmux.ServerSocket != "" {
 		return stopTarget{Method: "tmux-interrupt", Target: s.Tmux.PaneID, ServerIdentity: s.Tmux.ServerSocket}, true
 	}
 	if s.Process != nil && s.Process.PID > 0 {

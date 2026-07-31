@@ -394,7 +394,7 @@ func TestStopSelectsOneSessionOrAll(t *testing.T) {
 	if err := root.ExecuteContext(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(stdout.String(), "stoppable=1") {
+	if !strings.Contains(stdout.String(), "stoppable=0") || !strings.Contains(stdout.String(), "skipped=1") {
 		t.Fatalf("single stop output = %q", stdout.String())
 	}
 	stdout.Reset()
@@ -404,7 +404,7 @@ func TestStopSelectsOneSessionOrAll(t *testing.T) {
 		t.Fatal(err)
 	}
 	var result map[string]any
-	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil || result["Stoppable"] != float64(1) || result["dry_run"] != true {
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil || result["Stoppable"] != float64(0) || result["Skipped"] != float64(1) || result["dry_run"] != true {
 		t.Fatalf("stop JSON = %q, %v", stdout.String(), err)
 	}
 
