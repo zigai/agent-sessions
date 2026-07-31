@@ -110,6 +110,9 @@ func TestInstallCodexMergesHooks(t *testing.T) {
 	if !strings.Contains(postToolCommand, "--raw-stdin-defaults-only") || strings.Contains(postToolCommand, "--raw-stdin ") {
 		t.Fatalf("Codex PostToolUse hook stores full tool output: %q", postToolCommand)
 	}
+	if timeout := requireTestHookTimeout(t, hooks, harnesspkg.HookEventSessionEnd); timeout != 3 {
+		t.Fatalf("Codex SessionEnd hook timeout = %v, want 3", timeout)
+	}
 	if !strings.Contains(string(data), "--presence gone --event SessionEnd") || !strings.Contains(string(data), `"matcher": "other"`) {
 		t.Fatalf("Codex SessionEnd hook is incomplete: %s", data)
 	}
@@ -1720,6 +1723,26 @@ func requireTestHookEvents(t *testing.T, hooks map[string]any, events []string) 
 
 func requireTestHookCommand(t *testing.T, hooks map[string]any, event string) string {
 	t.Helper()
+	handler := requireTestHookHandler(t, hooks, event)
+	command, ok := handler["command"].(string)
+	if !ok || command == "" {
+		t.Fatalf("expected %s hook command, got %#v", event, handler["command"])
+	}
+	return command
+}
+
+func requireTestHookTimeout(t *testing.T, hooks map[string]any, event string) float64 {
+	t.Helper()
+	handler := requireTestHookHandler(t, hooks, event)
+	timeout, ok := handler["timeout"].(float64)
+	if !ok {
+		t.Fatalf("expected %s hook timeout, got %#v", event, handler["timeout"])
+	}
+	return timeout
+}
+
+func requireTestHookHandler(t *testing.T, hooks map[string]any, event string) map[string]any {
+	t.Helper()
 
 	groups, ok := hooks[event].([]any)
 	if !ok || len(groups) != 1 {
@@ -1737,11 +1760,7 @@ func requireTestHookCommand(t *testing.T, hooks map[string]any, event string) st
 	if !ok {
 		t.Fatalf("expected %s hook handler object, got %#v", event, handlers[0])
 	}
-	command, ok := handler["command"].(string)
-	if !ok || command == "" {
-		t.Fatalf("expected %s hook command, got %#v", event, handler["command"])
-	}
-	return command
+	return handler
 }
 
 func requireTextContainsAll(t *testing.T, text string, values []string, context string) {

@@ -12,11 +12,14 @@ const (
 	hookEventStop         = harnesspkg.HookEventStop
 )
 
-func commandHookGroup(command string, matcher string, statusMessage string) map[string]any {
+func commandHookGroup(command string, matcher string, statusMessage string, timeoutSeconds int) map[string]any {
+	if timeoutSeconds <= 0 {
+		timeoutSeconds = harnesspkg.HookTimeoutSeconds
+	}
 	hook := map[string]any{
 		"type":    harnesspkg.HookTypeCommand,
 		"command": command,
-		"timeout": float64(harnesspkg.HookTimeoutSeconds),
+		"timeout": float64(timeoutSeconds),
 	}
 	if statusMessage != "" {
 		hook["statusMessage"] = statusMessage
@@ -40,6 +43,7 @@ func upsertManagedCommandHookGroup(
 	matcher string,
 	command string,
 	statusMessage string,
+	timeoutSeconds int,
 	isManaged func(string) bool,
 ) bool {
 	hooks, ok := config["hooks"].(map[string]any)
@@ -53,7 +57,7 @@ func upsertManagedCommandHookGroup(
 		groups = nil
 	}
 
-	desiredGroup := commandHookGroup(command, matcher, statusMessage)
+	desiredGroup := commandHookGroup(command, matcher, statusMessage, timeoutSeconds)
 	if managedCommandHookGroupsCurrent(groups, desiredGroup, isManaged) {
 		return false
 	}

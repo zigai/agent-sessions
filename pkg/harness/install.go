@@ -8,18 +8,28 @@ import (
 )
 
 const (
-	ManagedMarker               = "agent-sessions managed integration"
-	HookTimeoutSeconds          = 5
-	HookTypeCommand             = "command"
-	HookEventSessionStart       = "SessionStart"
-	HookEventSessionEnd         = "SessionEnd"
-	HookEventUserPromptSubmit   = "UserPromptSubmit"
-	HookEventPostToolUse        = "PostToolUse"
-	HookEventPostToolUseFailure = "PostToolUseFailure"
-	HookEventPreToolUse         = "PreToolUse"
-	HookEventStop               = "Stop"
-	resumeFlag                  = "--resume"
+	ManagedMarker                 = "agent-sessions managed integration"
+	HookTimeoutSeconds            = 5
+	codexSessionEndTimeoutSeconds = 3
+	HookTypeCommand               = "command"
+	HookEventSessionStart         = "SessionStart"
+	HookEventSessionEnd           = "SessionEnd"
+	HookEventUserPromptSubmit     = "UserPromptSubmit"
+	HookEventPostToolUse          = "PostToolUse"
+	HookEventPostToolUseFailure   = "PostToolUseFailure"
+	HookEventPreToolUse           = "PreToolUse"
+	HookEventStop                 = "Stop"
+	resumeFlag                    = "--resume"
 )
+
+// HookTimeoutSecondsFor returns the native command-hook timeout for an event.
+func HookTimeoutSecondsFor(harness registry.Harness, event string) int {
+	if harness == registry.HarnessCodex && event == HookEventSessionEnd {
+		return codexSessionEndTimeoutSeconds
+	}
+
+	return HookTimeoutSeconds
+}
 
 // HookTransition is the closed, dimension-aware state used by generated hook
 // specifications that need to store a transition before rendering it.

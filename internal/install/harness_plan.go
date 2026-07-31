@@ -127,12 +127,14 @@ func applyJSONCommandHooks(
 	return func(config map[string]any) bool {
 		changed := false
 		for _, hook := range plan.Hooks {
+			timeoutSeconds := harnesspkg.HookTimeoutSecondsFor(harness, hook.Event)
 			updated := upsertManagedCommandHookGroup(
 				config,
 				hook.Event,
 				hook.Matcher,
 				hook.Command,
 				statusMessage,
+				timeoutSeconds,
 				isManaged,
 			)
 			changed = changed || updated
