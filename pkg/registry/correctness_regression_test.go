@@ -24,6 +24,7 @@ func TestIdentityReconciliationPrefersSessionPath(t *testing.T) {
 	}
 }
 
+//nolint:cyclop // reconciliation assertions cover identity, process, location, and row compaction
 func TestNativeProcessIdentityReconcilesWithLiveTmuxSession(t *testing.T) {
 	t.Parallel()
 	store := NewFileStore(filepath.Join(t.TempDir(), "sessions.json"))
@@ -68,6 +69,83 @@ func TestNativeProcessIdentityReconcilesWithLiveTmuxSession(t *testing.T) {
 	}
 	if reconciled.Presence != PresenceLive || reconciled.Activity == nil || *reconciled.Activity != ActivityRunning || reconciled.SessionPath != path || reconciled.Tmux.PaneID != "%81" {
 		t.Fatalf("reconciled session lost identity, activity, or tmux location: %#v", reconciled)
+	}
+	sessions, err := store.List(ctx, Filter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 1 || sessions[0].ID != live.ID {
+		t.Fatalf("provisional identity row survived reconciliation: %#v", sessions)
+	}
+}
+
+//nolint:cyclop // switch assertions cover both historical rows and subsequent process matching
+func TestNativeSessionSwitchOnSameProcessPreservesEndedHistory(t *testing.T) {
+	t.Parallel()
+
+	store := NewFileStore(filepath.Join(t.TempDir(), "sessions.json"))
+	ctx := context.Background()
+	at := time.Now().UTC().Add(-time.Minute)
+	process := &ProcessIdentity{PID: 84, StartIdentity: "boot:84"}
+	start := NativeLifecycleStart
+	live := PresenceLive
+	idle := ActivityIdle
+
+	first, err := store.Observe(ctx, Observation{
+		Source: ObservationSourceNative, Evidence: ObservationEvidenceNativeEvent,
+		Harness: HarnessPi, Identity: ObservationIdentity{SessionID: "old-session"},
+		Lifecycle: &start, Presence: &live, Activity: &idle, Process: process,
+		NativeEvent: "session_start", ObservedAt: at,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := store.Observe(ctx, Observation{
+		Source: ObservationSourceNative, Evidence: ObservationEvidenceNativeEvent,
+		Harness: HarnessPi, Identity: ObservationIdentity{SessionID: "new-session"},
+		Presence: &live, Activity: &idle, Process: process,
+		NativeEvent: "session_start", ObservedAt: at.Add(time.Second),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.ID == second.ID || second.SessionID != "new-session" || second.Presence != PresenceLive {
+		t.Fatalf("session switch overwrote identity: first=%#v second=%#v", first, second)
+	}
+
+	sessions, err := store.List(ctx, Filter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 2 {
+		t.Fatalf("session history count = %d, want 2: %#v", len(sessions), sessions)
+	}
+	for _, session := range sessions {
+		switch session.SessionID {
+		case "old-session":
+			if session.ID != first.ID || session.Presence != PresenceGone || session.Activity != nil {
+				t.Fatalf("old session was not retired: %#v", session)
+			}
+		case "new-session":
+			if session.ID != second.ID || session.Presence != PresenceLive {
+				t.Fatalf("new session is not live: %#v", session)
+			}
+		default:
+			t.Fatalf("unexpected session history row: %#v", session)
+		}
+	}
+
+	present := true
+	observed, err := store.Observe(ctx, Observation{
+		Source: ObservationSourceProcess, Evidence: ObservationEvidenceProcessPresence,
+		Harness: HarnessPi, ProcessPresent: &present, Process: process,
+		ObservedAt: at.Add(2 * time.Second),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if observed.ID != second.ID {
+		t.Fatalf("process-only observation matched %q, want current session %q", observed.ID, second.ID)
 	}
 }
 

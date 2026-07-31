@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"sort"
 	"strconv"
 	"time"
 )
@@ -120,7 +119,8 @@ func (s *FileStore) ObserveBatch(ctx context.Context, observations []Observation
 				return err
 			}
 			at, _ := observationTime(observation.ObservedAt, receivedAt)
-			id := findMatchingSession(snap.Sessions, observation)
+			retireConflictingProcessSessions(snap.Sessions, observation, at, receivedAt)
+			id := findAndReconcileMatchingSession(snap.Sessions, observation)
 			if id == "" && observation.Source == ObservationSourceCatalog && (observation.Harness != HarnessClaude || observation.Catalog == nil || !observation.Catalog.Current) {
 				continue
 			}
@@ -576,17 +576,111 @@ func setGone(session *Session, at time.Time) {
 	session.ActivityDecision = &ActivityDecision{Authority: "process", Reason: "process_gone", RuleID: "", ManifestSource: "", ManifestVersion: 0, FallbackReason: "", Process: process, ObservedAt: at}
 }
 
-//nolint:cyclop // matching evaluates process, native identity, and catalog evidence in precedence order
-func findMatchingSession(sessions map[string]Session, observation Observation) string {
-	if observation.Process != nil && observation.Process.Complete() {
-		if id := firstMatchingSessionID(sessions, observation.Harness, func(session Session) bool {
-			return session.Process != nil && session.Process.Equal(*observation.Process)
-		}); id != "" {
-			return id
+//nolint:cyclop // retirement verifies every independent identity and process guard
+func retireConflictingProcessSessions(
+	sessions map[string]Session,
+	observation Observation,
+	at time.Time,
+	receivedAt time.Time,
+) {
+	if observation.Source != ObservationSourceNative ||
+		observation.Process == nil ||
+		!observation.Process.Complete() ||
+		!observationHasIdentity(observation) {
+		return
+	}
+
+	for id, session := range sessions {
+		if session.Harness != observation.Harness ||
+			session.Process == nil ||
+			!session.Process.Equal(*observation.Process) ||
+			!observationIdentityConflicts(session, observation.Identity) {
+			continue
+		}
+		if currentAt := currentProcessObservationTime(session); !currentAt.IsZero() && at.Before(currentAt) {
+			continue
+		}
+		if session.Presence != PresenceGone {
+			setGone(&session, at)
+			session.ActivityDecision = &ActivityDecision{
+				Authority: "hook", Reason: "session_replaced", RuleID: "", ManifestSource: "",
+				ManifestVersion: 0, FallbackReason: "", Process: *observation.Process, ObservedAt: at,
+			}
+		}
+		session.UpdatedAt = maxTime(session.UpdatedAt, receivedAt)
+		sessions[id] = session
+	}
+}
+
+func observationHasIdentity(observation Observation) bool {
+	return observation.Identity.SessionID != "" || observation.Identity.SessionPath != ""
+}
+
+func observationIdentityConflicts(session Session, identity ObservationIdentity) bool {
+	if identity.SessionID != "" && session.SessionID != "" {
+		return identity.SessionID != session.SessionID
+	}
+	if identity.SessionPath != "" && session.SessionPath != "" {
+		return filepath.Clean(identity.SessionPath) != filepath.Clean(session.SessionPath)
+	}
+	return false
+}
+
+func findAndReconcileMatchingSession(sessions map[string]Session, observation Observation) string {
+	identityID := findIdentityMatchingSession(sessions, observation)
+	processID := findProcessMatchingSession(sessions, observation)
+	if identityID != "" && processID != "" && identityID != processID {
+		provisional := sessions[identityID]
+		if provisional.Process == nil {
+			target := mergeProvisionalSession(sessions[processID], provisional)
+			sessions[processID] = target
+			delete(sessions, identityID)
+			return processID
 		}
 	}
+	if processID != "" {
+		return processID
+	}
+	if identityID != "" {
+		return identityID
+	}
+	if observation.Source == ObservationSourceCatalog && observation.Catalog != nil && observation.Catalog.ProcessPID > 0 {
+		return bestMatchingSessionID(sessions, observation.Harness, func(session Session) bool {
+			return session.Process != nil && session.Process.PID == observation.Catalog.ProcessPID
+		})
+	}
+	return ""
+}
+
+func findMatchingSession(sessions map[string]Session, observation Observation) string {
+	if id := findProcessMatchingSession(sessions, observation); id != "" {
+		return id
+	}
+	if id := findIdentityMatchingSession(sessions, observation); id != "" {
+		return id
+	}
+	if observation.Source == ObservationSourceCatalog && observation.Catalog != nil && observation.Catalog.ProcessPID > 0 {
+		return bestMatchingSessionID(sessions, observation.Harness, func(session Session) bool {
+			return session.Process != nil && session.Process.PID == observation.Catalog.ProcessPID
+		})
+	}
+	return ""
+}
+
+func findProcessMatchingSession(sessions map[string]Session, observation Observation) string {
+	if observation.Process == nil || !observation.Process.Complete() {
+		return ""
+	}
+	return bestMatchingSessionID(sessions, observation.Harness, func(session Session) bool {
+		return session.Process != nil &&
+			session.Process.Equal(*observation.Process) &&
+			!observationIdentityConflicts(session, observation.Identity)
+	})
+}
+
+func findIdentityMatchingSession(sessions map[string]Session, observation Observation) string {
 	if observation.Identity.SessionID != "" {
-		if id := firstMatchingSessionID(sessions, observation.Harness, func(session Session) bool {
+		if id := bestMatchingSessionID(sessions, observation.Harness, func(session Session) bool {
 			return session.SessionID == observation.Identity.SessionID
 		}); id != "" {
 			return id
@@ -594,32 +688,125 @@ func findMatchingSession(sessions map[string]Session, observation Observation) s
 	}
 	if observation.Identity.SessionPath != "" {
 		cleanPath := filepath.Clean(observation.Identity.SessionPath)
-		if id := firstMatchingSessionID(sessions, observation.Harness, func(session Session) bool {
+		if id := bestMatchingSessionID(sessions, observation.Harness, func(session Session) bool {
 			return session.SessionPath != "" && filepath.Clean(session.SessionPath) == cleanPath
 		}); id != "" {
 			return id
 		}
 	}
-	if observation.Source == ObservationSourceCatalog && observation.Catalog != nil && observation.Catalog.ProcessPID > 0 {
-		return firstMatchingSessionID(sessions, observation.Harness, func(session Session) bool {
-			return session.Process != nil && session.Process.PID == observation.Catalog.ProcessPID
-		})
-	}
 	return ""
 }
 
-func firstMatchingSessionID(sessions map[string]Session, harness Harness, match func(Session) bool) string {
-	ids := make([]string, 0, 1)
+func bestMatchingSessionID(sessions map[string]Session, harness Harness, match func(Session) bool) string {
+	bestID := ""
+	var best Session
 	for id, session := range sessions {
-		if session.Harness == harness && match(session) {
-			ids = append(ids, id)
+		if session.Harness != harness || !match(session) {
+			continue
+		}
+		if bestID == "" || sessionMatchPreferred(session, id, best, bestID) {
+			bestID, best = id, session
 		}
 	}
-	if len(ids) == 0 {
-		return ""
+	return bestID
+}
+
+func sessionMatchPreferred(candidate Session, candidateID string, current Session, currentID string) bool {
+	if candidateRank := presenceMatchRank(candidate.Presence); candidateRank != presenceMatchRank(current.Presence) {
+		return candidateRank > presenceMatchRank(current.Presence)
 	}
-	sort.Strings(ids)
-	return ids[0]
+	if !candidate.UpdatedAt.Equal(current.UpdatedAt) {
+		return candidate.UpdatedAt.After(current.UpdatedAt)
+	}
+	if !candidate.CreatedAt.Equal(current.CreatedAt) {
+		return candidate.CreatedAt.After(current.CreatedAt)
+	}
+	return candidateID < currentID
+}
+
+func presenceMatchRank(presence Presence) int {
+	const (
+		goneMatchRank = iota
+		unknownMatchRank
+		liveMatchRank
+	)
+	switch presence {
+	case PresenceLive:
+		return liveMatchRank
+	case PresenceUnknown:
+		return unknownMatchRank
+	case PresenceGone:
+		return goneMatchRank
+	default:
+		return -1
+	}
+}
+
+//nolint:cyclop // each independent metadata dimension is merged only when missing
+func mergeProvisionalSession(target Session, provisional Session) Session {
+	if target.SessionID == "" {
+		target.SessionID = provisional.SessionID
+	}
+	if target.SessionPath == "" {
+		target.SessionPath = provisional.SessionPath
+	}
+	if len(target.ResumeCommand) == 0 {
+		target.ResumeCommand = append([]string(nil), provisional.ResumeCommand...)
+	}
+	if target.CWD == "" {
+		target.CWD = provisional.CWD
+	}
+	if target.ProjectRoot == "" {
+		target.ProjectRoot = provisional.ProjectRoot
+	}
+	if target.Tmux.Empty() {
+		target.Tmux = provisional.Tmux
+	}
+	if target.Multiplexer.Empty() {
+		target.Multiplexer = provisional.Multiplexer
+	}
+	if target.Presence == PresenceUnknown && provisional.Presence != PresenceUnknown {
+		target.Presence = provisional.Presence
+		target.PresenceChangedAt = provisional.PresenceChangedAt
+	}
+	if activityUnknown(target.Activity) && !activityUnknown(provisional.Activity) {
+		target.Activity = cloneActivity(provisional.Activity)
+		target.ActivityChangedAt = provisional.ActivityChangedAt
+		target.ActivityDecision = provisional.ActivityDecision
+	}
+	target.Observations = mergeObservations(target.Observations, provisional.Observations)
+	if target.CreatedAt.IsZero() || (!provisional.CreatedAt.IsZero() && provisional.CreatedAt.Before(target.CreatedAt)) {
+		target.CreatedAt = provisional.CreatedAt
+	}
+	target.UpdatedAt = maxTime(target.UpdatedAt, provisional.UpdatedAt)
+	return target
+}
+
+func activityUnknown(activity *Activity) bool {
+	return activity == nil || *activity == ActivityUnknown
+}
+
+//nolint:cyclop // each evidence source has an independent newest-observation slot
+func mergeObservations(target Observations, provisional Observations) Observations {
+	if target.Native == nil || (provisional.Native != nil && provisional.Native.ObservedAt.After(target.Native.ObservedAt)) {
+		target.Native = provisional.Native
+	}
+	if target.Process == nil || (provisional.Process != nil && provisional.Process.ObservedAt.After(target.Process.ObservedAt)) {
+		target.Process = provisional.Process
+	}
+	if target.Tmux == nil || (provisional.Tmux != nil && provisional.Tmux.ObservedAt.After(target.Tmux.ObservedAt)) {
+		target.Tmux = provisional.Tmux
+	}
+	if target.Multiplexer == nil || (provisional.Multiplexer != nil && provisional.Multiplexer.ObservedAt.After(target.Multiplexer.ObservedAt)) {
+		target.Multiplexer = provisional.Multiplexer
+	}
+	if target.Catalog == nil || (provisional.Catalog != nil && provisional.Catalog.ObservedAt.After(target.Catalog.ObservedAt)) {
+		target.Catalog = provisional.Catalog
+	}
+	if target.Screen == nil || (provisional.Screen != nil && provisional.Screen.ObservedAt.After(target.Screen.ObservedAt)) {
+		target.Screen = provisional.Screen
+	}
+	return target
 }
 
 func cloneLifecycle(value *NativeLifecycle) *NativeLifecycle {
