@@ -118,6 +118,28 @@ func TestDiffWatchEventsReportsProcessTransitions(t *testing.T) {
 	}
 }
 
+func TestDiffWatchEventsReportsProcessBindingWithoutPresenceChange(t *testing.T) {
+	t.Parallel()
+
+	at := time.Now().UTC()
+	activity := registry.ActivityIdle
+	old := registry.Session{
+		ID: "s", Harness: registry.HarnessCodex, Presence: registry.PresenceLive,
+		Activity: &activity, UpdatedAt: at,
+	}
+	next := old
+	next.Process = &registry.ProcessIdentity{PID: 42, StartIdentity: "boot:42"}
+	next.UpdatedAt = at.Add(time.Second)
+	events := diffWatchEvents(
+		map[string]registry.Session{"s": old},
+		map[string]registry.Session{"s": next},
+		at.Add(2*time.Second),
+	)
+	if len(events) != 1 || events[0].Action != watchActionProcessBound {
+		t.Fatalf("live-to-live process binding events = %#v", events)
+	}
+}
+
 func TestFormatWatchPlainUsesNullableActivity(t *testing.T) {
 	t.Parallel()
 	event := watchEvent{Time: time.Unix(0, 0), Action: watchActionRemoved, Harness: registry.HarnessCodex, Presence: registry.PresenceGone, Label: "gone"}

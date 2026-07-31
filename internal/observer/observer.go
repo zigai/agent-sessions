@@ -316,6 +316,11 @@ func (o *Observer) runCycle(ctx context.Context) (Result, error) {
 	processByPID := make(map[int]processinfo.Process, len(processes))
 	harnessByPID := make(map[int]registry.Harness, len(processes))
 	for _, process := range processes {
+		if process.PID > 0 {
+			processByPID[process.PID] = process
+		}
+	}
+	for _, process := range processes {
 		if process.PID <= 0 || process.StartIdentity == "" {
 			continue
 		}
@@ -323,10 +328,24 @@ func (o *Observer) runCycle(ctx context.Context) (Result, error) {
 		if !ok {
 			continue
 		}
+		harnessByPID[process.PID] = harnessID
+	}
+	for _, process := range processes {
+		harnessID, ok := harnessByPID[process.PID]
+		if !ok || !isAgentWrapper(process) {
+			continue
+		}
+		if _, descendantHarness, found := descendantHarnessProcess(process.PID, processes, processByPID, harnessByPID); found && descendantHarness == harnessID {
+			delete(harnessByPID, process.PID)
+		}
+	}
+	for _, process := range processes {
+		harnessID, ok := harnessByPID[process.PID]
+		if !ok {
+			continue
+		}
 		key := processKey{harness: harnessID, pid: process.PID, start: process.StartIdentity}
 		current[key] = trackedProcess{process: process, seenAt: at, missingSince: time.Time{}, missingCount: 0}
-		processByPID[process.PID] = process
-		harnessByPID[process.PID] = harnessID
 		present := true
 		identity := registry.ObservationIdentity{SessionID: "", SessionPath: ""}
 		if entry, ok := catalogByPID[process.PID]; ok && entry.Harness == harnessID {
@@ -490,12 +509,15 @@ func isAgentWrapper(process processinfo.Process) bool {
 }
 
 func observationsForUnlocatedProcesses(sessions []registry.Session, processByPID map[int]processinfo.Process, harnessByPID map[int]registry.Harness, locationPIDs map[int]bool, paneErr error, tmuxOnly bool, at time.Time) []registry.Observation {
-	observations := make([]registry.Observation, 0, len(processByPID))
-	for pid, process := range processByPID {
+	observations := make([]registry.Observation, 0, len(harnessByPID))
+	for pid, harnessID := range harnessByPID {
 		if locationPIDs[pid] {
 			continue
 		}
-		harnessID := harnessByPID[pid]
+		process, ok := processByPID[pid]
+		if !ok {
+			continue
+		}
 		unavailableReason := "screen_not_in_supported_multiplexer"
 		if tmuxOnly {
 			unavailableReason = "screen_not_in_tmux"

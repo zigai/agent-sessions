@@ -231,12 +231,12 @@ func diffWatchEvents(p, n map[string]registry.Session, at time.Time) []watchEven
 		}
 		if v.Presence != old.Presence {
 			o = append(o, watchEventFromSession(watchActionPresenceChanged, v, old, at))
-			if v.Presence == registry.PresenceLive && v.Process != nil && old.Process == nil {
-				o = append(o, watchEventFromSession(watchActionProcessBound, v, old, at))
-			}
 			if v.Presence == registry.PresenceGone {
 				o = append(o, watchEventFromSession(watchActionProcessGone, v, old, at))
 			}
+		}
+		if v.Presence == registry.PresenceLive && v.Process != nil && old.Process == nil {
+			o = append(o, watchEventFromSession(watchActionProcessBound, v, old, at))
 		}
 		if !activityEqual(v.Activity, old.Activity) {
 			o = append(o, watchEventFromSession(watchActionActivityChanged, v, old, at))
