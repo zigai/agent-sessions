@@ -106,6 +106,10 @@ func TestInstallCodexMergesHooks(t *testing.T) {
 			t.Fatalf("expected %s hook", event)
 		}
 	}
+	postToolCommand := requireTestHookCommand(t, hooks, "PostToolUse")
+	if !strings.Contains(postToolCommand, "--raw-stdin-defaults-only") || strings.Contains(postToolCommand, "--raw-stdin ") {
+		t.Fatalf("Codex PostToolUse hook stores full tool output: %q", postToolCommand)
+	}
 	if !strings.Contains(string(data), "--presence gone --event SessionEnd") || !strings.Contains(string(data), `"matcher": "other"`) {
 		t.Fatalf("Codex SessionEnd hook is incomplete: %s", data)
 	}
@@ -1712,6 +1716,32 @@ func requireTestHookEvents(t *testing.T, hooks map[string]any, events []string) 
 			t.Fatalf("expected %s hook", event)
 		}
 	}
+}
+
+func requireTestHookCommand(t *testing.T, hooks map[string]any, event string) string {
+	t.Helper()
+
+	groups, ok := hooks[event].([]any)
+	if !ok || len(groups) != 1 {
+		t.Fatalf("expected one %s hook group, got %#v", event, hooks[event])
+	}
+	group, ok := groups[0].(map[string]any)
+	if !ok {
+		t.Fatalf("expected %s hook group object, got %#v", event, groups[0])
+	}
+	handlers, ok := group["hooks"].([]any)
+	if !ok || len(handlers) != 1 {
+		t.Fatalf("expected one %s hook handler, got %#v", event, group["hooks"])
+	}
+	handler, ok := handlers[0].(map[string]any)
+	if !ok {
+		t.Fatalf("expected %s hook handler object, got %#v", event, handlers[0])
+	}
+	command, ok := handler["command"].(string)
+	if !ok || command == "" {
+		t.Fatalf("expected %s hook command, got %#v", event, handler["command"])
+	}
+	return command
 }
 
 func requireTextContainsAll(t *testing.T, text string, values []string, context string) {

@@ -58,7 +58,7 @@ func (codexHarness) InstallPlan(binary string) InstallPlan {
 				{
 					Event:   HookEventPostToolUse,
 					Matcher: "",
-					Command: ReportHookCommand(binary, registry.HarnessCodex, registry.ActivityRunning, HookEventPostToolUse, codexIntegrationSource),
+					Command: RawStdinDefaultsReportHookCommand(binary, registry.HarnessCodex, registry.ActivityRunning, HookEventPostToolUse, codexIntegrationSource),
 				},
 				{
 					Event:   "PreCompact",

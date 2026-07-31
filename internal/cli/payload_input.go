@@ -1,22 +1,72 @@
 package cli
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 )
 
-const maxPayloadInputBytes = 1 << 20
+const (
+	maxPayloadInputBytes         = 1 << 20
+	maxDefaultsPayloadInputBytes = 64 << 20
+)
 
-var errPayloadInputTooLarge = errors.New("payload exceeds 1 MiB limit")
+var (
+	errPayloadInputTooLarge         = errors.New("payload exceeds 1 MiB limit")
+	errDefaultsPayloadInputTooLarge = errors.New("defaults payload exceeds 64 MiB limit")
+)
 
 func readPayloadInput(reader io.Reader) ([]byte, error) {
-	data, err := io.ReadAll(io.LimitReader(reader, maxPayloadInputBytes+1))
+	return readPayloadInputWithLimit(reader, maxPayloadInputBytes, errPayloadInputTooLarge)
+}
+
+func readPayloadDefaultsInput(reader io.Reader) ([]byte, error) {
+	data, err := readPayloadInputWithLimit(
+		reader,
+		maxDefaultsPayloadInputBytes,
+		errDefaultsPayloadInputTooLarge,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	trimmed := bytes.TrimSpace(data)
+	if len(trimmed) == 0 || trimmed[0] != '{' || !json.Valid(trimmed) {
+		return retainBoundedPayloadDefaults(data)
+	}
+
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(trimmed, &payload); err != nil {
+		return nil, fmt.Errorf("decoding defaults payload: %w", err)
+	}
+	delete(payload, "tool_input")
+	delete(payload, "tool_response")
+	delete(payload, "toolInput")
+	delete(payload, "toolResponse")
+
+	data, err = json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("encoding defaults payload: %w", err)
+	}
+	return retainBoundedPayloadDefaults(data)
+}
+
+func retainBoundedPayloadDefaults(data []byte) ([]byte, error) {
+	if len(data) > maxPayloadInputBytes {
+		return nil, errPayloadInputTooLarge
+	}
+	return data, nil
+}
+
+func readPayloadInputWithLimit(reader io.Reader, limit int, limitErr error) ([]byte, error) {
+	data, err := io.ReadAll(io.LimitReader(reader, int64(limit)+1))
 	if err != nil {
 		return nil, fmt.Errorf("reading payload input: %w", err)
 	}
-	if len(data) > maxPayloadInputBytes {
-		return nil, errPayloadInputTooLarge
+	if len(data) > limit {
+		return nil, limitErr
 	}
 	return data, nil
 }

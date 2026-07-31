@@ -461,6 +461,27 @@ func TestPrepareReportRejectsOversizedPayload(t *testing.T) {
 	}
 }
 
+func TestPrepareReportAcceptsLargeCodexPostToolUseDefaults(t *testing.T) {
+	t.Parallel()
+
+	payload := `{"session_id":"codex-image","transcript_path":null,"cwd":"/work","hook_event_name":"PostToolUse","model":"gpt-5","tool_name":"view_image","tool_response":"` +
+		strings.Repeat("x", maxPayloadInputBytes) + `"}`
+	prepared, err := (&application{}).prepareReport(
+		strings.NewReader(payload),
+		reportOptions{harness: "codex", activity: "running", rawDefaultsOnly: true},
+		reportRuntimeContext{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prepared.observation.Identity.SessionID != "codex-image" || prepared.observation.NativeEvent != "PostToolUse" {
+		t.Fatalf("PostToolUse metadata = %#v", prepared.observation)
+	}
+	if len(prepared.observation.RawPayload) != 0 {
+		t.Fatalf("PostToolUse raw payload was retained: %d bytes", len(prepared.observation.RawPayload))
+	}
+}
+
 func TestReportQuietSuppressesHumanOutput(t *testing.T) {
 	t.Parallel()
 	var stdout bytes.Buffer

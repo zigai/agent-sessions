@@ -1158,7 +1158,13 @@ func readStdinPayloadData(stdin io.Reader, storeRaw, defaultsOnly bool) (json.Ra
 	if !storeRaw && !defaultsOnly {
 		return nil, nil, nil
 	}
-	d, err := readPayloadInput(stdin)
+	var d []byte
+	var err error
+	if defaultsOnly {
+		d, err = readPayloadDefaultsInput(stdin)
+	} else {
+		d, err = readPayloadInput(stdin)
+	}
 	if err != nil {
 		return nil, nil, fmt.Errorf("read stdin payload: %w", err)
 	}
