@@ -44,12 +44,14 @@ commands and options.
 ## Hook Installation
 
 ```sh
-agent-sessions install-hooks <harness>
-agent-sessions install-hooks all
-agent-sessions install-hooks codex --dry-run
+agent-sessions integrations install <harness>
+agent-sessions integrations install all
+agent-sessions integrations install codex --dry-run --show-content
 ```
 
 `<harness>` is a supported harness name from the list above.
+Use `--show-content` to print generated hook or plugin content; otherwise the
+install command prints a concise summary.
 
 ## Full Usage
 
