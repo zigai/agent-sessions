@@ -34,8 +34,6 @@ func discoverServers(ctx context.Context, env Env, lister ServerProcessLister) (
 
 	if socket := tmuxServerSocket(env.TMUX); socket != "" {
 		add(serverSpec{Identity: socket, Args: []string{"-S", socket}})
-	} else {
-		add(serverSpec{Identity: "default", Args: nil})
 	}
 
 	for _, process := range processes {
@@ -49,7 +47,11 @@ func discoverServers(ctx context.Context, env Env, lister ServerProcessLister) (
 }
 
 func serverSpecFromArgs(args []string) (serverSpec, bool) {
-	if !isTmuxServerArgs(args) {
+	if len(args) == 0 {
+		return serverSpec{Identity: "", Args: nil}, false
+	}
+	base := filepath.Base(args[0])
+	if base != "tmux" && base != "tmux:" && !strings.HasPrefix(base, "tmux: server") {
 		return serverSpec{Identity: "", Args: nil}, false
 	}
 	for index, arg := range args {

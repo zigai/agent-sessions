@@ -15,7 +15,8 @@ import (
 const (
 	fieldSeparator            = "\t"
 	escapedFieldPrefix        = "tmuxctx:"
-	listPaneFieldCount        = 10
+	listPaneFieldCount        = 11
+	legacyListPaneFieldCount  = 10
 	singleQuoteDelimiterWidth = 2
 )
 
@@ -152,12 +153,9 @@ func ListPanesWithOptions(ctx context.Context, options ListOptions) ([]Pane, err
 	if err != nil {
 		return nil, err
 	}
-	if len(servers) == 0 {
-		servers = []serverSpec{{Identity: "default", Args: nil}}
-	}
-
 	var panes []Pane
 	var firstErr error
+	seenPanes := make(map[string]struct{})
 	for _, server := range servers {
 		args := append([]string{}, server.Args...)
 		args = append(args, "list-panes", "-a", "-F", listPanesFormat())
@@ -172,19 +170,31 @@ func ListPanesWithOptions(ctx context.Context, options ListOptions) ([]Pane, err
 		if parseErr != nil {
 			return nil, parseErr
 		}
-		for index := range serverPanes {
-			serverPanes[index].ServerIdentity = server.Identity
-			serverPanes[index].Tmux.ServerSocket = server.Identity
-			serverPanes[index].PanePID = serverPanes[index].Tmux.PanePID
-			serverPanes[index].PaneTTY = serverPanes[index].Tmux.PaneTTY
-		}
-		panes = append(panes, serverPanes...)
+		panes = appendCanonicalPanes(panes, serverPanes, server.Identity, seenPanes)
 	}
 	if len(panes) == 0 && firstErr != nil {
 		return nil, firstErr
 	}
 
 	return panes, nil
+}
+
+func appendCanonicalPanes(panes, serverPanes []Pane, fallbackIdentity string, seen map[string]struct{}) []Pane {
+	for _, pane := range serverPanes {
+		if pane.ServerIdentity == "" {
+			pane.ServerIdentity = fallbackIdentity
+		}
+		pane.Tmux.ServerSocket = pane.ServerIdentity
+		pane.PanePID = pane.Tmux.PanePID
+		pane.PaneTTY = pane.Tmux.PaneTTY
+		key := pane.ServerIdentity + "\x00" + pane.Tmux.PaneID
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		panes = append(panes, pane)
+	}
+	return panes
 }
 
 func currentFormat() string {
@@ -215,6 +225,7 @@ func listPanesFormat() string {
 		"pane_current_path",
 		"pane_pid",
 		"pane_tty",
+		"socket_path",
 	})
 }
 
@@ -292,16 +303,20 @@ func ParseListPanes(output string) ([]Pane, error) {
 func panesFromFields(fields []string) ([]Pane, error) {
 	fieldCount := listPaneFieldCount
 	if len(fields)%fieldCount != 0 {
-		if len(fields)%11 != 0 {
+		if len(fields)%legacyListPaneFieldCount != 0 {
 			return nil, invalidFieldCountError(fieldCount, len(fields))
 		}
-		fieldCount = 11
+		fieldCount = legacyListPaneFieldCount
 	}
 
 	panes := make([]Pane, 0, len(fields)/fieldCount)
 	for row := range len(fields) / fieldCount {
 		offset := row * fieldCount
 		paneFields := fields[offset : offset+fieldCount]
+		serverIdentity := ""
+		if fieldCount == listPaneFieldCount {
+			serverIdentity = paneFields[10]
+		}
 		pane := Pane{
 			Tmux: registry.TmuxContext{
 				Inside:          true,
@@ -318,7 +333,7 @@ func panesFromFields(fields []string) ([]Pane, error) {
 				PaneTTY:         paneFields[9],
 				ClientTTY:       "",
 			},
-			ServerIdentity: "",
+			ServerIdentity: serverIdentity,
 			PanePID:        0,
 			PaneTTY:        "",
 		}
@@ -340,14 +355,18 @@ func parseLegacyListPanes(output string) ([]Pane, error) {
 	for _, line := range lines {
 		raw := strings.Split(line, fieldSeparator)
 		lineFields := raw
-		if len(raw) == 11 && parsePositiveInt(raw[9]) > 0 {
+		switch {
+		case len(raw) == legacyListPaneFieldCount:
+			lineFields = append(lineFields, "")
+		case len(raw) == listPaneFieldCount && parsePositiveInt(raw[8]) > 0:
+			// Current format with socket_path.
+		case len(raw) >= listPaneFieldCount && parsePositiveInt(raw[len(raw)-3]) > 0:
 			lineFields = splitLegacyFields(line, listPaneFieldCount)
-		}
-		if len(raw) != listPaneFieldCount && len(raw) != 11 {
-			lineFields = splitLegacyFields(line, listPaneFieldCount)
-		}
-		if len(lineFields) == 11 && parsePositiveInt(lineFields[9]) == 0 {
-			lineFields = lineFields[:10]
+		default:
+			lineFields = splitLegacyFields(line, legacyListPaneFieldCount)
+			if len(lineFields) == legacyListPaneFieldCount {
+				lineFields = append(lineFields, "")
+			}
 		}
 		if len(lineFields) != listPaneFieldCount {
 			return nil, invalidFieldCountError(listPaneFieldCount, len(lineFields))

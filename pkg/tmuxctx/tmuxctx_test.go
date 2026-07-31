@@ -194,6 +194,7 @@ func TestServerSpecFromArgs(t *testing.T) {
 	}{
 		{name: "socket", args: []string{"tmux: server", "-S", "/tmp/custom"}, identity: "/tmp/custom", tmuxArgs: []string{"-S", "/tmp/custom"}, ok: true},
 		{name: "named", args: []string{"tmux: server", "-L", "other"}, identity: "-L:other", tmuxArgs: []string{"-L", "other"}, ok: true},
+		{name: "listed named server", args: []string{"tmux", "-L", "other", "new-session", "-d"}, identity: "-L:other", tmuxArgs: []string{"-L", "other"}, ok: true},
 		{name: "other", args: []string{"bash"}, ok: false},
 	}
 	for _, test := range tests {
@@ -218,10 +219,8 @@ func TestListPanesWithOptionsEnumeratesCustomServers(t *testing.T) {
 	run := func(_ context.Context, _ Env, args ...string) (string, error) {
 		calls = append(calls, append([]string{}, args...))
 		switch strings.Join(args, "\x00") {
-		case "list-panes\x00-a\x00-F\x00" + listPanesFormat():
-			return "$1\tdefault\t@1\t0\tmain\t%1\t0\t/tmp\t100\t/dev/pts/1\n", nil
-		case "-S\x00/tmp/custom\x00list-panes\x00-a\x00-F\x00" + listPanesFormat():
-			return "$2\tcustom\t@2\t0\tmain\t%2\t0\t/tmp\t200\t/dev/pts/2\n", nil
+		case "-L\x00custom\x00list-panes\x00-a\x00-F\x00" + listPanesFormat():
+			return "$2\tcustom\t@2\t0\tmain\t%2\t0\t/tmp\t200\t/dev/pts/2\t/tmp/tmux-1000/custom\n", nil
 		default:
 			t.Fatalf("unexpected argv: %#v", args)
 			return "", nil
@@ -230,16 +229,47 @@ func TestListPanesWithOptionsEnumeratesCustomServers(t *testing.T) {
 	panes, err := ListPanesWithOptions(context.Background(), ListOptions{
 		Run: run,
 		ServerProcesses: func(context.Context) ([]ServerProcess, error) {
-			return []ServerProcess{{PID: 42, Args: []string{"tmux: server", "-S", "/tmp/custom"}}}, nil
+			return []ServerProcess{{PID: 42, Args: []string{"tmux", "-L", "custom", "new-session", "-d"}}}, nil
 		},
 	})
 	if err != nil {
 		t.Fatalf("ListPanesWithOptions returned error: %v", err)
 	}
-	if len(panes) != 2 || len(calls) != 2 {
+	if len(panes) != 1 || len(calls) != 1 {
 		t.Fatalf("panes = %#v, calls = %#v", panes, calls)
 	}
-	if panes[1].ServerIdentity != "/tmp/custom" || panes[1].PanePID != 200 || panes[1].PaneTTY != "/dev/pts/2" {
-		t.Fatalf("custom pane identity = %#v", panes[1])
+	if panes[0].ServerIdentity != "/tmp/tmux-1000/custom" || panes[0].Tmux.ServerSocket != "/tmp/tmux-1000/custom" || panes[0].PanePID != 200 || panes[0].PaneTTY != "/dev/pts/2" {
+		t.Fatalf("custom pane identity = %#v", panes[0])
+	}
+}
+
+func TestListPanesWithOptionsDoesNotProbeMissingDefaultServer(t *testing.T) {
+	t.Parallel()
+	called := false
+	panes, err := ListPanesWithOptions(context.Background(), ListOptions{
+		Run: func(context.Context, Env, ...string) (string, error) {
+			called = true
+			return "", nil
+		},
+		ServerProcesses: func(context.Context) ([]ServerProcess, error) { return nil, nil },
+	})
+	if err != nil || len(panes) != 0 || called {
+		t.Fatalf("no-server discovery = panes %#v, called %t, error %v", panes, called, err)
+	}
+}
+
+func TestListPanesWithOptionsDeduplicatesCanonicalSocketIdentity(t *testing.T) {
+	t.Parallel()
+	const socket = "/tmp/tmux-1000/default"
+	output := "$1\twork\t@1\t0\tmain\t%1\t0\t/tmp\t100\t/dev/pts/1\t" + socket + "\n"
+	panes, err := ListPanesWithOptions(context.Background(), ListOptions{
+		Env: Env{TMUX: socket + ",100,0", TMUXPane: "%1"},
+		Run: func(context.Context, Env, ...string) (string, error) { return output, nil },
+		ServerProcesses: func(context.Context) ([]ServerProcess, error) {
+			return []ServerProcess{{PID: 42, Args: []string{"tmux", "new-session", "-d"}}}, nil
+		},
+	})
+	if err != nil || len(panes) != 1 || panes[0].ServerIdentity != socket {
+		t.Fatalf("deduplicated panes = %#v, error %v", panes, err)
 	}
 }
