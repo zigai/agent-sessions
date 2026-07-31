@@ -57,6 +57,7 @@ func TestContextAwareIntegrationEntryPointsPreserveCancellation(t *testing.T) {
 	}
 }
 
+//nolint:cyclop // one install assertion verifies every required Codex hook shape
 func TestInstallCodexMergesHooks(t *testing.T) {
 	t.Setenv("CODEX_HOME", t.TempDir())
 
@@ -100,10 +101,13 @@ func TestInstallCodexMergesHooks(t *testing.T) {
 	if !hasUserPrompt {
 		t.Fatal("expected UserPromptSubmit hook")
 	}
-	for _, event := range []string{"PostToolUse", "PreCompact", "PostCompact", "SubagentStart", "SubagentStop"} {
+	for _, event := range []string{"PostToolUse", "PreCompact", "PostCompact", "SubagentStart", "SubagentStop", harnesspkg.HookEventSessionEnd} {
 		if _, ok := hooks[event]; !ok {
 			t.Fatalf("expected %s hook", event)
 		}
+	}
+	if !strings.Contains(string(data), "--presence gone --event SessionEnd") || !strings.Contains(string(data), `"matcher": "other"`) {
+		t.Fatalf("Codex SessionEnd hook is incomplete: %s", data)
 	}
 }
 
@@ -222,7 +226,7 @@ func TestInstallClaudeReplacesManagedHooks(t *testing.T) {
 		Harness:              registry.HarnessClaude,
 		Path:                 path,
 		RemovedText:          "old-agent-sessions",
-		RequiredText:         []string{"--raw-stdin", "agent_sessions_integration_version=3"},
+		RequiredText:         []string{"--raw-stdin", "agent_sessions_integration_version=4"},
 		FirstChangeMessage:   "expected claude install to replace old managed hook",
 		SecondChangedMessage: "expected second claude install to be idempotent",
 	})
@@ -532,7 +536,7 @@ func requireClinePluginMarker(t *testing.T, pluginDir string) {
 	requireTextContainsAll(t, marker, []string{
 		managedMarker,
 		"AGENT_SESSIONS_INTEGRATION_ID=cline",
-		"AGENT_SESSIONS_INTEGRATION_VERSION=4",
+		"AGENT_SESSIONS_INTEGRATION_VERSION=5",
 		"AGENT_SESSIONS_SOURCE=cline-plugin",
 	}, "Cline plugin marker")
 }
@@ -818,6 +822,9 @@ func TestInstallPiWritesExtension(t *testing.T) {
 	if !strings.Contains(result.Snippet, `"--observed-at", observedAt`) {
 		t.Fatalf("expected pi observed timestamp in snippet: %q", result.Snippet)
 	}
+	if !strings.Contains(result.Snippet, "addEvent(args, event?.type)") {
+		t.Fatalf("expected Pi native event propagation in snippet: %q", result.Snippet)
+	}
 }
 
 func TestInstallOmpWritesExtension(t *testing.T) {
@@ -856,8 +863,33 @@ func TestInstallOmpWritesExtension(t *testing.T) {
 		`"--session-path", currentSessionPath`,
 		`"--cwd", currentCwd`,
 		`"report", "omp"`,
-		"AGENT_SESSIONS_INTEGRATION_VERSION=3",
+		"addEvent(args, event?.type)",
+		"AGENT_SESSIONS_INTEGRATION_VERSION=4",
 	}, "oh-my-pi extension")
+}
+
+func TestPiAndOmpRefuseToOverwriteSharedExtension(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("PI_CODING_AGENT_DIR", dir)
+
+	piResult, err := Run(Options{Harness: registry.HarnessPi, Binary: testInstallBinary})
+	if err != nil {
+		t.Fatal(err)
+	}
+	original, err := os.ReadFile(piResult.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Run(Options{Harness: registry.HarnessOmp, Binary: testInstallBinary}); !errors.Is(err, errForeignFile) {
+		t.Fatalf("OMP overwrite error = %v, want errForeignFile", err)
+	}
+	current, err := os.ReadFile(piResult.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(current) != string(original) || !strings.Contains(string(current), "AGENT_SESSIONS_INTEGRATION_ID=pi") {
+		t.Fatalf("Pi extension changed after refused OMP install: %s", current)
+	}
 }
 
 func TestInstallOmpUsesProfileAgentDir(t *testing.T) {
@@ -916,6 +948,9 @@ func TestInstallOpenCodeWritesPlugin(t *testing.T) {
 	if !strings.Contains(result.Snippet, `"permission.asked"`) {
 		t.Fatalf("expected permission event mapping in snippet: %q", result.Snippet)
 	}
+	if !strings.Contains(result.Snippet, `"session.deleted"`) || !strings.Contains(result.Snippet, `state === "gone" ? "--presence"`) {
+		t.Fatalf("expected OpenCode session deletion mapping in snippet: %q", result.Snippet)
+	}
 	if !strings.Contains(result.Snippet, `"--observed-at", observedAt`) {
 		t.Fatalf("expected opencode observed timestamp in snippet: %q", result.Snippet)
 	}
@@ -947,7 +982,9 @@ func TestInstallKiloWritesPlugin(t *testing.T) {
 		`export default { id: "agent-sessions-state", server: AgentSessionsPlugin };`,
 		`event: async ({ event }`,
 		`"permission.asked"`,
-		`"AGENT_SESSIONS_INTEGRATION_VERSION=3"`,
+		`"session.deleted"`,
+		`state === "gone" ? "--presence"`,
+		`"AGENT_SESSIONS_INTEGRATION_VERSION=4"`,
 		`"--observed-at", observedAt`,
 		`"kilo_status"`,
 		`"agent_sessions_integration", source`,
@@ -1194,7 +1231,7 @@ func TestInstallDroidWritesHooks(t *testing.T) {
 	requireTextContainsAll(t, text, []string{
 		"--raw-stdin-defaults-only",
 		"agent_sessions_integration=droid-hook",
-		"agent_sessions_integration_version=3",
+		"agent_sessions_integration_version=4",
 	}, "droid hooks")
 	if strings.Contains(text, "statusMessage") {
 		t.Fatalf("expected Droid hooks not to include unsupported statusMessage field: %s", text)
@@ -1272,7 +1309,7 @@ func TestInstallKimiCodeWritesHooks(t *testing.T) {
 		"--raw-stdin",
 		"--quiet",
 		"agent_sessions_integration=kimi-code-hook",
-		"agent_sessions_integration_version=3",
+		"agent_sessions_integration_version=4",
 		managedMarker,
 		"--activity idle --event SessionStart",
 		"--activity running --event UserPromptSubmit",
@@ -1513,7 +1550,7 @@ func TestRunAllInstallsEveryHarness(t *testing.T) {
 	t.Setenv("CODEX_HOME", t.TempDir())
 	t.Setenv("GROK_HOME", t.TempDir())
 	t.Setenv("KIMI_CODE_HOME", t.TempDir())
-	t.Setenv("PI_CODING_AGENT_DIR", t.TempDir())
+	t.Setenv("PI_CODING_AGENT_DIR", "")
 	t.Setenv(registry.StateDirEnv, t.TempDir())
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("AGY_CLI_HOME", t.TempDir())
@@ -1719,8 +1756,8 @@ func requireAgyPluginMarker(t *testing.T, dir string) {
 	if !strings.Contains(string(marker), managedMarker) {
 		t.Fatalf("expected managed marker, got %q", marker)
 	}
-	if !strings.Contains(string(marker), "AGENT_SESSIONS_INTEGRATION_VERSION=4") {
-		t.Fatalf("expected agy integration version 4 marker, got %q", marker)
+	if !strings.Contains(string(marker), "AGENT_SESSIONS_INTEGRATION_VERSION=5") {
+		t.Fatalf("expected agy integration version 5 marker, got %q", marker)
 	}
 }
 
@@ -1804,7 +1841,7 @@ func requireGoosePluginScript(t *testing.T, dir string) {
 		managedMarker,
 		"--raw-stdin-defaults-only",
 		"agent_sessions_integration=goose-hook",
-		"agent_sessions_integration_version=3",
+		"agent_sessions_integration_version=4",
 		`--presence "$transition"`,
 		`--activity "$transition"`,
 		`--event "$event"`,

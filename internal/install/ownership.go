@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	harnesspkg "github.com/zigai/agent-sessions/v2/pkg/harness"
+	"github.com/zigai/agent-sessions/v2/pkg/registry"
 )
 
 // ArtifactStatus describes whether a managed integration artifact is absent,
@@ -91,4 +92,40 @@ func expectedIntegrationVersion(content string) int {
 		return managedIntegrationVersion
 	}
 	return harnesspkg.IntegrationVersionFor(id)
+}
+
+func integrationIDFromContent(content string) string {
+	match := integrationIDPattern.FindStringSubmatch(content)
+	if len(match) != integrationCaptureGroups {
+		return ""
+	}
+	id, err := harnesspkg.Normalize(match[1])
+	if err != nil {
+		return strings.ToLower(match[1])
+	}
+	return string(id)
+}
+
+func classifyArtifactForHarness(path string, harnessID registry.Harness) (ArtifactStatus, error) {
+	status, err := ClassifyArtifact(path)
+	if err != nil || status == ArtifactMissing || status == ArtifactForeign {
+		return status, err
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		return "", fmt.Errorf("checking artifact %s ownership: %w", path, err)
+	}
+	ownershipPath := path
+	if info.IsDir() {
+		ownershipPath = filepath.Join(path, ".agent-sessions-managed")
+	}
+	data, err := os.ReadFile(ownershipPath)
+	if err != nil {
+		return "", fmt.Errorf("reading artifact ownership %s: %w", path, err)
+	}
+	if integrationID := integrationIDFromContent(string(data)); integrationID != "" && integrationID != string(harnessID) {
+		return ArtifactForeign, nil
+	}
+	return status, nil
 }

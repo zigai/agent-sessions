@@ -1,13 +1,17 @@
 package install
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	harnesspkg "github.com/zigai/agent-sessions/v2/pkg/harness"
 	"github.com/zigai/agent-sessions/v2/pkg/registry"
 )
+
+var errTestManifestWrite = errors.New("manifest write failed")
 
 //nolint:gocognit,cyclop // one uniform round trip verifies every managed artifact shape
 func TestInstallRemoveRoundTripForEveryHarness(t *testing.T) {
@@ -125,6 +129,67 @@ func TestRemoveRefusesForeignOwnedFile(t *testing.T) {
 	}
 	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("foreign file was removed: %v", err)
+	}
+}
+
+func TestRemoveRefusesExtensionOwnedByAnotherHarness(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("PI_CODING_AGENT_DIR", dir)
+	t.Setenv(registry.StateDirEnv, t.TempDir())
+
+	installed, err := Run(Options{Harness: registry.HarnessOmp, Binary: testInstallBinary})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Remove(Options{Harness: registry.HarnessPi, Binary: testInstallBinary}); !errors.Is(err, errForeignFile) {
+		t.Fatalf("Pi removal error = %v, want errForeignFile", err)
+	}
+	data, err := os.ReadFile(installed.Path)
+	if err != nil {
+		t.Fatalf("OMP extension was removed: %v", err)
+	}
+	if !strings.Contains(string(data), "AGENT_SESSIONS_INTEGRATION_ID=omp") {
+		t.Fatalf("unexpected shared extension contents: %s", data)
+	}
+}
+
+func TestPluginRemovalRollsBackDirectoryWhenManifestWriteFails(t *testing.T) {
+	root := t.TempDir()
+	pluginDir := filepath.Join(root, "plugin")
+	if err := os.MkdirAll(pluginDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	pluginFile := filepath.Join(pluginDir, "index.ts")
+	if err := os.WriteFile(pluginFile, []byte("managed plugin"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	manifestPath := filepath.Join(root, "import_manifest.json")
+	originalManifest := []byte("{\n  \"imports\": []\n}\n")
+	if err := os.WriteFile(manifestPath, originalManifest, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	plan := harnesspkg.PluginDirectoryInstallPlan{
+		Dir: pluginDir,
+		ImportManifest: &harnesspkg.ImportManifestInstallPlan{
+			Path: manifestPath,
+		},
+	}
+	err := applyPluginRemovalWithWriter(
+		plan,
+		true,
+		true,
+		importManifest{Imports: nil},
+		nil,
+		func(string, importManifest) error { return errTestManifestWrite },
+	)
+	if !errors.Is(err, errTestManifestWrite) {
+		t.Fatalf("plugin removal error = %v, want injected manifest failure", err)
+	}
+	if data, err := os.ReadFile(pluginFile); err != nil || string(data) != "managed plugin" {
+		t.Fatalf("plugin directory was not restored: data=%q err=%v", data, err)
+	}
+	if data, err := os.ReadFile(manifestPath); err != nil || string(data) != string(originalManifest) {
+		t.Fatalf("manifest rollback = %q, err=%v", data, err)
 	}
 }
 

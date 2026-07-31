@@ -34,7 +34,7 @@ if [ "$1 $2" = "plugins inspect" ]; then
   source=$(cat "$state/source")
   policy=false
   if [ -f "$state/policy" ]; then policy=true; fi
-  printf '[{"plugin":{"id":"agent-sessions-state","status":"loaded","source":"path","version":"0.0.3"},"policy":{"allowConversationAccess":%s},"install":{"source":"path","sourcePath":"%s","installPath":"%s","version":"0.0.3"}}]\n' "$policy" "$source" "$source"
+  printf '[{"plugin":{"id":"agent-sessions-state","status":"loaded","source":"path","version":"0.0.4"},"policy":{"allowConversationAccess":%s},"install":{"source":"path","sourcePath":"%s","installPath":"%s","version":"0.0.4"}}]\n' "$policy" "$source" "$source"
   exit 0
 fi
 if [ "$1 $2" = "plugins install" ]; then

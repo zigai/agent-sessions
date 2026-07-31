@@ -239,7 +239,7 @@ func removeTextBlock(options Options, harnessID registry.Harness, plan harnesspk
 func removeOwnedFiles(options Options, harnessID registry.Harness, paths []string, resultPath string) (Result, error) {
 	managed := make([]string, 0, len(paths))
 	for _, path := range paths {
-		status, err := ClassifyArtifact(path)
+		status, err := classifyArtifactForHarness(path, harnessID)
 		if err != nil {
 			return Result{}, err
 		}
@@ -306,18 +306,63 @@ func removePluginDirectory(ctx context.Context, options Options, harnessID regis
 }
 
 func applyPluginRemoval(plan harnesspkg.PluginDirectoryInstallPlan, exists bool, manifestChanged bool, manifest importManifest, obsoleteFiles []string) error {
-	if exists {
-		if err := os.RemoveAll(plan.Dir); err != nil {
-			return fmt.Errorf("removing managed plugin %s: %w", plan.Dir, err)
-		}
-	}
+	return applyPluginRemovalWithWriter(plan, exists, manifestChanged, manifest, obsoleteFiles, writeImportManifest)
+}
+
+//nolint:cyclop // removal coordinates directory, manifest, obsolete-file, and rollback stages
+func applyPluginRemovalWithWriter(
+	plan harnesspkg.PluginDirectoryInstallPlan,
+	exists bool,
+	manifestChanged bool,
+	manifest importManifest,
+	obsoleteFiles []string,
+	writeManifest func(string, importManifest) error,
+) error {
+	var rollbackManifest func() error
 	if plan.ImportManifest != nil && manifestChanged {
-		if err := writeImportManifest(plan.ImportManifest.Path, manifest); err != nil {
+		var err error
+		rollbackManifest, err = prepareImportManifestRollback(plan.ImportManifest.Path)
+		if err != nil {
 			return err
 		}
 	}
 
-	return removeManagedObsoleteFiles(obsoleteFiles)
+	var rollbackPlugin func() error
+	var commitPlugin func() error
+	if exists {
+		plugin := newPluginDirectoryInstall(plan, nil)
+		parent := filepath.Dir(plan.Dir)
+		backup, backupExists, err := plugin.backupCurrent(parent)
+		if err != nil {
+			return err
+		}
+		rollbackPlugin = func() error {
+			if err := plugin.restoreBackup(backup, backupExists); err != nil {
+				return err
+			}
+			return syncDir(parent)
+		}
+		commitPlugin = func() error {
+			return plugin.commitReplacement(parent, backup, backupExists)
+		}
+	}
+
+	if plan.ImportManifest != nil && manifestChanged {
+		if err := writeManifest(plan.ImportManifest.Path, manifest); err != nil {
+			return rollbackPluginDirectoryAndManifest(rollbackPlugin, rollbackManifest, err)
+		}
+	}
+
+	if err := removeManagedObsoleteFiles(obsoleteFiles); err != nil {
+		return rollbackPluginDirectoryAndManifest(rollbackPlugin, rollbackManifest, err)
+	}
+	if commitPlugin == nil {
+		return nil
+	}
+	if err := commitPlugin(); err != nil {
+		return rollbackPluginDirectoryAndManifest(rollbackPlugin, rollbackManifest, err)
+	}
+	return nil
 }
 
 func removeImport(manifest importManifest, name string) (importManifest, bool) {

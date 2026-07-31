@@ -36,7 +36,7 @@ if [ "$1 $2" = "plugins list" ]; then
   fi
   status="not enabled"
   if [ -f "$state/enabled" ]; then status=enabled; fi
-  printf '[{"name":"agent-sessions-state","status":"%s","version":"0.0.3","description":"test","source":"user"}]\n' "$status"
+  printf '[{"name":"agent-sessions-state","status":"%s","version":"0.0.4","description":"test","source":"user"}]\n' "$status"
   exit 0
 fi
 if [ "$1 $2" = "plugins enable" ]; then

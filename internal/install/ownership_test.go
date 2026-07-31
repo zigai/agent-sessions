@@ -5,7 +5,7 @@ import "testing"
 func TestClassifyArtifactContentAcceptsSourceMetadata(t *testing.T) {
 	t.Parallel()
 
-	current := `{"command":"agent-sessions report codex --attribute agent_sessions_integration_version=3 --attribute agent_sessions_integration=codex-hook"}`
+	current := `{"command":"agent-sessions report codex --attribute agent_sessions_integration_version=4 --attribute agent_sessions_integration=codex-hook"}`
 	if status := classifyArtifactContent(current); status != ArtifactCurrent {
 		t.Fatalf("current source metadata classified as %q", status)
 	}
@@ -23,11 +23,11 @@ func TestClassifyArtifactContentAcceptsSourceMetadata(t *testing.T) {
 
 func TestClassifyArtifactContentUsesHarnessGeneration(t *testing.T) {
 	t.Parallel()
-	current := "agent-sessions managed integration\nAGENT_SESSIONS_INTEGRATION_ID=agy\nAGENT_SESSIONS_INTEGRATION_VERSION=4"
+	current := "agent-sessions managed integration\nAGENT_SESSIONS_INTEGRATION_ID=agy\nAGENT_SESSIONS_INTEGRATION_VERSION=5"
 	if status := classifyArtifactContent(current); status != ArtifactCurrent {
 		t.Fatalf("current agy status = %q", status)
 	}
-	stale := "agent-sessions managed integration\nAGENT_SESSIONS_INTEGRATION_ID=agy\nAGENT_SESSIONS_INTEGRATION_VERSION=3"
+	stale := "agent-sessions managed integration\nAGENT_SESSIONS_INTEGRATION_ID=agy\nAGENT_SESSIONS_INTEGRATION_VERSION=4"
 	if status := classifyArtifactContent(stale); status != ArtifactStale {
 		t.Fatalf("stale agy status = %q", status)
 	}

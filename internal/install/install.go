@@ -131,6 +131,18 @@ func fileNeedsUpdate(path string, content string, force bool) (bool, error) {
 	if !force && !strings.Contains(string(current), managedMarker) {
 		return false, fmt.Errorf("%w: %s; pass --force to replace it", errForeignFile, path)
 	}
+	if !force {
+		currentIntegration := integrationIDFromContent(string(current))
+		nextIntegration := integrationIDFromContent(content)
+		if currentIntegration != "" && nextIntegration != "" && currentIntegration != nextIntegration {
+			return false, fmt.Errorf(
+				"%w: %s is managed by the %s integration; pass --force to replace it",
+				errForeignFile,
+				path,
+				currentIntegration,
+			)
+		}
+	}
 
 	return true, nil
 }

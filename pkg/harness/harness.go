@@ -53,7 +53,7 @@ type Definition struct {
 	Capabilities Capabilities
 }
 
-const IntegrationVersion = 3
+const IntegrationVersion = 4
 
 // IntegrationVersionFor returns the managed artifact generation for a harness.
 func IntegrationVersionFor(id registry.Harness) int {

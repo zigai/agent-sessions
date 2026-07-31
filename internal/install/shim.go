@@ -191,14 +191,14 @@ set -u
 
 agent_sessions_managed_marker=%s
 AGENT_SESSIONS_INTEGRATION_ID=%s-shim
-AGENT_SESSIONS_INTEGRATION_VERSION=3
+AGENT_SESSIONS_INTEGRATION_VERSION=%d
 agent_sessions_bin=%s
 harness_bin=%s
 
-"$agent_sessions_bin" report %s --presence live --evidence process --pid "$$" --event process.start --attribute agent_sessions_integration_version=3 --attribute agent_sessions_integration=%s-shim --queue --quiet >/dev/null 2>&1 || true
+"$agent_sessions_bin" report %s --presence live --evidence process --pid "$$" --event process.start --attribute agent_sessions_integration_version=%d --attribute agent_sessions_integration=%s-shim --queue --quiet >/dev/null 2>&1 || true
 "$harness_bin" "$@"
 status=$?
-"$agent_sessions_bin" report %s --presence gone --evidence process --pid "$$" --event process.exit --attribute agent_sessions_integration_version=3 --attribute agent_sessions_integration=%s-shim --queue --quiet >/dev/null 2>&1 || true
+"$agent_sessions_bin" report %s --presence gone --evidence process --pid "$$" --event process.exit --attribute agent_sessions_integration_version=%d --attribute agent_sessions_integration=%s-shim --queue --quiet >/dev/null 2>&1 || true
 exit "$status"
-`, harnesspkg.ShellQuote(managedMarker), harness, harnesspkg.ShellQuote(binary), harnesspkg.ShellQuote(target), harnesspkg.ShellQuote(harness), harness, harnesspkg.ShellQuote(harness), harness)
+`, harnesspkg.ShellQuote(managedMarker), harness, harnesspkg.IntegrationVersion, harnesspkg.ShellQuote(binary), harnesspkg.ShellQuote(target), harnesspkg.ShellQuote(harness), harnesspkg.IntegrationVersion, harness, harnesspkg.ShellQuote(harness), harnesspkg.IntegrationVersion, harness)
 }
