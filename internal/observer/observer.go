@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"sync"
 	"time"
 
@@ -855,5 +856,12 @@ func (o *Observer) clearRunning() {
 }
 
 func (r Result) String() string {
-	return fmt.Sprintf("observations=%d sessions=%d processes=%d panes=%d", r.Observations, r.Sessions, r.Processes, r.Panes)
+	result := fmt.Sprintf(
+		"observations=%d sessions=%d processes=%d panes=%d catalog=%d present=%d gone=%d changed=%d degraded=%t",
+		r.Observations, r.Sessions, r.Processes, r.Panes, r.Catalog, r.Present, r.Gone, r.Changed, r.Degraded,
+	)
+	if r.Error != "" {
+		result += " error=" + strconv.Quote(r.Error)
+	}
+	return result
 }

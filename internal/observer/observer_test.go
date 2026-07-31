@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -14,6 +15,15 @@ import (
 	"github.com/zigai/agent-sessions/v2/pkg/registry"
 	"github.com/zigai/agent-sessions/v2/pkg/tmuxctx"
 )
+
+func TestResultStringIncludesDegradedStateAndError(t *testing.T) {
+	t.Parallel()
+	result := Result{Observations: 1, Sessions: 2, Processes: 3, Panes: 4, Degraded: true, Error: "pane inventory unavailable"}
+	text := result.String()
+	if !strings.Contains(text, "degraded=true") || !strings.Contains(text, `error="pane inventory unavailable"`) {
+		t.Fatalf("result string = %q", text)
+	}
+}
 
 var errFailGoneObservation = errors.New("fail gone observation once")
 
