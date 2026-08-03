@@ -177,4 +177,47 @@ func TestNativeProcessIdentitySeedsObserverReconciliation(t *testing.T) {
 	}
 }
 
+func TestStaleNativeStartDoesNotReviveGoneSession(t *testing.T) {
+	t.Parallel()
+
+	store := NewFileStore(filepath.Join(t.TempDir(), "sessions.json"))
+	ctx := context.Background()
+	at := time.Now().UTC().Add(-time.Minute)
+	identity := ObservationIdentity{SessionPath: "/tmp/pi-stale.json"}
+	process := &ProcessIdentity{PID: 85, StartIdentity: "boot:85"}
+
+	if _, err := store.Observe(ctx, Observation{
+		Source: ObservationSourceProcess, Evidence: ObservationEvidenceProcessPresence,
+		Harness: HarnessPi, Identity: identity, ProcessPresent: boolPtr(true), Process: process,
+		ObservedAt: at,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Observe(ctx, Observation{
+		Source: ObservationSourceProcess, Evidence: ObservationEvidenceProcessPresence,
+		Harness: HarnessPi, Identity: identity, ProcessPresent: boolPtr(false), Process: process,
+		ObservedAt: at.Add(10 * time.Second),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	start := NativeLifecycleStart
+	live := PresenceLive
+	idle := ActivityIdle
+	observed, err := store.Observe(ctx, Observation{
+		Source: ObservationSourceNative, Evidence: ObservationEvidenceNativeEvent,
+		Harness: HarnessPi, Identity: identity, Lifecycle: &start, Presence: &live, Activity: &idle,
+		Process: process, NativeEvent: "session_start", ObservedAt: at.Add(5 * time.Second),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if observed.Presence != PresenceGone || observed.Activity != nil {
+		t.Fatalf("stale start revived gone session: %#v", observed)
+	}
+	if _, err := store.List(ctx, Filter{}); err != nil {
+		t.Fatalf("stale start corrupted store: %v", err)
+	}
+}
+
 func boolPtr(value bool) *bool { return &value }

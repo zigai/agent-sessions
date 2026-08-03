@@ -267,9 +267,9 @@ func shouldIgnoreNativeAfterGone(session Session, observation Observation, at ti
 		return false
 	}
 	if observation.Lifecycle != nil && (*observation.Lifecycle == NativeLifecycleStart || *observation.Lifecycle == NativeLifecycleResume) {
-		return false
+		return !at.After(session.PresenceChangedAt)
 	}
-	return !at.Before(session.PresenceChangedAt)
+	return true
 }
 
 func applyObservation(session *Session, observation Observation, at, receivedAt time.Time) error {
@@ -1068,6 +1068,9 @@ func (s *FileStore) withSnapshot(mutator func(*snapshot) error) error {
 	if err := mutator(&snap); err != nil {
 		return closeStoreLock(lock, err)
 	}
+	if err := validateSnapshot(snap); err != nil {
+		return closeStoreLock(lock, fmt.Errorf("validating updated store: %w", err))
+	}
 	return closeStoreLock(lock, writeSnapshotAtomic(s.path, snap))
 }
 
@@ -1110,11 +1113,42 @@ func (s *FileStore) load() (snapshot, error) {
 	if snap.Sessions == nil {
 		snap.Sessions = make(map[string]Session)
 	}
+	repairStaleNativeRevivals(&snap)
 	if err := validateSnapshot(snap); err != nil {
 		return snapshot{}, err
 	}
 	snap.SchemaVersion = storeSchemaVersion
 	return snap, nil
+}
+
+// repairStaleNativeRevivals normalizes snapshots written by versions that
+// allowed queued native presence evidence older than process-gone evidence to
+// revive the aggregate presence without restoring activity.
+//
+//nolint:cyclop // every field is required to identify this legacy corruption without masking unrelated damage
+func repairStaleNativeRevivals(snap *snapshot) {
+	for id, session := range snap.Sessions {
+		if session.Activity != nil || session.Presence == PresenceGone ||
+			session.Process == nil || session.Observations.Native == nil || session.Observations.Process == nil ||
+			session.ActivityDecision == nil {
+			continue
+		}
+		native := session.Observations.Native
+		process := session.Observations.Process
+		decision := session.ActivityDecision
+		if native.Presence == nil || *native.Presence == PresenceGone ||
+			process.Present || !session.Process.Equal(process.Process) ||
+			decision.Authority != "process" || decision.Reason != "process_gone" || !decision.Process.Equal(process.Process) ||
+			native.ObservedAt.After(process.ObservedAt) ||
+			!session.PresenceChangedAt.Equal(native.ObservedAt) ||
+			!session.ActivityChangedAt.Equal(process.ObservedAt) ||
+			!decision.ObservedAt.Equal(process.ObservedAt) {
+			continue
+		}
+		session.Presence = PresenceGone
+		session.PresenceChangedAt = process.ObservedAt
+		snap.Sessions[id] = session
+	}
 }
 
 func validateSnapshot(snap snapshot) error {

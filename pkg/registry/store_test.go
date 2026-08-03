@@ -329,6 +329,50 @@ func TestStoreRejectsCorruptPersistedSessionState(t *testing.T) {
 	}
 }
 
+func TestStoreRepairsStaleNativeRevival(t *testing.T) {
+	t.Parallel()
+
+	store := writeCorruptTestStore(t, corruptSnapshotStaleNativeRevival)
+	sessions, err := store.List(context.Background(), Filter{})
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(sessions) != 1 || sessions[0].Presence != PresenceGone || sessions[0].Activity != nil {
+		t.Fatalf("List() sessions = %#v, want repaired gone session", sessions)
+	}
+}
+
+func TestStoreRejectsInvalidMutationBeforePersisting(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "sessions.json")
+	store := NewFileStore(path)
+	if _, err := store.Observe(context.Background(), Observation{
+		Source: ObservationSourceNative, Evidence: ObservationEvidenceNativeEvent,
+		Harness: HarnessCodex, Identity: ObservationIdentity{SessionID: "session"},
+		NativeEvent: "start", ObservedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	err := store.withSnapshot(func(snap *snapshot) error {
+		id, session := onlyStoredSession(snap.Sessions)
+		session.Activity = nil
+		snap.Sessions[id] = session
+		return nil
+	})
+	if !errors.Is(err, ErrCorruptStore) {
+		t.Fatalf("withSnapshot() error = %v, want %v", err, ErrCorruptStore)
+	}
+	sessions, err := store.List(context.Background(), Filter{})
+	if err != nil {
+		t.Fatalf("List() after rejected mutation error = %v", err)
+	}
+	if len(sessions) != 1 || sessions[0].Activity == nil {
+		t.Fatalf("invalid mutation reached disk: %#v", sessions)
+	}
+}
+
 func writeCorruptTestStore(t *testing.T, mutate func(*snapshot)) *FileStore {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "sessions.json")
@@ -382,6 +426,28 @@ func corruptSnapshotProcess(snap *snapshot) {
 func corruptSnapshotObservationTime(snap *snapshot) {
 	id, session := onlyStoredSession(snap.Sessions)
 	session.Observations.Native.ObservedAt = time.Time{}
+	snap.Sessions[id] = session
+}
+
+func corruptSnapshotStaleNativeRevival(snap *snapshot) {
+	id, session := onlyStoredSession(snap.Sessions)
+	process := ProcessIdentity{PID: 42, StartIdentity: "boot:42"}
+	nativeAt := session.Observations.Native.ObservedAt
+	processAt := nativeAt.Add(time.Second)
+	start := NativeLifecycleStart
+	live := PresenceLive
+	idle := ActivityIdle
+	session.Presence = PresenceLive
+	session.Activity = nil
+	session.Process = &process
+	session.PresenceChangedAt = nativeAt
+	session.ActivityChangedAt = processAt
+	session.Observations.Native.Lifecycle = &start
+	session.Observations.Native.Presence = &live
+	session.Observations.Native.Activity = &idle
+	session.Observations.Native.Process = process
+	session.Observations.Process = &ProcessObservation{Present: false, Process: process, ObservedAt: processAt}
+	session.ActivityDecision = &ActivityDecision{Authority: "process", Reason: "process_gone", Process: process, ObservedAt: processAt}
 	snap.Sessions[id] = session
 }
 
