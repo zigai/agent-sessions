@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/zigai/agent-sessions/v2/pkg/registry"
@@ -75,17 +76,29 @@ func catalogPayload() (string, error) {
 }
 
 func readCatalogFile(path string) ([]byte, error) {
-	file, err := os.Open(path) //nolint:gosec // the catalog path is explicitly supplied by the user
+	root, err := os.OpenRoot(filepath.Dir(path))
 	if err != nil {
+		return nil, fmt.Errorf("opening catalog file %q: %w", path, err)
+	}
+	file, err := root.Open(filepath.Base(path))
+	if err != nil {
+		closeErr := root.Close()
+		if closeErr != nil {
+			return nil, fmt.Errorf("opening catalog file %q: %w; closing root: %w", path, err, closeErr)
+		}
 		return nil, fmt.Errorf("opening catalog file %q: %w", path, err)
 	}
 	data, readErr := io.ReadAll(io.LimitReader(file, maxCatalogBytes+1))
 	closeErr := file.Close()
+	rootCloseErr := root.Close()
 	if readErr != nil {
 		return nil, fmt.Errorf("reading catalog file %q: %w", path, readErr)
 	}
 	if closeErr != nil {
 		return nil, fmt.Errorf("closing catalog file %q: %w", path, closeErr)
+	}
+	if rootCloseErr != nil {
+		return nil, fmt.Errorf("closing catalog root for %q: %w", path, rootCloseErr)
 	}
 	if len(data) > maxCatalogBytes {
 		return nil, fmt.Errorf("reading catalog file %q: %w", path, errCatalogTooLarge)

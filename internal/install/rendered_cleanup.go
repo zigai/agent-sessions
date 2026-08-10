@@ -9,39 +9,41 @@ import (
 )
 
 func staleManagedRenderedFiles(dir string, expected map[string]string) ([]string, error) {
-	if _, err := os.Stat(dir); err != nil {
+	root, err := os.OpenRoot(dir)
+	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, nil
 		}
-		return nil, fmt.Errorf("checking rendered artifact directory %s: %w", dir, err)
+		return nil, fmt.Errorf("opening rendered artifact directory %s: %w", dir, err)
 	}
 
 	stale := make([]string, 0)
-	err := filepath.WalkDir(dir, func(path string, entry fs.DirEntry, walkErr error) error {
+	walkErr := fs.WalkDir(root.FS(), ".", func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
 		if entry.IsDir() {
 			return nil
 		}
-		relative, err := filepath.Rel(dir, path)
-		if err != nil {
-			return fmt.Errorf("relativizing rendered artifact path: %w", err)
-		}
+		relative := filepath.FromSlash(path)
 		if _, ok := expected[relative]; ok {
 			return nil
 		}
-		data, err := os.ReadFile(path) //nolint:gosec // traversal is confined to the configured integration directory
+		data, err := root.ReadFile(path)
 		if err != nil {
-			return fmt.Errorf("reading rendered artifact %s: %w", path, err)
+			return fmt.Errorf("reading rendered artifact %s: %w", filepath.Join(dir, relative), err)
 		}
 		if classifyArtifactContent(string(data)) != ArtifactForeign {
-			stale = append(stale, path)
+			stale = append(stale, filepath.Join(dir, relative))
 		}
 		return nil
 	})
-	if err != nil {
-		return nil, fmt.Errorf("walking rendered artifact directory %s: %w", dir, err)
+	closeErr := root.Close()
+	if walkErr != nil {
+		return nil, fmt.Errorf("walking rendered artifact directory %s: %w", dir, walkErr)
+	}
+	if closeErr != nil {
+		return nil, fmt.Errorf("closing rendered artifact directory %s: %w", dir, closeErr)
 	}
 
 	return stale, nil
