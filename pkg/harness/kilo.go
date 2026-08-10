@@ -50,6 +50,7 @@ func (kiloHarness) InstallPlan(binary string) InstallPlan {
 				kiloIntegrationID,
 				binary,
 				kiloIntegrationSource,
+				IntegrationVersionFor(registry.HarnessKilo),
 			),
 			JSONContent: nil,
 		}}},

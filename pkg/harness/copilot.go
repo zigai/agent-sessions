@@ -99,7 +99,7 @@ func copilotCommandHook(binary string, spec copilotHookSpec) map[string]any {
 		"timeoutSec": float64(HookTimeoutSeconds),
 		"env": map[string]any{
 			"AGENT_SESSIONS_MARKER":              ManagedMarker,
-			"AGENT_SESSIONS_INTEGRATION_VERSION": strconv.Itoa(IntegrationVersion),
+			"AGENT_SESSIONS_INTEGRATION_VERSION": strconv.Itoa(IntegrationVersionFor(registry.HarnessCopilot)),
 		},
 	}
 	if spec.matcher != "" {

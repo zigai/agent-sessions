@@ -22,7 +22,7 @@ func installShim(options Options, harness registry.Harness) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
-	script := shimScript(options.Binary, string(harness), target)
+	script := shimScript(options.Binary, string(harness), target, harnesspkg.IntegrationVersionFor(harness))
 
 	contentChanged, err := fileNeedsUpdate(path, script, options.Force)
 	if err != nil {
@@ -185,7 +185,7 @@ func canonicalPath(path string) string {
 	return filepath.Clean(path)
 }
 
-func shimScript(binary string, harness string, target string) string {
+func shimScript(binary string, harness string, target string, version int) string {
 	return fmt.Sprintf(`#!/bin/sh
 set -u
 
@@ -200,5 +200,5 @@ harness_bin=%s
 status=$?
 "$agent_sessions_bin" report %s --presence gone --evidence process --pid "$$" --event process.exit --attribute agent_sessions_integration_version=%d --attribute agent_sessions_integration=%s-shim --queue --quiet >/dev/null 2>&1 || true
 exit "$status"
-`, harnesspkg.ShellQuote(managedMarker), harness, harnesspkg.IntegrationVersion, harnesspkg.ShellQuote(binary), harnesspkg.ShellQuote(target), harnesspkg.ShellQuote(harness), harnesspkg.IntegrationVersion, harness, harnesspkg.ShellQuote(harness), harnesspkg.IntegrationVersion, harness)
+`, harnesspkg.ShellQuote(managedMarker), harness, version, harnesspkg.ShellQuote(binary), harnesspkg.ShellQuote(target), harnesspkg.ShellQuote(harness), version, harness, harnesspkg.ShellQuote(harness), version, harness)
 }

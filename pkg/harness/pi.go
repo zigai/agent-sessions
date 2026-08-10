@@ -46,6 +46,7 @@ func (piHarness) InstallPlan(binary string) InstallPlan {
 				piIntegrationID,
 				binary,
 				piIntegrationSourceID,
+				IntegrationVersionFor(registry.HarnessPi),
 			),
 			JSONContent: nil,
 		}}},

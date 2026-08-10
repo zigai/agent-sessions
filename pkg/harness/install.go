@@ -230,7 +230,7 @@ func reportHookCommand[T hookTransition](
 	}
 	parts = append(
 		parts,
-		"--attribute", ShellQuote("agent_sessions_integration_version="+strconv.Itoa(IntegrationVersion)),
+		"--attribute", ShellQuote("agent_sessions_integration_version="+strconv.Itoa(IntegrationVersionFor(harness))),
 		"--attribute", ShellQuote("agent_sessions_integration="+source),
 		"--queue",
 		stdinFlag,
@@ -303,11 +303,11 @@ func ShellQuote(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
 }
 
-func renderScriptTemplate(template string, integrationID string, binary string, source string) string {
+func renderScriptTemplate(template string, integrationID string, binary string, source string, version int) string {
 	return strings.NewReplacer(
 		"{{MANAGED_MARKER}}", ManagedMarker,
 		"{{INTEGRATION_ID}}", integrationID,
-		"{{INTEGRATION_VERSION}}", strconv.Itoa(IntegrationVersion),
+		"{{INTEGRATION_VERSION}}", strconv.Itoa(version),
 		"{{BINARY}}", strconv.Quote(binary),
 		"{{SOURCE}}", strconv.Quote(source),
 	).Replace(template)

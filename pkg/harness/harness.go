@@ -57,7 +57,7 @@ const IntegrationVersion = 4
 
 // IntegrationVersionFor returns the managed artifact generation for a harness.
 func IntegrationVersionFor(id registry.Harness) int {
-	if id == registry.HarnessAgy || id == registry.HarnessCline {
+	if id == registry.HarnessAgy || id == registry.HarnessCline || id == registry.HarnessOmp {
 		return IntegrationVersion + 1
 	}
 	return IntegrationVersion

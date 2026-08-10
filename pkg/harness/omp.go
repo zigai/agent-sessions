@@ -46,6 +46,7 @@ func (ompHarness) InstallPlan(binary string) InstallPlan {
 				ompIntegrationID,
 				binary,
 				ompIntegrationSourceID,
+				IntegrationVersionFor(registry.HarnessOmp),
 			),
 			JSONContent: nil,
 		}}},

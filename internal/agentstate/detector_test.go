@@ -232,3 +232,48 @@ func TestHookAuthorityRequiresMatchingProcess(t *testing.T) {
 		t.Fatal("Codex must be screen authoritative")
 	}
 }
+
+func TestOmpHookAuthorityUsesNativeIntegration(t *testing.T) {
+	t.Parallel()
+	now := time.Now().UTC()
+	session := ompSession(now)
+
+	policy := PolicyFor(registry.HarnessOmp)
+	if policy.Primary != AuthorityHook || policy.ScreenFallback || policy.IntegrationValue != "omp-extension" {
+		t.Fatalf("OMP policy = %#v", policy)
+	}
+	evaluation := EvaluateHook(session, now)
+	if !evaluation.Active || !evaluation.Fresh || !evaluation.ProcessMatches || evaluation.Reason != "matching_live_process_report" {
+		t.Fatalf("OMP hook evaluation = %#v", evaluation)
+	}
+	if ShouldDetectScreen(session, now) {
+		t.Fatal("OMP should not fall back to screen detection")
+	}
+}
+
+func TestOmpHookAuthorityRemainsAuthoritativeWhenStale(t *testing.T) {
+	t.Parallel()
+	now := time.Now().UTC()
+	session := ompSession(now.Add(-registry.IntegrationActivityLease - time.Second))
+
+	evaluation := EvaluateHook(session, now)
+	if !evaluation.Active || evaluation.Fresh || !evaluation.ProcessMatches || evaluation.Reason != "integration_report_stale" {
+		t.Fatalf("stale OMP hook evaluation = %#v", evaluation)
+	}
+}
+
+func ompSession(observedAt time.Time) registry.Session {
+	process := registry.ProcessIdentity{PID: 42, StartIdentity: "boot:42"}
+	running := registry.ActivityRunning
+	return registry.Session{
+		Harness:  registry.HarnessOmp,
+		Presence: registry.PresenceLive,
+		Process:  &process,
+		Observations: registry.Observations{Native: &registry.NativeObservation{
+			Activity:   &running,
+			Attributes: map[string]string{"agent_sessions_integration": "omp-extension"},
+			Process:    process,
+			ObservedAt: observedAt,
+		}},
+	}
+}

@@ -858,6 +858,8 @@ func TestInstallOmpWritesExtension(t *testing.T) {
 	requireTextContainsAll(t, result.Snippet, []string{
 		"AGENT_SESSIONS_INTEGRATION_ID=omp",
 		`pi.on("session_start"`,
+		`pi.on("agent_end"`,
+		`event?.willContinue === true ? "running" : "idle"`,
 		`pi.on("tool_approval_requested"`,
 		`pi.on("tool_approval_resolved"`,
 		`pi.on("session_stop"`,
@@ -871,7 +873,7 @@ func TestInstallOmpWritesExtension(t *testing.T) {
 		`"--cwd", currentCwd`,
 		`"report", "omp"`,
 		"addEvent(args, event?.type)",
-		"AGENT_SESSIONS_INTEGRATION_VERSION=4",
+		"AGENT_SESSIONS_INTEGRATION_VERSION=5",
 	}, "oh-my-pi extension")
 }
 

@@ -47,6 +47,7 @@ func (openCodeHarness) InstallPlan(binary string) InstallPlan {
 					openCodeIntegrationID,
 					binary,
 					openCodeIntegrationSource,
+					IntegrationVersionFor(registry.HarnessOpenCode),
 				),
 				JSONContent: nil,
 			}},

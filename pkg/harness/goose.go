@@ -51,7 +51,7 @@ func (gooseHarness) InstallPlan(binary string) InstallPlan {
 					Content: "",
 					JSONContent: map[string]any{
 						"name":        goosePluginName,
-						"version":     IntegrationVersion,
+						"version":     IntegrationVersionFor(registry.HarnessGoose),
 						"description": ManagedMarker,
 					},
 				},
@@ -166,7 +166,7 @@ func gooseReportScript(binary string) string {
 		"#!/bin/sh",
 		"# " + ManagedMarker,
 		"# AGENT_SESSIONS_INTEGRATION_ID=" + gooseIntegrationID,
-		"# AGENT_SESSIONS_INTEGRATION_VERSION=" + strconv.Itoa(IntegrationVersion),
+		"# AGENT_SESSIONS_INTEGRATION_VERSION=" + strconv.Itoa(IntegrationVersionFor(registry.HarnessGoose)),
 		"# AGENT_SESSIONS_SOURCE=" + gooseIntegrationSource,
 		"transition=${1:-}",
 		"event=${2:-}",
@@ -174,9 +174,9 @@ func gooseReportScript(binary string) string {
 		"  exit 0",
 		"fi",
 		"if [ \"$transition\" = gone ]; then",
-		"  " + ShellQuote(binary) + " report " + ShellQuote(string(registry.HarnessGoose)) + " --presence \"$transition\" --event \"$event\" --attribute " + ShellQuote("agent_sessions_integration_version="+strconv.Itoa(IntegrationVersion)) + " --attribute " + ShellQuote("agent_sessions_integration="+gooseIntegrationSource) + " --queue --raw-stdin-defaults-only --quiet >/dev/null 2>&1 || true",
+		"  " + ShellQuote(binary) + " report " + ShellQuote(string(registry.HarnessGoose)) + " --presence \"$transition\" --event \"$event\" --attribute " + ShellQuote("agent_sessions_integration_version="+strconv.Itoa(IntegrationVersionFor(registry.HarnessGoose))) + " --attribute " + ShellQuote("agent_sessions_integration="+gooseIntegrationSource) + " --queue --raw-stdin-defaults-only --quiet >/dev/null 2>&1 || true",
 		"else",
-		"  " + ShellQuote(binary) + " report " + ShellQuote(string(registry.HarnessGoose)) + " --activity \"$transition\" --event \"$event\" --attribute " + ShellQuote("agent_sessions_integration_version="+strconv.Itoa(IntegrationVersion)) + " --attribute " + ShellQuote("agent_sessions_integration="+gooseIntegrationSource) + " --queue --raw-stdin-defaults-only --quiet >/dev/null 2>&1 || true",
+		"  " + ShellQuote(binary) + " report " + ShellQuote(string(registry.HarnessGoose)) + " --activity \"$transition\" --event \"$event\" --attribute " + ShellQuote("agent_sessions_integration_version="+strconv.Itoa(IntegrationVersionFor(registry.HarnessGoose))) + " --attribute " + ShellQuote("agent_sessions_integration="+gooseIntegrationSource) + " --queue --raw-stdin-defaults-only --quiet >/dev/null 2>&1 || true",
 		"fi",
 		"",
 	}, "\n")
@@ -186,7 +186,7 @@ func gooseMarkerContent() string {
 	return strings.Join([]string{
 		ManagedMarker,
 		"AGENT_SESSIONS_INTEGRATION_ID=" + gooseIntegrationID,
-		"AGENT_SESSIONS_INTEGRATION_VERSION=" + strconv.Itoa(IntegrationVersion),
+		"AGENT_SESSIONS_INTEGRATION_VERSION=" + strconv.Itoa(IntegrationVersionFor(registry.HarnessGoose)),
 		"AGENT_SESSIONS_SOURCE=" + gooseIntegrationSource,
 		"",
 	}, "\n")

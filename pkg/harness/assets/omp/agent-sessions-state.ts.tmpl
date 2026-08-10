@@ -119,6 +119,10 @@ export default function (pi: any) {
     report("running", undefined, ctx, event);
   });
 
+  pi.on("agent_end", (event: any, ctx: any) => {
+    report(event?.willContinue === true ? "running" : "idle", undefined, ctx, event);
+  });
+
   pi.on("tool_approval_requested", (event: any, ctx: any) => {
     report("waiting", undefined, ctx, event);
   });
