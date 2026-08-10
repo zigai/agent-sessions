@@ -1,3 +1,6 @@
+golangci_lint_version := "v2.12.2"
+golangci_lint := "go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@" + golangci_lint_version
+
 _:
     @just help
 
@@ -23,11 +26,11 @@ tidy:
 
 # Apply automatic fixes
 fix:
-    golangci-lint run --fix
+    {{golangci_lint}} run --fix
 
 # Check code for lint issues
 lint:
-    golangci-lint run
+    {{golangci_lint}} run
 
 # Run all non-mutating checks
 check: lint test race
