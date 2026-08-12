@@ -53,6 +53,37 @@ func TestObserverDetectsScreenStateForFourTargetAgents(t *testing.T) {
 	}
 }
 
+func TestObserverUsesLocalOmpOverrideOnlyWhenNativeIntegrationIsMissing(t *testing.T) {
+	t.Parallel()
+	configDir := t.TempDir()
+	if err := os.WriteFile(
+		filepath.Join(configDir, "omp.toml"),
+		[]byte("version=1\nagent='omp'\n[[rules]]\nid='custom_footer'\nstate='idle'\nregion='bottom:12'\nany=['Codex · GPT-5.6-Sol · medium']\n"),
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+	store := registry.NewFileStore(filepath.Join(t.TempDir(), "state.json"))
+	process, pane := detectionProcessPane(198, "omp")
+	options := detectionObserverOptions(store, process, pane, configDir)
+	options.ScreenCapture = func(context.Context, tmuxctx.Pane) (tmuxctx.ScreenSnapshot, error) {
+		return tmuxctx.ScreenSnapshot{Text: "╰────────╯\n ~/Projects/config · Codex · GPT-5.6-Sol · medium 22.7%/272K"}, nil
+	}
+	if _, err := New(options).RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	sessions, err := store.List(context.Background(), registry.Filter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 1 || sessions[0].Activity == nil || *sessions[0].Activity != registry.ActivityIdle || sessions[0].ActivityDecision == nil || sessions[0].ActivityDecision.RuleID != "custom_footer" {
+		t.Fatalf("sessions = %#v, want local OMP footer idle decision", sessions)
+	}
+	if sessions[0].ActivityDecision.FallbackReason != "integration_report_missing" {
+		t.Fatalf("fallback reason = %q, want integration_report_missing", sessions[0].ActivityDecision.FallbackReason)
+	}
+}
+
 func TestObserverRecordsUnknownWhenStaleIntegrationHasNoTmuxPane(t *testing.T) {
 	t.Parallel()
 	store := registry.NewFileStore(filepath.Join(t.TempDir(), "state.json"))
@@ -87,15 +118,28 @@ func TestObserverRecordsUnknownWhenStaleIntegrationHasNoTmuxPane(t *testing.T) {
 	}
 }
 
-func TestObserverRecordsUnknownWhenScreenCaptureFails(t *testing.T) {
+func TestObserverPreservesKnownActivityWhenScreenCaptureFails(t *testing.T) {
 	t.Parallel()
+
 	store := registry.NewFileStore(filepath.Join(t.TempDir(), "state.json"))
 	process, pane := detectionProcessPane(198, "codex")
+	at := time.Date(2026, 8, 12, 5, 0, 0, 0, time.UTC)
+	captureFails := false
 	options := detectionObserverOptions(store, process, pane, t.TempDir())
+	options.Now = func() time.Time { return at }
 	options.ScreenCapture = func(context.Context, tmuxctx.Pane) (tmuxctx.ScreenSnapshot, error) {
-		return tmuxctx.ScreenSnapshot{}, context.Canceled
+		if captureFails {
+			return tmuxctx.ScreenSnapshot{}, context.Canceled
+		}
+		return tmuxctx.ScreenSnapshot{Text: "› next task\nContext 63% used", Title: "codex"}, nil
 	}
 	observer := New(options)
+	if _, err := observer.RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	captureFails = true
+	at = at.Add(time.Minute)
 	result, err := observer.RunOnce(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -106,12 +150,86 @@ func TestObserverRecordsUnknownWhenScreenCaptureFails(t *testing.T) {
 	if health := observer.Health(); !health.Degraded || health.LastEnumerationErrorCategory != "reconciliation" || !strings.Contains(health.LastEnumerationError, "capturing codex pane") {
 		t.Fatalf("capture failure health = %#v", health)
 	}
+	assertIdleSince(t, store, at.Add(-time.Minute))
+
+	captureFails = false
+	at = at.Add(time.Minute)
+	if _, err := observer.RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	assertIdleSince(t, store, at.Add(-2*time.Minute))
+}
+
+func TestObserverReportsDetectionManifestLoadFailure(t *testing.T) {
+	t.Parallel()
+
+	configDir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(configDir, "omp.toml"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	store := registry.NewFileStore(filepath.Join(t.TempDir(), "state.json"))
+	process, pane := detectionProcessPane(298, "omp")
+	options := detectionObserverOptions(store, process, pane, configDir)
+	result, err := New(options).RunOnce(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Degraded || !strings.Contains(result.Error, "loading omp detection manifest") {
+		t.Fatalf("manifest load failure result = %#v, want degraded detection error", result)
+	}
+}
+
+func TestObserverPreservesKnownActivityAcrossPaneEnumerationFailure(t *testing.T) {
+	t.Parallel()
+
+	store := registry.NewFileStore(filepath.Join(t.TempDir(), "state.json"))
+	process, pane := detectionProcessPane(299, "codex")
+	at := time.Date(2026, 8, 12, 4, 30, 0, 0, time.UTC)
+	paneEnumerationFails := false
+	options := detectionObserverOptions(store, process, pane, t.TempDir())
+	options.Now = func() time.Time { return at }
+	options.PaneList = func(context.Context) ([]tmuxctx.Pane, error) {
+		if paneEnumerationFails {
+			return nil, context.DeadlineExceeded
+		}
+		return []tmuxctx.Pane{pane}, nil
+	}
+	options.ScreenCapture = func(context.Context, tmuxctx.Pane) (tmuxctx.ScreenSnapshot, error) {
+		return tmuxctx.ScreenSnapshot{Text: "› next task\nContext 63% used", Title: "codex"}, nil
+	}
+	observer := New(options)
+	if _, err := observer.RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	paneEnumerationFails = true
+	at = at.Add(time.Minute)
+	result, err := observer.RunOnce(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Degraded {
+		t.Fatalf("pane enumeration failure did not degrade observer: %#v", result)
+	}
+	assertIdleSince(t, store, at.Add(-time.Minute))
+
+	paneEnumerationFails = false
+	at = at.Add(time.Minute)
+	if _, err := observer.RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	assertIdleSince(t, store, at.Add(-2*time.Minute))
+}
+
+func assertIdleSince(t *testing.T, store registry.Store, wantSince time.Time) {
+	t.Helper()
+
 	sessions, err := store.List(context.Background(), registry.Filter{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(sessions) != 1 || sessions[0].Activity == nil || *sessions[0].Activity != registry.ActivityUnknown || sessions[0].ActivityDecision == nil || sessions[0].ActivityDecision.Reason != "screen_unavailable" {
-		t.Fatalf("capture failure state = %#v", sessions)
+	if len(sessions) != 1 || sessions[0].Activity == nil || *sessions[0].Activity != registry.ActivityIdle || !sessions[0].ActivityChangedAt.Equal(wantSince) {
+		t.Fatalf("sessions = %#v, want idle since %s", sessions, wantSince)
 	}
 }
 

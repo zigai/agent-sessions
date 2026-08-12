@@ -75,7 +75,7 @@ func (app *application) newDetectCommand() *cobra.Command {
 	command := &cobra.Command{Use: "detect", Short: "Evaluate an agent detection manifest against saved screen text", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
 		return app.runDetect(cmd, options)
 	}}
-	command.Flags().StringVar(&options.harness, "harness", "", "agent harness (codex, claude, opencode, or pi)")
+	command.Flags().StringVar(&options.harness, "harness", "", "agent harness (bundled or locally overridden)")
 	command.Flags().StringVar(&options.file, "file", "", "screen text file, or - for stdin")
 	command.Flags().StringVar(&options.title, "title", "", "optional terminal title")
 	command.Flags().StringVar(&options.configDir, "config-dir", "", "detection manifest override directory")
@@ -91,14 +91,15 @@ func (app *application) runDetect(command *cobra.Command, options detectOptions)
 	if err != nil {
 		return fmt.Errorf("normalize detection harness: %w", err)
 	}
-	if !agentstate.SupportsScreen(harness) {
+	loader := agentstate.Loader{ConfigDir: options.configDir}
+	if !loader.Supports(harness) {
 		return fmt.Errorf("%w: %q", errDetectionUnsupported, harness)
 	}
 	data, err := readScreenInput(command, options.file)
 	if err != nil {
 		return err
 	}
-	manifest, err := (agentstate.Loader{ConfigDir: options.configDir}).Load(harness)
+	manifest, err := loader.Load(harness)
 	if err != nil {
 		return fmt.Errorf("load detection manifest: %w", err)
 	}

@@ -183,6 +183,33 @@ func TestLoaderUsesValidOverrideAndFallsBackFromInvalidOverride(t *testing.T) {
 	}
 }
 
+func TestLoaderUsesLocalOnlyOmpOverrideWithoutChangingDefaultSupport(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	loader := Loader{ConfigDir: dir}
+	if loader.Supports(registry.HarnessOmp) {
+		t.Fatal("OMP screen detection should require a local override")
+	}
+	if _, err := loader.Load(registry.HarnessOmp); err == nil {
+		t.Fatal("OMP screen manifest loaded without a local override")
+	}
+
+	path := filepath.Join(dir, "omp.toml")
+	if err := os.WriteFile(path, []byte("version=1\nagent='omp'\n[[rules]]\nid='custom_footer'\nstate='idle'\nany=['Codex · GPT-5.6-Sol · medium']\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if !loader.Supports(registry.HarnessOmp) {
+		t.Fatal("local OMP override did not enable screen detection")
+	}
+	manifest, err := loader.Load(registry.HarnessOmp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manifest.Source != path || Evaluate(manifest, NormalizeSnapshot("Codex · GPT-5.6-Sol · medium", "")).RuleID != "custom_footer" {
+		t.Fatalf("local-only OMP override not used: %#v", manifest)
+	}
+}
+
 func TestDecisionJSONNeverContainsScreenContents(t *testing.T) {
 	t.Parallel()
 	const secret = "SUPER-SECRET-PROMPT"

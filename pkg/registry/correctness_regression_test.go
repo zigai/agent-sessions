@@ -220,4 +220,112 @@ func TestStaleNativeStartDoesNotReviveGoneSession(t *testing.T) {
 	}
 }
 
+func TestDelayedGoneEvidenceDoesNotOverwriteNewerLivePresence(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		initial      func(ProcessIdentity, ObservationIdentity, time.Time) Observation
+		delayed      func(ProcessIdentity, ObservationIdentity, time.Time) Observation
+		wantActivity Activity
+	}{
+		{
+			name: "process absence after native activity",
+			initial: func(process ProcessIdentity, identity ObservationIdentity, at time.Time) Observation {
+				live := PresenceLive
+				idle := ActivityIdle
+				return Observation{
+					Source: ObservationSourceNative, Evidence: ObservationEvidenceNativeEvent,
+					Harness: HarnessPi, Identity: identity, Presence: &live, Activity: &idle,
+					Process: &process, NativeEvent: "agent_settled", ObservedAt: at,
+				}
+			},
+			delayed: func(process ProcessIdentity, identity ObservationIdentity, at time.Time) Observation {
+				return Observation{
+					Source: ObservationSourceProcess, Evidence: ObservationEvidenceProcessPresence,
+					Harness: HarnessPi, Identity: identity, ProcessPresent: boolPtr(false), Process: &process,
+					ObservedAt: at,
+				}
+			},
+			wantActivity: ActivityIdle,
+		},
+		{
+			name: "native end after process presence",
+			initial: func(process ProcessIdentity, identity ObservationIdentity, at time.Time) Observation {
+				return Observation{
+					Source: ObservationSourceProcess, Evidence: ObservationEvidenceProcessPresence,
+					Harness: HarnessPi, Identity: identity, ProcessPresent: boolPtr(true), Process: &process,
+					ObservedAt: at,
+				}
+			},
+			delayed: func(process ProcessIdentity, identity ObservationIdentity, at time.Time) Observation {
+				end := NativeLifecycleEnd
+				gone := PresenceGone
+				return Observation{
+					Source: ObservationSourceNative, Evidence: ObservationEvidenceNativeEvent,
+					Harness: HarnessPi, Identity: identity, Lifecycle: &end, Presence: &gone,
+					Process: &process, NativeEvent: "session_end", ObservedAt: at,
+				}
+			},
+			wantActivity: ActivityUnknown,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			store := NewFileStore(filepath.Join(t.TempDir(), "sessions.json"))
+			ctx := context.Background()
+			at := time.Date(2026, 8, 12, 7, 0, 0, 0, time.UTC)
+			identity := ObservationIdentity{SessionID: "newer-live"}
+			process := ProcessIdentity{PID: 86, StartIdentity: "boot:86"}
+			if _, err := store.Observe(ctx, test.initial(process, identity, at)); err != nil {
+				t.Fatal(err)
+			}
+
+			session, err := store.Observe(ctx, test.delayed(process, identity, at.Add(-time.Second)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if session.Presence != PresenceLive || session.Activity == nil || *session.Activity != test.wantActivity || !session.PresenceChangedAt.Equal(at) {
+				t.Fatalf("delayed gone evidence overwrote newer live state: %#v", session)
+			}
+		})
+	}
+}
+
+func TestDelayedProcessPresenceDoesNotReviveNewerNativeGoneState(t *testing.T) {
+	t.Parallel()
+
+	store := NewFileStore(filepath.Join(t.TempDir(), "sessions.json"))
+	ctx := context.Background()
+	at := time.Date(2026, 8, 12, 8, 0, 0, 0, time.UTC)
+	identity := ObservationIdentity{SessionID: "newer-gone"}
+	process := ProcessIdentity{PID: 87, StartIdentity: "boot:87"}
+	gone := PresenceGone
+	session, err := store.Observe(ctx, Observation{
+		Source: ObservationSourceNative, Evidence: ObservationEvidenceNativeEvent,
+		Harness: HarnessPi, Identity: identity, Presence: &gone, Process: &process,
+		NativeEvent: "session_end", ObservedAt: at,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if session.Presence != PresenceGone {
+		t.Fatalf("native gone state = %#v", session)
+	}
+
+	session, err = store.Observe(ctx, Observation{
+		Source: ObservationSourceProcess, Evidence: ObservationEvidenceProcessPresence,
+		Harness: HarnessPi, Identity: identity, ProcessPresent: boolPtr(true), Process: &process,
+		ObservedAt: at.Add(-time.Second),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if session.Presence != PresenceGone || session.Activity != nil || !session.PresenceChangedAt.Equal(at) {
+		t.Fatalf("delayed process presence revived newer gone state: %#v", session)
+	}
+}
+
 func boolPtr(value bool) *bool { return &value }

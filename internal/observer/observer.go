@@ -386,16 +386,19 @@ func (o *Observer) runCycle(ctx context.Context) (Result, error) {
 				Harness: harnessID, Process: processIdentity(process), Multiplexer: &location, ObservedAt: at,
 			})
 		}
-		if screenObservation, detected, detectErr := o.detectScreenState(ctx, knownSessions, harnessID, process, pane, at); detected {
+		screenObservation, detected, detectErr := o.detectScreenState(ctx, knownSessions, harnessID, process, pane, at)
+		if detected {
 			observations = append(observations, screenObservation)
-			if detectErr != nil {
-				result.Degraded = true
-				result.Error = detectErr.Error()
-			}
+		}
+		if detectErr != nil {
+			result.Degraded = true
+			result.Error = detectErr.Error()
 		}
 		locationPIDs[process.PID] = true
 	}
-	observations = append(observations, observationsForUnlocatedProcesses(knownSessions, processByPID, harnessByPID, locationPIDs, paneErr, o.tmuxOnly, at)...)
+	if paneErr == nil {
+		observations = append(observations, observationsForUnlocatedProcesses(o.manifestLoader, knownSessions, processByPID, harnessByPID, locationPIDs, o.tmuxOnly, at)...)
+	}
 	for _, entry := range catalog {
 		if entry.Harness == "" || entry.SessionID == "" {
 			continue
@@ -509,7 +512,7 @@ func isAgentWrapper(process processinfo.Process) bool {
 	}
 }
 
-func observationsForUnlocatedProcesses(sessions []registry.Session, processByPID map[int]processinfo.Process, harnessByPID map[int]registry.Harness, locationPIDs map[int]bool, paneErr error, tmuxOnly bool, at time.Time) []registry.Observation {
+func observationsForUnlocatedProcesses(manifestLoader agentstate.Loader, sessions []registry.Session, processByPID map[int]processinfo.Process, harnessByPID map[int]registry.Harness, locationPIDs map[int]bool, tmuxOnly bool, at time.Time) []registry.Observation {
 	observations := make([]registry.Observation, 0, len(harnessByPID))
 	for pid, harnessID := range harnessByPID {
 		if locationPIDs[pid] {
@@ -519,31 +522,24 @@ func observationsForUnlocatedProcesses(sessions []registry.Session, processByPID
 		if !ok {
 			continue
 		}
+		if tmuxOnly {
+			emptyContext := registry.TmuxContext{}                    //nolint:exhaustruct // zero-value tmux context represents no pane location
+			observations = append(observations, registry.Observation{ //nolint:exhaustruct // tmux observations intentionally omit unrelated evidence dimensions
+				Source: registry.ObservationSourceTmux, Evidence: registry.ObservationEvidenceTmuxLocation,
+				Harness: harnessID, Process: processIdentity(process), Tmux: &emptyContext, ObservedAt: at,
+			})
+		} else {
+			emptyContext := registry.MultiplexerContext{}             //nolint:exhaustruct // zero-value context represents no supported multiplexer pane
+			observations = append(observations, registry.Observation{ //nolint:exhaustruct // location observations intentionally omit unrelated evidence dimensions
+				Source: registry.ObservationSourceMultiplexer, Evidence: registry.ObservationEvidenceMultiplexerLocation,
+				Harness: harnessID, Process: processIdentity(process), Multiplexer: &emptyContext, ObservedAt: at,
+			})
+		}
 		unavailableReason := "screen_not_in_supported_multiplexer"
 		if tmuxOnly {
 			unavailableReason = "screen_not_in_tmux"
 		}
-		if paneErr == nil {
-			if tmuxOnly {
-				emptyContext := registry.TmuxContext{}                    //nolint:exhaustruct // zero-value tmux context represents no pane location
-				observations = append(observations, registry.Observation{ //nolint:exhaustruct // tmux observations intentionally omit unrelated evidence dimensions
-					Source: registry.ObservationSourceTmux, Evidence: registry.ObservationEvidenceTmuxLocation,
-					Harness: harnessID, Process: processIdentity(process), Tmux: &emptyContext, ObservedAt: at,
-				})
-			} else {
-				emptyContext := registry.MultiplexerContext{}             //nolint:exhaustruct // zero-value context represents no supported multiplexer pane
-				observations = append(observations, registry.Observation{ //nolint:exhaustruct // location observations intentionally omit unrelated evidence dimensions
-					Source: registry.ObservationSourceMultiplexer, Evidence: registry.ObservationEvidenceMultiplexerLocation,
-					Harness: harnessID, Process: processIdentity(process), Multiplexer: &emptyContext, ObservedAt: at,
-				})
-			}
-		} else {
-			unavailableReason = "multiplexer_enumeration_failed"
-			if tmuxOnly {
-				unavailableReason = "tmux_enumeration_failed"
-			}
-		}
-		if screenObservation, detected := unavailableScreenState(sessions, harnessID, process, at, unavailableReason); detected {
+		if screenObservation, detected := unavailableScreenState(manifestLoader, sessions, harnessID, process, at, unavailableReason); detected {
 			observations = append(observations, screenObservation)
 		}
 	}
@@ -571,14 +567,14 @@ func screenFallbackMetadata(session registry.Session, harnessID registry.Harness
 	return policy.IntegrationValue, agentstate.EvaluateHook(session, at).Reason
 }
 
-func unavailableScreenState(sessions []registry.Session, harnessID registry.Harness, process processinfo.Process, at time.Time, reason string) (registry.Observation, bool) {
-	if !agentstate.SupportsScreen(harnessID) {
+func unavailableScreenState(manifestLoader agentstate.Loader, sessions []registry.Session, harnessID registry.Harness, process processinfo.Process, at time.Time, reason string) (registry.Observation, bool) {
+	if !manifestLoader.Supports(harnessID) {
 		var empty registry.Observation
 		return empty, false
 	}
 	identity := processIdentity(process)
 	session := sessionForProcess(sessions, harnessID, identity)
-	if !agentstate.ShouldDetectScreen(session, at) {
+	if !shouldDetectScreen(session, at) {
 		var empty registry.Observation
 		return empty, false
 	}
@@ -594,13 +590,13 @@ func unavailableScreenState(sessions []registry.Session, harnessID registry.Harn
 
 //nolint:funcorder // state detection runs as part of reconciliation near its call site
 func (o *Observer) detectScreenState(ctx context.Context, sessions []registry.Session, harnessID registry.Harness, process processinfo.Process, pane muxctx.Pane, at time.Time) (registry.Observation, bool, error) {
-	if !agentstate.SupportsScreen(harnessID) {
+	if !o.manifestLoader.Supports(harnessID) {
 		var empty registry.Observation
 		return empty, false, nil
 	}
 	identity := processIdentity(process)
 	session := sessionForProcess(sessions, harnessID, identity)
-	if !agentstate.ShouldDetectScreen(session, at) {
+	if !shouldDetectScreen(session, at) {
 		var empty registry.Observation
 		return empty, false, nil
 	}
@@ -626,11 +622,11 @@ func (o *Observer) detectScreenState(ctx context.Context, sessions []registry.Se
 	if err != nil {
 		return registry.Observation{}, false, fmt.Errorf("loading %s detection manifest: %w", harnessID, err)
 	}
-	decision := unavailableScreenDecision(manifest)
 	snapshot, captureErr := o.screenCapture(ctx, pane)
-	if captureErr == nil {
-		decision = agentstate.Evaluate(manifest, agentstate.NormalizeSnapshot(snapshot.Text, snapshot.Title))
+	if captureErr != nil {
+		return registry.Observation{}, false, fmt.Errorf("capturing %s pane %s for detection: %w", harnessID, pane.Location.PaneID, captureErr)
 	}
+	decision := agentstate.Evaluate(manifest, agentstate.NormalizeSnapshot(snapshot.Text, snapshot.Title))
 	observedAt := screenObservationTime(at, o.now().UTC())
 	fallback, fallbackReason := screenFallbackMetadata(session, harnessID, at)
 	screen := &registry.ScreenObservation{Activity: decision.Activity, Authority: string(agentstate.AuthorityScreen), Reason: decision.Reason, RuleID: decision.RuleID, ManifestSource: decision.ManifestSource, ManifestVersion: decision.ManifestVersion, FallbackForIntegration: fallback, FallbackReason: fallbackReason, Process: *identity, ObservedAt: observedAt}
@@ -638,13 +634,18 @@ func (o *Observer) detectScreenState(ctx context.Context, sessions []registry.Se
 		Source: registry.ObservationSourceScreen, Evidence: registry.ObservationEvidenceScreenState, Harness: harnessID,
 		Activity: &decision.Activity, Process: identity, Screen: screen, ObservedAt: observedAt,
 	}
-	if captureErr != nil {
-		return observation, true, fmt.Errorf("capturing %s pane %s for detection: %w", harnessID, pane.Location.PaneID, captureErr)
-	}
 	if manifest.Warning != "" {
 		return observation, true, fmt.Errorf("%w: %s", errDetectionOverrideInvalid, manifest.Warning)
 	}
 	return observation, true, nil
+}
+
+func shouldDetectScreen(session registry.Session, at time.Time) bool {
+	if agentstate.SupportsScreen(session.Harness) {
+		return agentstate.ShouldDetectScreen(session, at)
+	}
+	policy := agentstate.PolicyFor(session.Harness)
+	return policy.Primary == agentstate.AuthorityHook && !agentstate.HookIsActive(session, at)
 }
 
 func screenObservationTime(cycleAt time.Time, capturedAt time.Time) time.Time {
@@ -652,10 +653,6 @@ func screenObservationTime(cycleAt time.Time, capturedAt time.Time) time.Time {
 		return cycleAt
 	}
 	return capturedAt
-}
-
-func unavailableScreenDecision(manifest agentstate.Manifest) agentstate.Decision {
-	return agentstate.Decision{Activity: registry.ActivityUnknown, Reason: "screen_unavailable", RuleID: "", ManifestSource: manifest.Source, ManifestVersion: manifest.Version, Warning: manifest.Warning, Evidence: nil}
 }
 
 func paneProcess(pane tmuxctx.Pane, processes []processinfo.Process, byPID map[int]processinfo.Process, harnessByPID map[int]registry.Harness) (processinfo.Process, registry.Harness, bool) {

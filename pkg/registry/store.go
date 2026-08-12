@@ -495,16 +495,16 @@ func applyPresenceAndActivity(session *Session, observation Observation, at time
 			case PresenceGone:
 				setGone(session, at)
 			case PresenceLive:
-				if !nativeEndAfter(session, at) {
+				if !nativeEndAfter(session, at) && !at.Before(session.PresenceChangedAt) {
 					session.Presence = PresenceLive
 				}
 			case PresenceUnknown:
-				if !nativeEndAfter(session, at) {
+				if !nativeEndAfter(session, at) && !at.Before(session.PresenceChangedAt) {
 					session.Presence = PresenceUnknown
 				}
 			}
 		}
-		if native.Activity != nil && activityIsAuthoritative(observation) && session.Presence != PresenceGone && at.After(session.PresenceChangedAt) {
+		if native.Activity != nil && activityIsAuthoritative(observation) && session.Presence != PresenceGone && at.After(session.PresenceChangedAt) && (session.ActivityDecision == nil || !at.Before(session.ActivityDecision.ObservedAt)) {
 			session.Activity = cloneActivity(native.Activity)
 			session.ActivityDecision = &ActivityDecision{Authority: "hook", Reason: native.Event, RuleID: "", ManifestSource: "", ManifestVersion: 0, FallbackReason: "", Process: native.Process, ObservedAt: at}
 		}
@@ -514,7 +514,7 @@ func applyPresenceAndActivity(session *Session, observation Observation, at time
 			return
 		}
 		if process.Present {
-			if !nativeEndAfter(session, at) {
+			if !nativeEndAfter(session, at) && !at.Before(session.PresenceChangedAt) {
 				session.Presence = PresenceLive
 				if session.Activity == nil {
 					session.Activity = activityPtr(ActivityUnknown)
@@ -564,6 +564,9 @@ func nativeEndAfter(session *Session, _ time.Time) bool {
 }
 
 func setGone(session *Session, at time.Time) {
+	if at.Before(session.PresenceChangedAt) {
+		return
+	}
 	if session.Presence != PresenceGone {
 		session.Presence = PresenceGone
 		session.PresenceChangedAt = at

@@ -69,37 +69,65 @@ func DefaultConfigDir() string {
 	return filepath.Join(home, ".config", "agent-sessions", "detection")
 }
 
+func (l Loader) Supports(harness registry.Harness) bool {
+	if SupportsScreen(harness) {
+		return true
+	}
+	_, err := os.Stat(l.overridePath(harness))
+	return err == nil
+}
+
 func (l Loader) Load(harness registry.Harness) (Manifest, error) {
-	if !SupportsScreen(harness) {
+	var bundled Manifest
+	if SupportsScreen(harness) {
+		var err error
+		bundled, err = loadBundled(harness)
+		if err != nil {
+			return Manifest{}, err
+		}
+	}
+	path := l.overridePath(harness)
+	if path == "" {
+		if SupportsScreen(harness) {
+			return bundled, nil
+		}
 		return Manifest{}, fmt.Errorf("%w: unsupported screen harness %q", errManifestInvalid, harness)
 	}
-	bundled, err := loadBundled(harness)
-	if err != nil {
-		return Manifest{}, err
-	}
-	configDir := l.ConfigDir
-	if configDir == "" {
-		configDir = DefaultConfigDir()
-	}
-	if configDir == "" {
-		return bundled, nil
-	}
-	path := filepath.Join(configDir, string(harness)+".toml")
 	data, readErr := readManifestFile(path)
 	if errors.Is(readErr, os.ErrNotExist) {
-		return bundled, nil
+		if SupportsScreen(harness) {
+			return bundled, nil
+		}
+		return Manifest{}, fmt.Errorf("%w: unsupported screen harness %q", errManifestInvalid, harness)
 	}
 	if readErr != nil {
+		if !SupportsScreen(harness) {
+			return Manifest{}, fmt.Errorf("reading local override %s: %w", path, readErr)
+		}
 		bundled.Warning = fmt.Sprintf("reading local override %s: %v", path, readErr)
 		return bundled, nil
 	}
 	local, parseErr := ParseManifest(data, harness)
 	if parseErr != nil {
+		if !SupportsScreen(harness) {
+			return Manifest{}, fmt.Errorf("loading local override %s: %w", path, parseErr)
+		}
 		bundled.Warning = fmt.Sprintf("ignoring invalid local override %s: %v", path, parseErr)
 		return bundled, nil
 	}
 	local.Source = path
 	return local, nil
+}
+
+func (l Loader) overridePath(harness registry.Harness) string {
+	configDir := l.ConfigDir
+	if configDir == "" {
+		configDir = DefaultConfigDir()
+	}
+	if configDir == "" {
+		return ""
+	}
+	return filepath.Join(configDir, string(harness)+".toml")
 }
 
 func readManifestFile(path string) ([]byte, error) {

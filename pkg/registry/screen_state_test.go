@@ -66,6 +66,55 @@ func TestStaleIntegrationDoesNotSuppressScreenFallback(t *testing.T) {
 	}
 }
 
+func TestDelayedNativeActivityCannotOverwriteNewerScreenDecision(t *testing.T) {
+	t.Parallel()
+
+	store := NewFileStore(t.TempDir() + "/state.json")
+	at := time.Date(2026, 8, 12, 6, 0, 0, 0, time.UTC)
+	process := ProcessIdentity{PID: 151, StartIdentity: "boot:151", Executable: "pi"}
+	presence := PresenceLive
+	running := ActivityRunning
+	_, err := store.Observe(context.Background(), Observation{
+		Source: ObservationSourceNative, Evidence: ObservationEvidenceNativeEvent,
+		Harness: HarnessPi, Identity: ObservationIdentity{SessionID: "pi-delayed"},
+		Presence: &presence, Activity: &running, NativeEvent: "agent_start", Process: &process,
+		Attributes: map[string]string{"agent_sessions_integration": "pi-extension"}, ObservedAt: at,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	screenAt := at.Add(IntegrationActivityLease + time.Second)
+	idle := ActivityIdle
+	screen := &ScreenObservation{
+		Activity: idle, Authority: "screen", Reason: "manifest_rule", RuleID: "input_prompt",
+		ManifestSource: "bundled", ManifestVersion: 1, FallbackForIntegration: "pi-extension",
+		FallbackReason: "integration_report_stale", Process: process, ObservedAt: screenAt,
+	}
+	_, err = store.Observe(context.Background(), Observation{
+		Source: ObservationSourceScreen, Evidence: ObservationEvidenceScreenState,
+		Harness: HarnessPi, Identity: ObservationIdentity{SessionID: "pi-delayed"},
+		Activity: &idle, Process: &process, Screen: screen, ObservedAt: screenAt,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	waiting := ActivityWaiting
+	session, err := store.Observe(context.Background(), Observation{
+		Source: ObservationSourceNative, Evidence: ObservationEvidenceNativeEvent,
+		Harness: HarnessPi, Identity: ObservationIdentity{SessionID: "pi-delayed"},
+		Presence: &presence, Activity: &waiting, NativeEvent: "permission_prompt", Process: &process,
+		Attributes: map[string]string{"agent_sessions_integration": "pi-extension"}, ObservedAt: at.Add(10 * time.Second),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if session.Activity == nil || *session.Activity != ActivityIdle || !session.ActivityChangedAt.Equal(screenAt) || session.ActivityDecision == nil || session.ActivityDecision.Authority != "screen" {
+		t.Fatalf("delayed native activity overwrote newer screen decision: %#v", session)
+	}
+}
+
 func TestScreenObservationDoesNotPersistTerminalContents(t *testing.T) {
 	t.Parallel()
 	store := NewFileStore(t.TempDir() + "/state.json")
