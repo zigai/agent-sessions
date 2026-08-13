@@ -10,10 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/fsnotify/fsnotify"
-
 	"github.com/zigai/agent-sessions/v2/pkg/brokerapi"
-
 	"github.com/zigai/agent-sessions/v2/pkg/registry"
 )
 
@@ -165,66 +162,47 @@ func (app *application) runBrokerWatch(
 //nolint:gocognit,cyclop // fallback orchestration keeps filesystem, registry, and timer transitions together
 func (app *application) runFilesystemWatch(ctx context.Context, o watchOptions) error {
 	s := app.store()
-	target, dir, e := watchTarget(s)
-	if e != nil {
+	if _, _, e := watchTarget(s); e != nil {
 		return e
 	}
-	w, e := fsnotify.NewWatcher()
-	if e != nil {
-		return fmt.Errorf("create watcher: %w", e)
-	}
-	defer func() { _ = w.Close() }()
-	if e = w.Add(dir); e != nil {
-		return fmt.Errorf("watch state directory: %w", e)
-	}
-	prev, err := s.List(ctx, o.filter)
-	if err != nil {
-		return fmt.Errorf("list sessions for watch: %w", err)
-	}
-	if !o.noSnapshot {
-		if e = app.writeWatchEvents(snapshotWatchEvents(prev, o.now()), o.format); e != nil {
-			return e
-		}
-	}
-	notifyWatchReady(o.ready)
-	timer := time.NewTimer(time.Hour)
-	if !timer.Stop() {
-		<-timer.C
-	}
-	for {
-		select {
-		case <-ctx.Done():
+	var previous []registry.Session
+	err := s.Watch(ctx, registry.WatchOptions{
+		Filter:            o.filter,
+		Debounce:          o.debounce,
+		ReconcileInterval: 0,
+	}, func(result registry.WatchResult) error {
+		if app.reportWatchResultError(result) {
 			return nil
-		case ev, ok := <-w.Events:
-			if !ok {
-				return nil
-			}
-			if !isRelevantWatchEvent(ev, target) {
-				continue
-			}
-			if !timer.Stop() {
-				select {
-				case <-timer.C:
-				default:
+		}
+		if result.Initial {
+			previous = result.Sessions
+			if !o.noSnapshot {
+				if e := app.writeWatchEvents(snapshotWatchEvents(result.Sessions, o.now()), o.format); e != nil {
+					return e
 				}
 			}
-			timer.Reset(o.debounce)
-		case <-timer.C:
-			next, er := s.List(ctx, o.filter)
-			if er != nil {
-				app.warnf("watch warning: %v\n", er)
-				continue
-			}
-			if e = app.writeWatchEvents(diffWatchEvents(watchSessionMap(prev), watchSessionMap(next), o.now()), o.format); e != nil {
-				return e
-			}
-			prev = next
-		case er := <-w.Errors:
-			if er != nil {
-				app.warnf("watch warning: %v\n", er)
-			}
+			notifyWatchReady(o.ready)
+			return nil
 		}
+		events := diffWatchEvents(watchSessionMap(previous), watchSessionMap(result.Sessions), o.now())
+		if e := app.writeWatchEvents(events, o.format); e != nil {
+			return e
+		}
+		previous = result.Sessions
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("watching registry store: %w", err)
 	}
+	return nil
+}
+
+func (app *application) reportWatchResultError(result registry.WatchResult) bool {
+	if result.Err == nil {
+		return false
+	}
+	app.warnf("watch warning: %v\n", result.Err)
+	return true
 }
 
 func normalizeWatchOptions(o watchOptions) watchOptions {
@@ -263,14 +241,6 @@ func notifyWatchReady(c chan struct{}) {
 	if c != nil {
 		close(c)
 	}
-}
-
-func isRelevantWatchEvent(e fsnotify.Event, target string) bool {
-	if e.Op&(fsnotify.Create|fsnotify.Write|fsnotify.Rename|fsnotify.Remove) == 0 {
-		return false
-	}
-	p, _ := filepath.Abs(e.Name)
-	return filepath.Clean(p) == filepath.Clean(target)
 }
 
 func watchSessionMap(s []registry.Session) map[string]registry.Session {

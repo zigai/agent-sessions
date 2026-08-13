@@ -102,6 +102,39 @@ func TestWatchDefaultsToHumanTable(t *testing.T) {
 	}
 }
 
+func TestWatchNoSnapshotSignalsReadyWithoutOutput(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "sessions.json")
+	store := registry.NewFileStore(path)
+	activity := registry.ActivityIdle
+	if _, err := store.Observe(context.Background(), registry.Observation{
+		Harness:    registry.HarnessCodex,
+		Source:     registry.ObservationSourceNative,
+		Evidence:   registry.ObservationEvidenceNativeEvent,
+		Identity:   registry.ObservationIdentity{SessionID: "watch-no-snapshot"},
+		Activity:   &activity,
+		ObservedAt: time.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	app := &application{storePath: path, stdout: &stdout, stderr: &bytes.Buffer{}}
+	ctx, cancel := context.WithCancel(context.Background())
+	ready := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		done <- app.runWatch(ctx, watchOptions{noSnapshot: true, ready: ready})
+	}()
+	<-ready
+	if stdout.Len() != 0 {
+		t.Fatalf("--no-snapshot output = %q", stdout.String())
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestDiffWatchEventsReportsProcessTransitions(t *testing.T) {
 	t.Parallel()
 	at := time.Now().UTC()
