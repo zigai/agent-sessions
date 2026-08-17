@@ -8,32 +8,39 @@ import { spawn } from "node:child_process";
 const agentSessionsBin = {{BINARY}};
 const currentSessionSource = {{SOURCE}};
 
-let currentSessionId: string | undefined;
-let currentSessionPath: string | undefined;
-let currentCwd: string | undefined;
+type SessionRef = {
+  id?: string;
+  path?: string;
+  cwd?: string;
+};
 
-function updateSessionRef(ctx: any): void {
+function isSubagentSession(ctx: any): boolean {
+  try {
+    return ctx?.sessionManager?.getBranch?.().some((entry: any) => entry?.type === "session_init") === true;
+  } catch {
+    return false;
+  }
+}
+
+function sessionRef(ctx: any): SessionRef {
   const sessionManager = ctx?.sessionManager;
+  const ref: SessionRef = {};
   try {
     const file = sessionManager?.getSessionFile?.();
-    currentSessionPath = typeof file === "string" && file.length > 0 ? file : undefined;
-  } catch {
-    currentSessionPath = undefined;
-  }
+    if (typeof file === "string" && file.length > 0) ref.path = file;
+  } catch {}
 
   try {
     const id = sessionManager?.getSessionId?.();
-    currentSessionId = typeof id === "string" && id.length > 0 ? id : undefined;
-  } catch {
-    currentSessionId = undefined;
-  }
+    if (typeof id === "string" && id.length > 0) ref.id = id;
+  } catch {}
 
   try {
     const cwd = typeof ctx?.cwd === "string" && ctx.cwd.length > 0 ? ctx.cwd : sessionManager?.getCwd?.();
-    currentCwd = typeof cwd === "string" && cwd.length > 0 ? cwd : undefined;
-  } catch {
-    currentCwd = undefined;
-  }
+    if (typeof cwd === "string" && cwd.length > 0) ref.cwd = cwd;
+  } catch {}
+
+  return ref;
 }
 
 function addAttribute(args: string[], key: string, value: unknown): void {
@@ -48,8 +55,8 @@ function addEvent(args: string[], value: unknown): void {
   }
 }
 
-function addResumeCommand(args: string[]): void {
-  const session = currentSessionPath ?? currentSessionId;
+function addResumeCommand(args: string[], ref: SessionRef): void {
+  const session = ref.path ?? ref.id;
   if (!session) return;
 
   for (const item of ["omp", "--session", session]) {
@@ -58,9 +65,10 @@ function addResumeCommand(args: string[]): void {
 }
 
 function report(activity: string | undefined, presence: string | undefined, ctx?: any, event?: any): void {
-  const observedAt = new Date().toISOString();
-  updateSessionRef(ctx);
+  if (isSubagentSession(ctx)) return;
 
+  const observedAt = new Date().toISOString();
+  const ref = sessionRef(ctx);
   const args = ["report", "omp", "--observed-at", observedAt, "--queue", "--quiet"];
   if (presence) args.push("--presence", presence);
   if (activity) args.push("--activity", activity);
@@ -76,13 +84,13 @@ function report(activity: string | undefined, presence: string | undefined, ctx?
     addAttribute(args, "omp_approved", String(event.approved));
   }
 
-  if (currentSessionPath) {
-    args.push("--session-path", currentSessionPath);
-  } else if (currentSessionId) {
-    args.push("--session-id", currentSessionId);
+  if (ref.path) {
+    args.push("--session-path", ref.path);
+  } else if (ref.id) {
+    args.push("--session-id", ref.id);
   }
-  if (currentCwd) args.push("--cwd", currentCwd);
-  addResumeCommand(args);
+  if (ref.cwd) args.push("--cwd", ref.cwd);
+  addResumeCommand(args, ref);
 
   try {
     const child = spawn(agentSessionsBin, args, {
@@ -106,10 +114,6 @@ export default function (pi: any) {
       report("idle", undefined, ctx, event);
     });
   }
-
-  pi.on("input", (event: any, ctx: any) => {
-    report("running", undefined, ctx, event);
-  });
 
   pi.on("before_agent_start", (event: any, ctx: any) => {
     report("running", undefined, ctx, event);

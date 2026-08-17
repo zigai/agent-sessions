@@ -16,6 +16,30 @@ func TestResolveHarnessUsesScopedAgentHint(t *testing.T) {
 	}
 }
 
+func TestResolveHarnessIgnoresOmpInternalWorkers(t *testing.T) {
+	t.Parallel()
+	process := processinfo.Process{
+		Executable: "/home/test/.local/bin/omp",
+		Args:       []string{"/home/test/.local/bin/omp", "__omp_worker_js_eval_process"},
+	}
+	harness, ok := resolveHarness(process)
+	if ok || harness != "" {
+		t.Fatalf("resolveHarness = %q, %v; want internal OMP worker ignored", harness, ok)
+	}
+}
+
+func TestResolveHarnessKeepsOmpHeadlessSessions(t *testing.T) {
+	t.Parallel()
+	process := processinfo.Process{
+		Executable: "/home/test/.local/bin/omp",
+		Args:       []string{"/home/test/.local/bin/omp", "--print", "check this repository"},
+	}
+	harness, ok := resolveHarness(process)
+	if !ok || harness != registry.HarnessOmp {
+		t.Fatalf("resolveHarness = %q, %v; want headless OMP session", harness, ok)
+	}
+}
+
 func TestResolveHarnessScansKnownWrappers(t *testing.T) {
 	t.Parallel()
 	for _, wrapper := range []string{"env", "fence", "bwrap", "bubblewrap", "mise", "nix-shell", "nix", "direnv"} {

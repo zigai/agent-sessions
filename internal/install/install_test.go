@@ -869,12 +869,17 @@ func TestInstallOmpWritesExtension(t *testing.T) {
 		`report("running"`,
 		`report(undefined, "gone"`,
 		`"--resume-command", item`,
-		`"--session-path", currentSessionPath`,
-		`"--cwd", currentCwd`,
+		`"--session-path", ref.path`,
+		`"--cwd", ref.cwd`,
 		`"report", "omp"`,
 		"addEvent(args, event?.type)",
-		"AGENT_SESSIONS_INTEGRATION_VERSION=5",
+		`entry?.type === "session_init"`,
+		"if (isSubagentSession(ctx)) return",
+		"AGENT_SESSIONS_INTEGRATION_VERSION=6",
 	}, "oh-my-pi extension")
+	if strings.Contains(result.Snippet, `pi.on("input"`) {
+		t.Fatalf("OMP extension must not treat local interactive input as agent activity: %q", result.Snippet)
+	}
 }
 
 func TestPiAndOmpRefuseToOverwriteSharedExtension(t *testing.T) {

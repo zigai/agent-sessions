@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -477,26 +478,37 @@ func joinObserverHealthError(primary, healthErr error) error {
 func resolveHarness(process processinfo.Process) (registry.Harness, bool) {
 	if process.AgentHint != "" {
 		if harnessID, err := registry.NormalizeHarness(process.AgentHint); err == nil {
-			return harnessID, true
+			return observableHarness(process, harnessID)
 		}
 	}
 	if harnessID, ok := harness.FromCommand(process.Executable); ok {
-		return harnessID, true
+		return observableHarness(process, harnessID)
 	}
 	for _, arg := range process.Args[:min(commandArgumentPrefixCount, len(process.Args))] {
 		if harnessID, ok := harness.FromCommand(arg); ok {
-			return harnessID, true
+			return observableHarness(process, harnessID)
 		}
 	}
 	if isAgentWrapper(process) {
 		start := min(commandArgumentPrefixCount, len(process.Args))
 		for _, arg := range process.Args[start:] {
 			if harnessID, ok := harness.FromCommand(arg); ok {
-				return harnessID, true
+				return observableHarness(process, harnessID)
 			}
 		}
 	}
 	return "", false
+}
+
+func observableHarness(process processinfo.Process, harnessID registry.Harness) (registry.Harness, bool) {
+	if harnessID == registry.HarnessOmp {
+		for _, arg := range process.Args {
+			if strings.HasPrefix(filepath.Base(arg), "__omp_worker_") {
+				return "", false
+			}
+		}
+	}
+	return harnessID, true
 }
 
 func isAgentWrapper(process processinfo.Process) bool {

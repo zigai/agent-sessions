@@ -53,11 +53,17 @@ type Definition struct {
 	Capabilities Capabilities
 }
 
-const IntegrationVersion = 4
+const (
+	IntegrationVersion    = 4
+	ompIntegrationVersion = 6
+)
 
 // IntegrationVersionFor returns the managed artifact generation for a harness.
 func IntegrationVersionFor(id registry.Harness) int {
-	if id == registry.HarnessAgy || id == registry.HarnessCline || id == registry.HarnessOmp {
+	if id == registry.HarnessOmp {
+		return ompIntegrationVersion
+	}
+	if id == registry.HarnessAgy || id == registry.HarnessCline {
 		return IntegrationVersion + 1
 	}
 	return IntegrationVersion
