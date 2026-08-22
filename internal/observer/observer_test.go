@@ -256,6 +256,103 @@ func TestObserverRestartMarksMissingStoredProcessGone(t *testing.T) {
 	}
 }
 
+func seedHookCreatedLiveSession(t *testing.T, path string, at time.Time, process processinfo.Process) {
+	t.Helper()
+	activity := registry.ActivityRunning
+	presence := registry.PresenceLive
+	_, err := registry.NewFileStore(path).Observe(context.Background(), registry.Observation{
+		Source:      registry.ObservationSourceNative,
+		Evidence:    registry.ObservationEvidenceNativeEvent,
+		Harness:     registry.HarnessOmp,
+		Identity:    registry.ObservationIdentity{SessionID: "hook-only"},
+		NativeEvent: "agent_start",
+		Presence:    &presence,
+		Activity:    &activity,
+		Process: &registry.ProcessIdentity{
+			PID:           process.PID,
+			StartIdentity: process.StartIdentity,
+		},
+		Tmux:       &registry.TmuxContext{Inside: true, SessionName: "0", PaneID: "%1"},
+		ObservedAt: at,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestObserverMarksHookCreatedDeadProcessGoneInOneCycle(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "sessions.json")
+	at := time.Now().UTC().Add(-time.Minute)
+	seedHookCreatedLiveSession(t, path, at, processinfo.Process{PID: 4321, StartIdentity: "boot:Z"})
+
+	options := Options{
+		StorePath: path,
+		Now:       func() time.Time { return at },
+		ProcessList: func(context.Context) ([]processinfo.Process, error) {
+			return nil, nil
+		},
+		PaneList:    func(context.Context) ([]tmuxctx.Pane, error) { return nil, nil },
+		CatalogList: func(context.Context) ([]CatalogEntry, error) { return nil, nil },
+		HealthPath:  path + ".health",
+	}
+	result, err := New(options).RunOnce(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Gone != 1 {
+		t.Fatalf("result gone = %d, want 1: %#v", result.Gone, result)
+	}
+
+	sessions, err := registry.NewFileStore(path).List(context.Background(), registry.Filter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 1 || sessions[0].Presence != registry.PresenceGone {
+		t.Fatalf("sessions after sweep: %#v", sessions)
+	}
+}
+
+func TestObserverKeepsHookCreatedLiveProcessAndRetiresReusedPid(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "sessions.json")
+	at := time.Now().UTC().Add(-time.Minute)
+	seedHookCreatedLiveSession(t, path, at, processinfo.Process{PID: 4321, StartIdentity: "boot:Z"})
+
+	newOptions := func(now time.Time, processes []processinfo.Process) Options {
+		return Options{
+			StorePath: path,
+			Now:       func() time.Time { return now },
+			ProcessList: func(context.Context) ([]processinfo.Process, error) {
+				return processes, nil
+			},
+			PaneList:    func(context.Context) ([]tmuxctx.Pane, error) { return nil, nil },
+			CatalogList: func(context.Context) ([]CatalogEntry, error) { return nil, nil },
+			HealthPath:  path + ".health",
+		}
+	}
+	liveProcesses := []processinfo.Process{{PID: 4321, StartIdentity: "boot:Z", Executable: "/usr/bin/omp"}}
+	if _, err := New(newOptions(at, liveProcesses)).RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	sessions, err := registry.NewFileStore(path).List(context.Background(), registry.Filter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 1 || sessions[0].Presence != registry.PresenceLive {
+		t.Fatalf("matching live process must stay live: %#v", sessions)
+	}
+
+	reusedProcesses := []processinfo.Process{{PID: 4321, StartIdentity: "boot:NEW", Executable: "/usr/bin/omp"}}
+	result, err := New(newOptions(at.Add(time.Second), reusedProcesses)).RunOnce(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Gone != 1 {
+		t.Fatalf("reused pid result gone = %d, want 1: %#v", result.Gone, result)
+	}
+}
+
 func TestResolveHarnessIgnoresLaterArguments(t *testing.T) {
 	t.Parallel()
 	process := processinfo.Process{Executable: "/usr/bin/tmux", Args: []string{"/usr/bin/tmux", "new-session", "-s", "agent-test", "/tmp/codex"}}
