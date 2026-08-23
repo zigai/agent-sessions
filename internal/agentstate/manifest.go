@@ -208,6 +208,9 @@ func validateRule(rule Rule) error {
 	if !hasPositiveMatcher(rule) {
 		return fmt.Errorf("%w: rule %q has no positive matcher", errManifestInvalid, rule.ID)
 	}
+	if err := validateRuleMatchers(rule); err != nil {
+		return err
+	}
 	expressions := append([]string{}, rule.RegexAll...)
 	expressions = append(expressions, rule.RegexAny...)
 	expressions = append(expressions, rule.RegexNone...)
@@ -222,6 +225,30 @@ func validateRule(rule Rule) error {
 
 func hasPositiveMatcher(rule Rule) bool {
 	return len(rule.All)+len(rule.Any)+len(rule.RegexAll)+len(rule.RegexAny)+len(rule.TitleAny)+len(rule.TitleRegexAny) > 0
+}
+
+func validateRuleMatchers(rule Rule) error {
+	groups := []struct {
+		name   string
+		values []string
+	}{
+		{name: "all", values: rule.All},
+		{name: "any", values: rule.Any},
+		{name: "none", values: rule.None},
+		{name: "regex_all", values: rule.RegexAll},
+		{name: "regex_any", values: rule.RegexAny},
+		{name: "regex_none", values: rule.RegexNone},
+		{name: "title_any", values: rule.TitleAny},
+		{name: "title_regex_any", values: rule.TitleRegexAny},
+	}
+	for _, group := range groups {
+		for index, value := range group.values {
+			if strings.TrimSpace(value) == "" {
+				return fmt.Errorf("%w: rule %q %s[%d] is empty", errManifestInvalid, rule.ID, group.name, index)
+			}
+		}
+	}
+	return nil
 }
 
 func sortedRules(rules []Rule) []Rule {

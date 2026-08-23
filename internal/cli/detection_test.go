@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -33,6 +35,31 @@ func TestDetectCommandEvaluatesOfflineScreenWithoutEchoingInput(t *testing.T) {
 	}
 	if strings.Contains(stdout.String(), "SECRET-COMMAND") {
 		t.Fatalf("detect output leaked screen input: %s", stdout.String())
+	}
+}
+
+func TestDetectCommandUsesLocalOnlyOmpManifest(t *testing.T) {
+	t.Parallel()
+
+	configDir := t.TempDir()
+	manifest := []byte("version=1\nagent='omp'\n[[rules]]\nid='custom_working'\nstate='running'\nregex_any=['(?m)^\\s*\\S?\\s*Working\\.\\.\\.']\n")
+	if err := os.WriteFile(filepath.Join(configDir, "omp.toml"), manifest, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	root := NewRootCommand(&stdout, &bytes.Buffer{})
+	root.SetIn(strings.NewReader(" ⠋ Working... (40s)\n ~/Projects/sesh · Codex · GPT-5.6 Sol · medium"))
+	root.SetArgs([]string{"--json", "detect", "--harness", "omp", "--file", "-", "--config-dir", configDir})
+	if err := root.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	var decision map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &decision); err != nil {
+		t.Fatal(err)
+	}
+	if decision["activity"] != "running" || decision["rule_id"] != "custom_working" {
+		t.Fatalf("decision = %#v", decision)
 	}
 }
 

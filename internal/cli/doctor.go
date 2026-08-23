@@ -255,8 +255,17 @@ func (app *application) addObserverReconciliationCheck(result *doctorResult, sto
 
 func (app *application) addDetectionManifestCheck(result *doctorResult) {
 	loader := agentstate.Loader{}
+	harnesses := []registry.Harness{
+		registry.HarnessClaude, registry.HarnessCodex, registry.HarnessCursor, registry.HarnessCopilot,
+		registry.HarnessCline, registry.HarnessKimiCode, registry.HarnessGrok, registry.HarnessGoose,
+		registry.HarnessPi, registry.HarnessOmp, registry.HarnessOpenCode, registry.HarnessAgy,
+		registry.HarnessKilo, registry.HarnessDroid, registry.HarnessOpenClaw, registry.HarnessHermes,
+	}
 	var warnings []string
-	for _, harnessID := range []registry.Harness{registry.HarnessCodex, registry.HarnessClaude, registry.HarnessOpenCode, registry.HarnessPi} {
+	for _, harnessID := range harnesses {
+		if !loader.Supports(harnessID) {
+			continue
+		}
 		manifest, err := loader.Load(harnessID)
 		if err != nil {
 			result.Checks = append(result.Checks, doctorCheck{Name: "detection.manifests", Status: doctorError, Message: err.Error()})
@@ -270,7 +279,7 @@ func (app *application) addDetectionManifestCheck(result *doctorResult) {
 		result.Checks = append(result.Checks, doctorCheck{Name: "detection.manifests", Status: doctorWarning, Message: strings.Join(warnings, "; ")})
 		return
 	}
-	result.Checks = append(result.Checks, doctorCheck{Name: "detection.manifests", Status: doctorOK, Message: "Codex, Claude, OpenCode, and Pi manifests are valid"})
+	result.Checks = append(result.Checks, doctorCheck{Name: "detection.manifests", Status: doctorOK, Message: "all bundled and configured manifests are valid"})
 }
 
 func (app *application) integrationStatus(ctx context.Context, id registry.Harness) (doctorStatus, string, bool) {

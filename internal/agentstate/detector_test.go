@@ -56,7 +56,7 @@ func TestBundledManifestsClassifyTargetAgents(t *testing.T) {
 		{registry.HarnessCodex, "› implement this\nContext 63% used", registry.ActivityIdle, "input_prompt"},
 		{registry.HarnessCodex, "Would you like to run the following command?", registry.ActivityWaiting, "permission_prompt"},
 		{registry.HarnessCodex, "API error: Rate limit reached", registry.ActivityFailed, "error_prompt"},
-		{registry.HarnessCodex, "Operation cancelled by user", registry.ActivityInterrupted, "interrupted_prompt"},
+		{registry.HarnessCodex, "Operation cancelled by user", registry.ActivityInterrupted, "interrupted_prompt"}, //nolint:misspell // Fixture mirrors Codex output.
 		{registry.HarnessClaude, "Thinking… esc to interrupt", registry.ActivityRunning, "working_interruptible"},
 		{registry.HarnessClaude, "❯ \n? for shortcuts", registry.ActivityIdle, "input_prompt"},
 		{registry.HarnessClaude, "API Error: Rate limit exceeded", registry.ActivityFailed, "error_prompt"},
@@ -72,6 +72,60 @@ func TestBundledManifestsClassifyTargetAgents(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(string(test.harness)+"/"+test.rule, func(t *testing.T) {
+			t.Parallel()
+			manifest, err := (Loader{ConfigDir: t.TempDir()}).Load(test.harness)
+			if err != nil {
+				t.Fatal(err)
+			}
+			decision := Evaluate(manifest, NormalizeSnapshot(test.screen, ""))
+			if decision.Activity != test.want || decision.RuleID != test.rule {
+				t.Fatalf("decision = %#v, want activity %q rule %q", decision, test.want, test.rule)
+			}
+		})
+	}
+}
+
+func TestBundledManifestScenarioBoundaries(t *testing.T) {
+	t.Parallel()
+
+	const piFooter = " ~/Projects · Codex · GPT-5.6 Sol · max 18.3%/272k"
+	tests := []struct {
+		name    string
+		harness registry.Harness
+		screen  string
+		want    registry.Activity
+		rule    string
+	}{
+		{
+			name: "codex case insensitive permission", harness: registry.HarnessCodex,
+			screen: "would you like to run the following command?", want: registry.ActivityWaiting, rule: "permission_prompt",
+		},
+		{
+			name: "codex permission outside region", harness: registry.HarnessCodex,
+			screen: "Would you like to run the following command?\n" + strings.Repeat("ordinary output\n", 30),
+			want:   registry.ActivityUnknown,
+		},
+		{
+			name: "codex historical error while running", harness: registry.HarnessCodex,
+			screen: "API error: old failure\nRunning command · esc to interrupt",
+			want:   registry.ActivityRunning, rule: "working_interruptible",
+		},
+		{
+			name: "pi ANSI custom footer", harness: registry.HarnessPi,
+			screen: "\x1b[2m" + piFooter + "\x1b[0m", want: registry.ActivityIdle, rule: "custom_input_prompt",
+		},
+		{
+			name: "pi custom footer outside region", harness: registry.HarnessPi,
+			screen: piFooter + "\n" + strings.Repeat("ordinary output\n", 12),
+			want:   registry.ActivityUnknown,
+		},
+		{
+			name: "pi exact historical working text", harness: registry.HarnessPi,
+			screen: "Working...\n" + piFooter, want: registry.ActivityIdle, rule: "custom_input_prompt",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			manifest, err := (Loader{ConfigDir: t.TempDir()}).Load(test.harness)
 			if err != nil {
@@ -162,6 +216,33 @@ func TestManifestRejectsUnknownFields(t *testing.T) {
 	}
 	if _, err := ParseManifest(make([]byte, maxManifestBytes+1), registry.HarnessPi); err == nil || !strings.Contains(err.Error(), errManifestTooLarge.Error()) {
 		t.Fatalf("oversized manifest error = %v", err)
+	}
+}
+
+func TestManifestRejectsEmptyMatchers(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		matcher string
+	}{
+		{name: "all", matcher: "all=['']"},
+		{name: "any", matcher: "any=['  ']"},
+		{name: "none", matcher: "any=['ready']\nnone=['']"},
+		{name: "regex all", matcher: "regex_all=['']"},
+		{name: "regex any", matcher: "regex_any=['  ']"},
+		{name: "regex none", matcher: "any=['ready']\nregex_none=['']"},
+		{name: "title any", matcher: "title_any=['']"},
+		{name: "title regex any", matcher: "title_regex_any=['  ']"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			data := []byte("version=1\nagent='pi'\n[[rules]]\nid='invalid'\nstate='idle'\n" + test.matcher + "\n")
+			if _, err := ParseManifest(data, registry.HarnessPi); err == nil || !strings.Contains(err.Error(), "is empty") {
+				t.Fatalf("ParseManifest() error = %v, want empty matcher rejection", err)
+			}
+		})
 	}
 }
 
