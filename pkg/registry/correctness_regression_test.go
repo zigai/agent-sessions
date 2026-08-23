@@ -149,6 +149,166 @@ func TestNativeSessionSwitchOnSameProcessPreservesEndedHistory(t *testing.T) {
 	}
 }
 
+func TestProcessObservationRetiresDifferentHarnessWithSameProcess(t *testing.T) {
+	t.Parallel()
+
+	store := NewFileStore(filepath.Join(t.TempDir(), "sessions.json"))
+	ctx := context.Background()
+	at := time.Now().UTC().Add(-time.Minute)
+	process := &ProcessIdentity{PID: 85, StartIdentity: "boot:85"}
+	live := PresenceLive
+	idle := ActivityIdle
+
+	openCode, err := store.Observe(ctx, Observation{
+		Source: ObservationSourceNative, Evidence: ObservationEvidenceNativeEvent,
+		Harness: HarnessOpenCode, Identity: ObservationIdentity{SessionID: "opencode-session"},
+		Presence: &live, Activity: &idle, Process: process,
+		NativeEvent: "session_start", ObservedAt: at,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	present := true
+	omp, err := store.Observe(ctx, Observation{
+		Source: ObservationSourceProcess, Evidence: ObservationEvidenceProcessPresence,
+		Harness: HarnessOmp, ProcessPresent: &present, Process: process,
+		ObservedAt: at.Add(time.Second),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if omp.Harness != HarnessOmp || omp.Presence != PresenceLive {
+		t.Fatalf("OMP process session is not live: %#v", omp)
+	}
+
+	openCode, err = store.Get(ctx, openCode.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if openCode.Harness != HarnessOpenCode || openCode.Presence != PresenceGone || openCode.Activity != nil {
+		t.Fatalf("OpenCode session was not retired: %#v", openCode)
+	}
+
+	sessions, err := store.List(ctx, Filter{Presence: PresenceLive})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 1 || sessions[0].ID != omp.ID {
+		t.Fatalf("live sessions = %#v, want only OMP %q", sessions, omp.ID)
+	}
+}
+
+func TestTmuxObservationRetiresDifferentHarnessWithoutProcessIdentity(t *testing.T) {
+	t.Parallel()
+
+	store := NewFileStore(filepath.Join(t.TempDir(), "sessions.json"))
+	ctx := context.Background()
+	at := time.Now().UTC().Add(-time.Minute)
+	location := &TmuxContext{
+		Inside: true, ServerSocket: "/tmp/tmux/default", SessionID: "$0",
+		SessionName: "0", WindowID: "@2", PaneID: "%3",
+	}
+	live := PresenceLive
+	idle := ActivityIdle
+
+	openCode, err := store.Observe(ctx, Observation{
+		Source: ObservationSourceNative, Evidence: ObservationEvidenceNativeEvent,
+		Harness: HarnessOpenCode, Identity: ObservationIdentity{SessionID: "opencode-session"},
+		Presence: &live, Activity: &idle, Tmux: location, NativeEvent: "session_start", ObservedAt: at,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if openCode.Process != nil {
+		t.Fatalf("fixture unexpectedly has process identity: %#v", openCode)
+	}
+
+	process := &ProcessIdentity{PID: 85, StartIdentity: "boot:85"}
+	present := true
+	if _, err = store.Observe(ctx, Observation{
+		Source: ObservationSourceProcess, Evidence: ObservationEvidenceProcessPresence,
+		Harness: HarnessOmp, ProcessPresent: &present, Process: process,
+		ObservedAt: at.Add(time.Second),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	omp, err := store.Observe(ctx, Observation{
+		Source: ObservationSourceTmux, Evidence: ObservationEvidenceTmuxLocation,
+		Harness: HarnessOmp, Process: process, Tmux: location,
+		ObservedAt: at.Add(2 * time.Second),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	openCode, err = store.Get(ctx, openCode.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if openCode.Presence != PresenceGone || openCode.Activity != nil || !openCode.ActivityChangedAt.Equal(at.Add(2*time.Second)) {
+		t.Fatalf("processless OpenCode session was not retired at the replacement time: %#v", openCode)
+	}
+	if omp.Harness != HarnessOmp || omp.Presence != PresenceLive || omp.Tmux.PaneID != location.PaneID {
+		t.Fatalf("OMP replacement is not live on the pane: %#v", omp)
+	}
+}
+
+func TestTmuxObservationPreservesDifferentLiveProcessOnSamePane(t *testing.T) {
+	t.Parallel()
+
+	store := NewFileStore(filepath.Join(t.TempDir(), "sessions.json"))
+	ctx := context.Background()
+	at := time.Now().UTC().Add(-time.Minute)
+	location := &TmuxContext{
+		Inside: true, ServerSocket: "/tmp/tmux/default", SessionID: "$0",
+		SessionName: "0", WindowID: "@2", PaneID: "%3",
+	}
+	live := PresenceLive
+	openCodeProcess := &ProcessIdentity{PID: 84, StartIdentity: "boot:84"}
+	ompProcess := &ProcessIdentity{PID: 85, StartIdentity: "boot:85"}
+
+	openCode, err := store.Observe(ctx, Observation{
+		Source: ObservationSourceNative, Evidence: ObservationEvidenceNativeEvent,
+		Harness: HarnessOpenCode, Identity: ObservationIdentity{SessionID: "opencode-session"},
+		Presence: &live, Process: openCodeProcess, Tmux: location,
+		NativeEvent: "session_start", ObservedAt: at,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	present := true
+	if _, err = store.Observe(ctx, Observation{
+		Source: ObservationSourceProcess, Evidence: ObservationEvidenceProcessPresence,
+		Harness: HarnessOpenCode, ProcessPresent: &present, Process: openCodeProcess,
+		ObservedAt: at.Add(2 * time.Second),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.Observe(ctx, Observation{
+		Source: ObservationSourceProcess, Evidence: ObservationEvidenceProcessPresence,
+		Harness: HarnessOmp, ProcessPresent: &present, Process: ompProcess,
+		ObservedAt: at.Add(2 * time.Second),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.Observe(ctx, Observation{
+		Source: ObservationSourceTmux, Evidence: ObservationEvidenceTmuxLocation,
+		Harness: HarnessOmp, Process: ompProcess, Tmux: location,
+		ObservedAt: at.Add(2 * time.Second),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	openCode, err = store.Get(ctx, openCode.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if openCode.Presence != PresenceLive || openCode.Process == nil || !openCode.Process.Equal(*openCodeProcess) {
+		t.Fatalf("distinct live OpenCode process was retired: %#v", openCode)
+	}
+}
+
 func TestNativeProcessIdentitySeedsObserverReconciliation(t *testing.T) {
 	t.Parallel()
 	store := NewFileStore(filepath.Join(t.TempDir(), "sessions.json"))

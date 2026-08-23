@@ -571,7 +571,10 @@ func setGone(session *Session, at time.Time) {
 		session.Presence = PresenceGone
 		session.PresenceChangedAt = at
 	}
-	session.Activity = nil
+	if session.Activity != nil {
+		session.Activity = nil
+		session.ActivityChangedAt = at
+	}
 	var process ProcessIdentity
 	if session.Process != nil {
 		process = *session.Process
@@ -579,25 +582,19 @@ func setGone(session *Session, at time.Time) {
 	session.ActivityDecision = &ActivityDecision{Authority: "process", Reason: "process_gone", RuleID: "", ManifestSource: "", ManifestVersion: 0, FallbackReason: "", Process: process, ObservedAt: at}
 }
 
-//nolint:cyclop // retirement verifies every independent identity and process guard
 func retireConflictingProcessSessions(
 	sessions map[string]Session,
 	observation Observation,
 	at time.Time,
 	receivedAt time.Time,
 ) {
-	if observation.Source != ObservationSourceNative ||
-		observation.Process == nil ||
-		!observation.Process.Complete() ||
-		!observationHasIdentity(observation) {
+	if observation.Process == nil || !observation.Process.Complete() {
 		return
 	}
 
 	for id, session := range sessions {
-		if session.Harness != observation.Harness ||
-			session.Process == nil ||
-			!session.Process.Equal(*observation.Process) ||
-			!observationIdentityConflicts(session, observation.Identity) {
+		replace, nativeReplacement := conflictingSessionReplacement(session, observation)
+		if !replace {
 			continue
 		}
 		if currentAt := currentProcessObservationTime(session); !currentAt.IsZero() && at.Before(currentAt) {
@@ -605,14 +602,68 @@ func retireConflictingProcessSessions(
 		}
 		if session.Presence != PresenceGone {
 			setGone(&session, at)
-			session.ActivityDecision = &ActivityDecision{
-				Authority: "hook", Reason: "session_replaced", RuleID: "", ManifestSource: "",
-				ManifestVersion: 0, FallbackReason: "", Process: *observation.Process, ObservedAt: at,
+			if nativeReplacement {
+				session.ActivityDecision = &ActivityDecision{
+					Authority: "hook", Reason: "session_replaced", RuleID: "", ManifestSource: "",
+					ManifestVersion: 0, FallbackReason: "", Process: *observation.Process, ObservedAt: at,
+				}
 			}
 		}
 		session.UpdatedAt = maxTime(session.UpdatedAt, receivedAt)
 		sessions[id] = session
 	}
+}
+
+func conflictingSessionReplacement(session Session, observation Observation) (bool, bool) {
+	sameProcess := session.Process != nil && session.Process.Equal(*observation.Process)
+	if nativeSessionReplacement(session, observation, sameProcess) {
+		return true, true
+	}
+	if session.Harness == observation.Harness || session.Presence != PresenceLive {
+		return false, false
+	}
+	if processHarnessReplacement(observation, sameProcess) {
+		return true, false
+	}
+	if session.Process == nil && observation.Source == ObservationSourceTmux && sameTmuxPane(session, observation.Tmux) {
+		return true, false
+	}
+	return false, false
+}
+
+func nativeSessionReplacement(session Session, observation Observation, sameProcess bool) bool {
+	return observation.Source == ObservationSourceNative &&
+		observationHasIdentity(observation) &&
+		session.Harness == observation.Harness &&
+		observationIdentityConflicts(session, observation.Identity) &&
+		sameProcess
+}
+
+func processHarnessReplacement(observation Observation, sameProcess bool) bool {
+	return observation.Source == ObservationSourceProcess &&
+		observation.ProcessPresent != nil &&
+		*observation.ProcessPresent &&
+		sameProcess
+}
+
+func sameTmuxPane(session Session, observed *TmuxContext) bool {
+	if observed == nil || observed.PaneID == "" {
+		return false
+	}
+	current := session.Tmux
+	if current.Empty() && session.Multiplexer.Kind == MultiplexerTmux {
+		current = session.Multiplexer.TmuxContext()
+	}
+	if current.PaneID != observed.PaneID {
+		return false
+	}
+	if current.ServerSocket != "" || observed.ServerSocket != "" {
+		return current.ServerSocket == observed.ServerSocket
+	}
+	if current.SessionID != "" || observed.SessionID != "" {
+		return current.SessionID == observed.SessionID
+	}
+	return false
 }
 
 func observationHasIdentity(observation Observation) bool {

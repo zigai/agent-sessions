@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -49,6 +50,59 @@ func (store *failGoneOnceStore) ObserveBatch(ctx context.Context, observations [
 	}
 
 	return sessions, nil
+}
+
+type conflictObservationStore struct {
+	registry.Store
+
+	conflictPID  int
+	enabled      bool
+	batchOnly    bool
+	batchCalls   int
+	observeCalls int
+}
+
+func (store *conflictObservationStore) Observe(ctx context.Context, observation registry.Observation) (registry.Session, error) {
+	store.observeCalls++
+	if !store.batchOnly && store.conflicts(observation) {
+		return registry.Session{}, registry.ErrObservationConflict
+	}
+
+	session, err := store.Store.Observe(ctx, observation)
+	if err != nil {
+		return registry.Session{}, fmt.Errorf("delegate conflict observation: %w", err)
+	}
+
+	return session, nil
+}
+
+func (store *conflictObservationStore) ObserveBatch(ctx context.Context, observations []registry.Observation) ([]registry.Session, error) {
+	store.batchCalls++
+	if slices.ContainsFunc(observations, store.conflicts) {
+		return nil, registry.ErrObservationConflict
+	}
+
+	sessions, err := store.Store.ObserveBatch(ctx, observations)
+	if err != nil {
+		return nil, fmt.Errorf("delegate conflict observation batch: %w", err)
+	}
+
+	return sessions, nil
+}
+
+func (store *conflictObservationStore) conflicts(observation registry.Observation) bool {
+	return store.enabled && observation.Process != nil && observation.Process.PID == store.conflictPID
+}
+
+func requireOnlySessionPresence(t *testing.T, store registry.Store, want registry.Presence) {
+	t.Helper()
+	sessions, err := store.List(context.Background(), registry.Filter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 1 || sessions[0].Presence != want {
+		t.Fatalf("sessions = %#v, want one %s session", sessions, want)
+	}
 }
 
 //nolint:cyclop // lifecycle test covers the two-snapshot disappearance contract
@@ -149,6 +203,167 @@ func TestObserverRetriesFailedGoneObservationAndEvictsTrackedProcess(t *testing.
 	if len(sessions) != 1 || sessions[0].Presence != registry.PresenceGone {
 		t.Fatalf("sessions after retry = %#v", sessions)
 	}
+}
+
+func TestObserverConflictDoesNotBlockIndependentObservation(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "sessions.json")
+	baseStore := registry.NewFileStore(path)
+	store := &conflictObservationStore{Store: baseStore, conflictPID: 1234, enabled: true}
+	at := time.Now().UTC().Add(-time.Minute)
+	processes := []processinfo.Process{
+		{PID: 1234, PPID: 1, ProcessGroupID: 1234, StartIdentity: "boot:A", Executable: "/usr/bin/codex", CWD: "/conflict", TTY: "/dev/pts/1"},
+		{PID: 5678, PPID: 1, ProcessGroupID: 5678, StartIdentity: "boot:B", Executable: "/usr/bin/codex", CWD: "/valid", TTY: "/dev/pts/2"},
+	}
+	watcher := New(Options{
+		Store:       store,
+		Now:         func() time.Time { return at },
+		ProcessList: func(context.Context) ([]processinfo.Process, error) { return processes, nil },
+		PaneList:    func(context.Context) ([]tmuxctx.Pane, error) { return nil, nil },
+		CatalogList: func(context.Context) ([]CatalogEntry, error) { return nil, nil },
+	})
+
+	result, err := watcher.RunOnce(context.Background())
+	if !errors.Is(err, registry.ErrObservationConflict) {
+		t.Fatalf("RunOnce() error = %v, want observation conflict", err)
+	}
+	if result.Present != 2 {
+		t.Fatalf("RunOnce() result = %#v, want both processes observed", result)
+	}
+	if result.Observations == 0 || result.Sessions == 0 || result.Changed == 0 {
+		t.Fatalf("partial-success counters = %#v, want persisted independent observation", result)
+	}
+	if store.batchCalls != 1 || store.observeCalls == 0 {
+		t.Fatalf("store calls = batch %d, individual %d; want one atomic attempt followed by individual retries", store.batchCalls, store.observeCalls)
+	}
+	sessions, listErr := baseStore.List(context.Background(), registry.Filter{})
+	if listErr != nil {
+		t.Fatal(listErr)
+	}
+	if len(sessions) != 1 || sessions[0].Process == nil || sessions[0].Process.PID != 5678 {
+		t.Fatalf("sessions after conflicted cycle = %#v, want independent process persisted", sessions)
+	}
+}
+
+func TestObserverPreservesAtomicConflictAfterSuccessfulIndividualRetries(t *testing.T) {
+	t.Parallel()
+
+	store := &conflictObservationStore{
+		Store:       registry.NewFileStore(filepath.Join(t.TempDir(), "sessions.json")),
+		conflictPID: 1234, enabled: true, batchOnly: true,
+	}
+	watcher := New(Options{
+		Store: store,
+		ProcessList: func(context.Context) ([]processinfo.Process, error) {
+			return []processinfo.Process{{
+				PID: 1234, PPID: 1, ProcessGroupID: 1234, StartIdentity: "boot:A",
+				Executable: "/usr/bin/codex", CWD: "/work", TTY: "/dev/pts/1",
+			}}, nil
+		},
+		PaneList:    func(context.Context) ([]tmuxctx.Pane, error) { return nil, nil },
+		CatalogList: func(context.Context) ([]CatalogEntry, error) { return nil, nil },
+	})
+
+	result, err := watcher.RunOnce(context.Background())
+	if !errors.Is(err, registry.ErrObservationConflict) {
+		t.Fatalf("RunOnce() error = %v, want original atomic conflict", err)
+	}
+	if result.Sessions == 0 || store.observeCalls == 0 {
+		t.Fatalf("successful individual retries were not recorded: result=%#v calls=%d", result, store.observeCalls)
+	}
+}
+
+func TestObserverTracksProcessesCommittedDuringConflictRecovery(t *testing.T) {
+	t.Parallel()
+
+	baseStore := registry.NewFileStore(filepath.Join(t.TempDir(), "sessions.json"))
+	store := &conflictObservationStore{Store: baseStore, conflictPID: 1234, enabled: true}
+	at := time.Now().UTC().Add(-time.Minute)
+	processes := []processinfo.Process{
+		{PID: 1234, PPID: 1, ProcessGroupID: 1234, StartIdentity: "boot:A", Executable: "/usr/bin/codex", CWD: "/conflict", TTY: "/dev/pts/1"},
+		{PID: 5678, PPID: 1, ProcessGroupID: 5678, StartIdentity: "boot:B", Executable: "/usr/bin/codex", CWD: "/valid", TTY: "/dev/pts/2"},
+	}
+	watcher := New(Options{
+		Store:       store,
+		Now:         func() time.Time { return at },
+		ProcessList: func(context.Context) ([]processinfo.Process, error) { return processes, nil },
+		PaneList:    func(context.Context) ([]tmuxctx.Pane, error) { return nil, nil },
+		CatalogList: func(context.Context) ([]CatalogEntry, error) { return nil, nil },
+	})
+	if _, err := watcher.RunOnce(context.Background()); !errors.Is(err, registry.ErrObservationConflict) {
+		t.Fatalf("initial cycle error = %v, want observation conflict", err)
+	}
+
+	store.enabled = false
+	processes = nil
+	at = at.Add(time.Second)
+	if _, err := watcher.RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	at = at.Add(time.Second)
+	if _, err := watcher.RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	sessions, err := baseStore.List(context.Background(), registry.Filter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, session := range sessions {
+		if session.Process != nil && session.Process.PID == 5678 && session.Presence == registry.PresenceGone {
+			return
+		}
+	}
+	t.Fatalf("independent process was not retired after disappearing: %#v", sessions)
+}
+
+func TestObserverRetriesConflictingAbsenceWithoutAdvancingTracker(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "sessions.json")
+	baseStore := registry.NewFileStore(path)
+	store := &conflictObservationStore{Store: baseStore, conflictPID: 1234}
+	at := time.Now().UTC().Add(-time.Minute)
+	process := processinfo.Process{PID: 1234, PPID: 1, ProcessGroupID: 1234, StartIdentity: "boot:A", Executable: "/usr/bin/codex", CWD: "/work", TTY: "/dev/pts/1"}
+	processes := []processinfo.Process{process}
+	watcher := New(Options{
+		Store:       store,
+		Now:         func() time.Time { return at },
+		ProcessList: func(context.Context) ([]processinfo.Process, error) { return processes, nil },
+		PaneList:    func(context.Context) ([]tmuxctx.Pane, error) { return nil, nil },
+		CatalogList: func(context.Context) ([]CatalogEntry, error) { return nil, nil },
+	})
+	if _, err := watcher.RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	processes = nil
+	at = at.Add(time.Second)
+	if _, err := watcher.RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	store.enabled = true
+	at = at.Add(time.Second)
+	failed, err := watcher.RunOnce(context.Background())
+	if !errors.Is(err, registry.ErrObservationConflict) || failed.Gone != 1 {
+		t.Fatalf("conflicting absence cycle = %#v, err=%v", failed, err)
+	}
+	if len(watcher.tracked) != 1 {
+		t.Fatalf("conflicting absence advanced tracker: %#v", watcher.tracked)
+	}
+	requireOnlySessionPresence(t, baseStore, registry.PresenceLive)
+
+	store.enabled = false
+	at = at.Add(time.Second)
+	retried, err := watcher.RunOnce(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retried.Gone != 1 || len(watcher.tracked) != 0 {
+		t.Fatalf("successful absence retry = %#v, tracked=%#v", retried, watcher.tracked)
+	}
+	requireOnlySessionPresence(t, baseStore, registry.PresenceGone)
 }
 
 func TestObserverRejectsConcurrentRunsOnOneInstance(t *testing.T) {

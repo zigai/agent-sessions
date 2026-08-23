@@ -411,6 +411,7 @@ func (o *Observer) runCycle(ctx context.Context) (Result, error) {
 			Catalog: metadata, ObservedAt: at,
 		})
 	}
+	retiredKeys := make([]processKey, 0)
 	nextTracked := current
 	if o.initialized {
 		nextTracked = make(map[processKey]trackedProcess, len(current)+len(o.tracked))
@@ -434,6 +435,8 @@ func (o *Observer) runCycle(ctx context.Context) (Result, error) {
 					Harness: key.harness, ProcessPresent: &present, Process: processIdentity(old.process), ObservedAt: at,
 				})
 				result.Gone++
+				nextTracked[key] = old
+				retiredKeys = append(retiredKeys, key)
 				continue
 			}
 			nextTracked[key] = old
@@ -442,18 +445,25 @@ func (o *Observer) runCycle(ctx context.Context) (Result, error) {
 	absences := absenceObservationsForUnobservedSessions(knownSessions, processByPID, at)
 	observations = append(observations, absences...)
 	result.Gone += len(absences)
+	result.Observations = len(observations)
 	if len(observations) > 0 {
-		sessions, observeErr := o.store.ObserveBatch(ctx, observations)
+		sessions, observeErr := o.observeBatch(ctx, observations)
+		result.Sessions = len(sessions)
+		result.Changed = len(sessions)
 		if observeErr != nil {
+			if errors.Is(observeErr, registry.ErrObservationConflict) {
+				o.tracked = nextTracked
+				o.initialized = true
+			}
 			healthErr := o.recordHealth(at, true, "registry", observeErr, result)
 			return result, joinObserverHealthError(fmt.Errorf("recording observations: %w", observeErr), healthErr)
 		}
-		result.Sessions = len(sessions)
-		result.Changed = len(sessions)
+	}
+	for _, key := range retiredKeys {
+		delete(nextTracked, key)
 	}
 	o.tracked = nextTracked
 	o.initialized = true
-	result.Observations = len(observations)
 	if err := o.recordCycleHealth(at, result); err != nil {
 		result.Degraded = true
 		result.Error = err.Error()
@@ -895,6 +905,30 @@ func (o *Observer) Health() Health {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	return o.health
+}
+
+func (o *Observer) observeBatch(ctx context.Context, observations []registry.Observation) ([]registry.Session, error) {
+	sessions, err := o.store.ObserveBatch(ctx, observations)
+	if !errors.Is(err, registry.ErrObservationConflict) {
+		if err != nil {
+			return sessions, fmt.Errorf("recording observation batch: %w", err)
+		}
+
+		return sessions, nil
+	}
+
+	sessions = make([]registry.Session, 0, len(observations))
+	observationErrs := []error{fmt.Errorf("atomic observation batch: %w", err)}
+	for index, observation := range observations {
+		session, observeErr := o.store.Observe(ctx, observation)
+		if observeErr != nil {
+			observationErrs = append(observationErrs, fmt.Errorf("observation %d: %w", index, observeErr))
+			continue
+		}
+		sessions = append(sessions, session)
+	}
+
+	return sessions, errors.Join(observationErrs...)
 }
 
 func (o *Observer) clearRunning() {

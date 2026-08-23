@@ -382,7 +382,7 @@ func NormalizeActivity(value string) (Activity, error) {
 		return ActivityIdle, nil
 	case string(ActivityFailed), "error", "errored", "crash", "crashed":
 		return ActivityFailed, nil
-	case string(ActivityInterrupted), "paused", "stopped", "cancelled", "canceled":
+	case string(ActivityInterrupted), "paused", "stopped", "canceled", "cancelled": //nolint:misspell // British spelling remains a supported input alias.
 		return ActivityInterrupted, nil
 	case string(ActivityUnknown):
 		return ActivityUnknown, nil
@@ -390,6 +390,7 @@ func NormalizeActivity(value string) (Activity, error) {
 		return "", fmt.Errorf("%w: %q", ErrUnknownActivity, value)
 	}
 }
+
 func NormalizeSource(value string) (ObservationSource, error) {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case string(ObservationSourceNative):
