@@ -29,3 +29,19 @@ priority = 100
 region = "bottom:12"
 any = ["Type a message", "Enter to send", "shift+enter for newline"]
 none = ["esc to interrupt"]
+
+[[rules]]
+id = "error_prompt"
+state = "failed"
+priority = 350
+region = "bottom:30"
+any = ["API Error", "Failed to execute", "Rate limit exceeded", "Execution failed"]
+none = ["esc to interrupt"]
+
+[[rules]]
+id = "interrupted_prompt"
+state = "interrupted"
+priority = 220
+region = "bottom:25"
+any = ["Interrupted by user", "Operation cancelled", "Session stopped"]
+none = ["esc to interrupt"]

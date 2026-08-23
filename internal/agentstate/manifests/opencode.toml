@@ -30,3 +30,19 @@ priority = 100
 region = "bottom:12"
 any = ["Ask anything", "Type a message", "Send a message"]
 none = ["esc to interrupt", "permission"]
+
+[[rules]]
+id = "error_prompt"
+state = "failed"
+priority = 350
+region = "bottom:30"
+any = ["API error", "Execution error", "Failed to run"]
+none = ["esc to interrupt"]
+
+[[rules]]
+id = "interrupted_prompt"
+state = "interrupted"
+priority = 220
+region = "bottom:25"
+any = ["Stopped by user", "Operation cancelled", "Interrupted"]
+none = ["esc to interrupt"]

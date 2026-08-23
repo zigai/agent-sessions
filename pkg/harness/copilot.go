@@ -73,7 +73,7 @@ func copilotHookConfig(binary string) map[string]any {
 		{event: "permissionRequest", transition: HookActivityWaiting, matcher: ""},
 		{event: "notification", transition: HookActivityWaiting, matcher: "permission_prompt"},
 		{event: "postToolUse", transition: HookActivityRunning, matcher: ""},
-		{event: "postToolUseFailure", transition: HookActivityRunning, matcher: ""},
+		{event: "postToolUseFailure", transition: HookActivityFailed, matcher: ""},
 		{event: "preCompact", transition: HookActivityRunning, matcher: ""},
 		{event: "subagentStart", transition: HookActivityRunning, matcher: ""},
 		{event: "subagentStop", transition: HookActivityIdle, matcher: ""},

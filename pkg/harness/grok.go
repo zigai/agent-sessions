@@ -124,7 +124,7 @@ func grokHookConfig(binary string) map[string]any {
 		{
 			event:   "StopFailure",
 			matcher: "",
-			command: grokHookCommand(binary, registry.ActivityIdle, "StopFailure"),
+			command: grokHookCommand(binary, registry.ActivityFailed, "StopFailure"),
 		},
 		{
 			event:   "SessionEnd",

@@ -124,8 +124,12 @@ def _on_session_end(**values: Any) -> None:
     session_id = _session_identity(values)
     if session_id:
         _CURRENT_SESSION_ID.set(session_id)
-    _report("on_session_end", {"presence": "live", "activity": "idle"}, values)
-
+    activity = "idle"
+    if values.get("interrupted") is True:
+        activity = "interrupted"
+    elif values.get("error") or values.get("failed") is True or values.get("completed") is False:
+        activity = "failed"
+    _report("on_session_end", {"presence": "live", "activity": activity}, values)
 
 def _on_session_finalize(**values: Any) -> None:
     session_id = _session_identity(values)

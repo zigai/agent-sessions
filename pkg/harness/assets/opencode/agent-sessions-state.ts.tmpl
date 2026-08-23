@@ -44,6 +44,15 @@ function normalizeStatus(value: unknown): string | undefined {
   if (["running", "busy", "retry"].includes(status)) {
     return "running";
   }
+  if (["failed", "error", "errored", "crash", "crashed"].includes(status)) {
+    return "failed";
+  }
+  if (["interrupted", "paused", "stopped", "cancelled", "canceled"].includes(status)) {
+    return "interrupted";
+  }
+  if (["waiting", "blocked"].includes(status)) {
+    return "waiting";
+  }
   if (status === "idle" || status === "offline") {
     return "idle";
   }
@@ -58,6 +67,11 @@ function stateForEvent(event: any): string | undefined {
       return "gone";
     case "session.idle":
       return "idle";
+    case "session.error":
+    case "error":
+      return "failed";
+    case "session.interrupted":
+      return "interrupted";
     case "permission.asked":
       return "waiting";
     case "permission.replied":

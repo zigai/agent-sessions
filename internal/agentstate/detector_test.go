@@ -55,12 +55,20 @@ func TestBundledManifestsClassifyTargetAgents(t *testing.T) {
 	}{
 		{registry.HarnessCodex, "› implement this\nContext 63% used", registry.ActivityIdle, "input_prompt"},
 		{registry.HarnessCodex, "Would you like to run the following command?", registry.ActivityWaiting, "permission_prompt"},
+		{registry.HarnessCodex, "API error: Rate limit reached", registry.ActivityFailed, "error_prompt"},
+		{registry.HarnessCodex, "Operation cancelled by user", registry.ActivityInterrupted, "interrupted_prompt"},
 		{registry.HarnessClaude, "Thinking… esc to interrupt", registry.ActivityRunning, "working_interruptible"},
 		{registry.HarnessClaude, "❯ \n? for shortcuts", registry.ActivityIdle, "input_prompt"},
+		{registry.HarnessClaude, "API Error: Rate limit exceeded", registry.ActivityFailed, "error_prompt"},
+		{registry.HarnessClaude, "Claude was interrupted", registry.ActivityInterrupted, "interrupted_prompt"},
 		{registry.HarnessOpenCode, "Permission required: allow / deny", registry.ActivityWaiting, "permission_prompt"},
 		{registry.HarnessOpenCode, "Ask anything", registry.ActivityIdle, "input_prompt"},
+		{registry.HarnessOpenCode, "API error: Execution error", registry.ActivityFailed, "error_prompt"},
+		{registry.HarnessOpenCode, "Stopped by user", registry.ActivityInterrupted, "interrupted_prompt"},
 		{registry.HarnessPi, "Working · esc to interrupt", registry.ActivityRunning, "working_interruptible"},
 		{registry.HarnessPi, "Type a message · Enter to send", registry.ActivityIdle, "input_prompt"},
+		{registry.HarnessPi, "API Error: Rate limit exceeded", registry.ActivityFailed, "error_prompt"},
+		{registry.HarnessPi, "Interrupted by user", registry.ActivityInterrupted, "interrupted_prompt"},
 	}
 	for _, test := range tests {
 		t.Run(string(test.harness)+"/"+test.rule, func(t *testing.T) {

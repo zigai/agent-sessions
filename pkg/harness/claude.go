@@ -108,7 +108,7 @@ func (claudeHarness) InstallPlan(binary string) InstallPlan {
 				{
 					Event:   "StopFailure",
 					Matcher: "",
-					Command: ReportHookCommand(binary, registry.HarnessClaude, registry.ActivityIdle, "StopFailure", claudeIntegrationSource),
+					Command: ReportHookCommand(binary, registry.HarnessClaude, registry.ActivityFailed, "StopFailure", claudeIntegrationSource),
 				},
 				{
 					Event:   "SessionEnd",

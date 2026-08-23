@@ -36,10 +36,12 @@ func HookTimeoutSecondsFor(harness registry.Harness, event string) int {
 type HookTransition string
 
 const (
-	HookActivityRunning HookTransition = "activity:running"
-	HookActivityWaiting HookTransition = "activity:waiting"
-	HookActivityIdle    HookTransition = "activity:idle"
-	HookPresenceGone    HookTransition = "presence:gone"
+	HookActivityRunning     HookTransition = "activity:running"
+	HookActivityWaiting     HookTransition = "activity:waiting"
+	HookActivityIdle        HookTransition = "activity:idle"
+	HookActivityFailed      HookTransition = "activity:failed"
+	HookActivityInterrupted HookTransition = "activity:interrupted"
+	HookPresenceGone        HookTransition = "presence:gone"
 )
 
 type hookTransition interface {
@@ -278,6 +280,10 @@ func storedHookTransitionArgument(value HookTransition) (string, string) {
 		return "--activity", string(registry.ActivityWaiting)
 	case HookActivityIdle:
 		return "--activity", string(registry.ActivityIdle)
+	case HookActivityFailed:
+		return "--activity", string(registry.ActivityFailed)
+	case HookActivityInterrupted:
+		return "--activity", string(registry.ActivityInterrupted)
 	case HookPresenceGone:
 		return "--presence", string(registry.PresenceGone)
 	default:

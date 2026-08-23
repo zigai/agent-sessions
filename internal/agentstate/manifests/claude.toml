@@ -30,3 +30,19 @@ region = "bottom:12"
 all = ["❯"]
 any = ["? for shortcuts", "Claude Code", "shift+tab to cycle"]
 none = ["esc to interrupt"]
+
+[[rules]]
+id = "error_prompt"
+state = "failed"
+priority = 350
+region = "bottom:30"
+any = ["API Error", "Rate limit exceeded", "Failed to run", "Request failed", "Credit balance too low"]
+none = ["esc to interrupt"]
+
+[[rules]]
+id = "interrupted_prompt"
+state = "interrupted"
+priority = 220
+region = "bottom:25"
+any = ["Claude was interrupted", "Interrupted by user", "Operation cancelled"]
+none = ["esc to interrupt"]

@@ -88,8 +88,32 @@ export default function (pi: any) {
     report("running", ctx, event);
   });
 
+  pi.on("tool_approval_requested", (event: any, ctx: any) => {
+    report("waiting", ctx, event);
+  });
+
+  pi.on("tool_approval_resolved", (event: any, ctx: any) => {
+    report("running", ctx, event);
+  });
+
   pi.on("agent_settled", (event: any, ctx: any) => {
-    report("idle", ctx, event);
+    if (event?.error || event?.reason === "error" || event?.status === "error" || event?.status === "failed") {
+      report("failed", ctx, event);
+    } else if (event?.reason === "interrupted" || event?.reason === "cancelled" || event?.interrupted === true) {
+      report("interrupted", ctx, event);
+    } else {
+      report("idle", ctx, event);
+    }
+  });
+
+  pi.on("agent_end", (event: any, ctx: any) => {
+    if (event?.error || event?.reason === "error" || event?.status === "error" || event?.status === "failed") {
+      report("failed", ctx, event);
+    } else if (event?.reason === "interrupted" || event?.reason === "cancelled" || event?.interrupted === true) {
+      report("interrupted", ctx, event);
+    } else {
+      report(event?.willContinue === true ? "running" : "idle", ctx, event);
+    }
   });
 
   pi.on("session_shutdown", (event: any, ctx: any) => {

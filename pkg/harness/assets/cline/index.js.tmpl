@@ -66,7 +66,14 @@ const plugin = {
       report("afterTool", context, { presence: "live", activity: "running" });
     },
     afterRun({ snapshot, result }) {
-      report("afterRun", { snapshot, resultStatus: result?.status }, { presence: "live", activity: "idle" });
+      const status = text(result?.status || snapshot?.status).toLowerCase();
+      let activity = "idle";
+      if (status === "error" || status === "failed") {
+        activity = "failed";
+      } else if (status === "interrupted" || status === "cancelled" || status === "canceled") {
+        activity = "interrupted";
+      }
+      report("afterRun", { snapshot, resultStatus: result?.status }, { presence: "live", activity });
     },
   },
 };

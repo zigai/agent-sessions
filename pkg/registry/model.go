@@ -57,10 +57,12 @@ const (
 type Activity string
 
 const (
-	ActivityRunning Activity = "running"
-	ActivityWaiting Activity = "waiting"
-	ActivityIdle    Activity = "idle"
-	ActivityUnknown Activity = "unknown"
+	ActivityRunning     Activity = "running"
+	ActivityWaiting     Activity = "waiting"
+	ActivityIdle        Activity = "idle"
+	ActivityFailed      Activity = "failed"
+	ActivityInterrupted Activity = "interrupted"
+	ActivityUnknown     Activity = "unknown"
 )
 
 type ObservationSource string
@@ -372,19 +374,22 @@ func NormalizeActivity(value string) (Activity, error) {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "":
 		return "", nil
-	case string(ActivityRunning):
+	case string(ActivityRunning), "working", "busy", "retry":
 		return ActivityRunning, nil
-	case string(ActivityWaiting):
+	case string(ActivityWaiting), "blocked":
 		return ActivityWaiting, nil
-	case string(ActivityIdle):
+	case string(ActivityIdle), "offline":
 		return ActivityIdle, nil
+	case string(ActivityFailed), "error", "errored", "crash", "crashed":
+		return ActivityFailed, nil
+	case string(ActivityInterrupted), "paused", "stopped", "cancelled", "canceled":
+		return ActivityInterrupted, nil
 	case string(ActivityUnknown):
 		return ActivityUnknown, nil
 	default:
 		return "", fmt.Errorf("%w: %q", ErrUnknownActivity, value)
 	}
 }
-
 func NormalizeSource(value string) (ObservationSource, error) {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case string(ObservationSourceNative):

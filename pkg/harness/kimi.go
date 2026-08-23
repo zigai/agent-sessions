@@ -131,13 +131,13 @@ func kimiCodeHookBlock(binary string) string {
 		{
 			event:   "StopFailure",
 			matcher: "",
-			command: kimiCodeHookCommand(binary, registry.ActivityIdle, "StopFailure"),
+			command: kimiCodeHookCommand(binary, registry.ActivityFailed, "StopFailure"),
 			timeout: HookTimeoutSeconds,
 		},
 		{
 			event:   "Interrupt",
 			matcher: "",
-			command: kimiCodeHookCommand(binary, registry.ActivityIdle, "Interrupt"),
+			command: kimiCodeHookCommand(binary, registry.ActivityInterrupted, "Interrupt"),
 			timeout: HookTimeoutSeconds,
 		},
 		{

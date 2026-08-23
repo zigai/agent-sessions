@@ -1331,8 +1331,8 @@ func TestInstallKimiCodeWritesHooks(t *testing.T) {
 		"--activity waiting --event PermissionRequest",
 		"--activity running --event PermissionResult",
 		"--activity idle --event Notification",
-		"--activity idle --event StopFailure",
-		"--activity idle --event Interrupt",
+		"--activity failed --event StopFailure",
+		"--activity interrupted --event Interrupt",
 		"--presence gone --event SessionEnd",
 	} {
 		if !strings.Contains(text, want) {

@@ -124,7 +124,17 @@ export default function (pi: any) {
   });
 
   pi.on("agent_end", (event: any, ctx: any) => {
-    report(event?.willContinue === true ? "running" : "idle", undefined, ctx, event);
+    if (event?.error || event?.reason === "error" || event?.status === "error" || event?.status === "failed") {
+      report("failed", undefined, ctx, event);
+    } else if (event?.reason === "interrupted" || event?.reason === "cancelled" || event?.interrupted === true) {
+      report("interrupted", undefined, ctx, event);
+    } else {
+      report(event?.willContinue === true ? "running" : "idle", undefined, ctx, event);
+    }
+  });
+
+  pi.on("agent_error", (event: any, ctx: any) => {
+    report("failed", undefined, ctx, event);
   });
 
   pi.on("tool_approval_requested", (event: any, ctx: any) => {
@@ -134,7 +144,6 @@ export default function (pi: any) {
   pi.on("tool_approval_resolved", (event: any, ctx: any) => {
     report("running", undefined, ctx, event);
   });
-
 
   pi.on("session_stop", (event: any, ctx: any) => {
     report("idle", undefined, ctx, event);
