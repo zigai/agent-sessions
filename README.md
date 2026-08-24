@@ -1,7 +1,7 @@
 # agent-sessions
 
 Track coding-agent sessions, activity, processes, and terminal-multiplexer
-locations on one machine.
+locations through a local realtime broker.
 
 Supported harnesses: `claude`, `codex`, `cursor`, `copilot`, `cline`,
 `kimi-code`, `grok`, `goose`, `pi`, `omp`, `opencode`, `agy`,
@@ -31,6 +31,11 @@ agent-sessions list
 agent-sessions watch
 agent-sessions show <session>
 ```
+
+`setup` installs the agent integrations and starts the broker. `list`, `show`,
+and `watch` are standalone clients of that broker; `watch --json` provides a
+machine-readable transition stream for other tools. The broker keeps effective
+state in memory and atomically checkpoints it to the registry file for recovery.
 The registry represents current local state. Ended sessions are retained only
 as five-minute tombstones to reject late lifecycle reports, then removed
 automatically on the next registry update. Use `agent-sessions registry clean
