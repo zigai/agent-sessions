@@ -581,31 +581,21 @@ func TestReportCommandEmitsJSONOnlyWhenRequested(t *testing.T) {
 	}
 }
 
-func TestReportJSONCoversIgnoredAndQueuedResults(t *testing.T) {
+func TestReportJSONCoversIgnoredResult(t *testing.T) {
 	t.Parallel()
-	for _, test := range []struct {
-		name   string
-		args   []string
-		stdin  string
-		status string
-	}{
-		{name: "ignored", args: []string{"report", "claude", "--raw-stdin-defaults-only", "--no-tmux"}, stdin: `{"session_id":"codex-session","transcript_path":"/home/user/.codex/sessions/rollout.jsonl","hook_event_name":"Stop","model":"gpt-5-codex"}`, status: "ignored"},
-		{name: "queued", args: []string{"report", "codex", "--session-id", "queued", "--event", "start", "--queue", "--no-tmux"}, status: "queued"},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			var stdout bytes.Buffer
-			root := NewRootCommand(&stdout, &bytes.Buffer{})
-			root.SetIn(strings.NewReader(test.stdin))
-			args := append([]string{"--store", filepath.Join(t.TempDir(), "sessions.json"), "--json"}, test.args...)
-			root.SetArgs(args)
-			if err := root.ExecuteContext(context.Background()); err != nil {
-				t.Fatal(err)
-			}
-			var result map[string]string
-			if err := json.Unmarshal(stdout.Bytes(), &result); err != nil || result["status"] != test.status {
-				t.Fatalf("result = %q, decoded=%#v, err=%v", stdout.String(), result, err)
-			}
-		})
+	var stdout bytes.Buffer
+	root := NewRootCommand(&stdout, &bytes.Buffer{})
+	root.SetIn(strings.NewReader(`{"session_id":"codex-session","transcript_path":"/home/user/.codex/sessions/rollout.jsonl","hook_event_name":"Stop","model":"gpt-5-codex"}`))
+	root.SetArgs([]string{
+		"--store", filepath.Join(t.TempDir(), "sessions.json"),
+		"--json", "report", "claude", "--raw-stdin-defaults-only", "--no-tmux",
+	})
+	if err := root.ExecuteContext(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	var result map[string]string
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil || result["status"] != "ignored" {
+		t.Fatalf("result = %q, decoded=%#v, err=%v", stdout.String(), result, err)
 	}
 }
 

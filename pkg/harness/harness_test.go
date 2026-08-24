@@ -939,7 +939,8 @@ func TestPiAndOMPPluginTemplatesOwnSpawnErrors(t *testing.T) {
 		"omp": ompExtensionTemplate,
 	} {
 		t.Run(name, func(t *testing.T) {
-			if !strings.Contains(template, `child.on("error", () => {});`) {
+			if !strings.Contains(template, `child.on("error", () => {});`) &&
+				!strings.Contains(template, `child.once("error", finish);`) {
 				t.Fatal("expected asynchronous child error handling")
 			}
 		})

@@ -89,7 +89,7 @@ func TestLegacyCommandsAndFlagsAreRemoved(t *testing.T) {
 }
 
 func TestEveryHiddenInternalCommandHasCallableHelp(t *testing.T) {
-	commands := []string{"report", "drain-queue", "queue-status"}
+	commands := []string{"report"}
 	for _, command := range commands {
 		var stdout bytes.Buffer
 		root := NewRootCommand(&stdout, &bytes.Buffer{})
@@ -142,36 +142,13 @@ func TestJSONInvocationFailureLeavesStdoutEmpty(t *testing.T) {
 	}
 }
 
-func TestQueueDrainerRunsOnlyAfterValidParsingAndUsesResolvedStore(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "sessions.json")
-	var drained []string
-	newApplication := func() *application {
-		return &application{
-			stdout: &bytes.Buffer{},
-			stderr: &bytes.Buffer{},
-			queueDrainer: func(_ context.Context, storePath string) error {
-				drained = append(drained, storePath)
-				return nil
-			},
+func TestObsoleteQueueCommandsAreRemoved(t *testing.T) {
+	for _, command := range []string{drainQueueCommandName, queueStatusCommandName} {
+		root := NewRootCommand(&bytes.Buffer{}, &bytes.Buffer{})
+		root.SetArgs([]string{command})
+		if err := root.ExecuteContext(context.Background()); err == nil {
+			t.Fatalf("obsolete queue command %q unexpectedly succeeded", command)
 		}
-	}
-
-	for _, args := range [][]string{{"--help"}, {"--version"}, {"help", "list"}, {"list", "--help"}, {"show"}, {"unknown"}, {"list", "--bad-flag"}, {"completion", "bash"}, {"__complete", "list"}, {"__completeNoDesc", "list"}} {
-		root := newRootCommand(newApplication())
-		root.SetArgs(args)
-		_ = root.ExecuteContext(context.Background())
-	}
-	if len(drained) != 0 {
-		t.Fatalf("invalid or informational commands drained queues: %v", drained)
-	}
-
-	root := newRootCommand(newApplication())
-	root.SetArgs([]string{"--store", path, "registry", "path"})
-	if err := root.ExecuteContext(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if len(drained) != 1 || drained[0] != path {
-		t.Fatalf("drainer paths = %v, want %q", drained, path)
 	}
 }
 

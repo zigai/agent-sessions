@@ -34,7 +34,7 @@ if [ "$1 $2" = "plugins inspect" ]; then
   source=$(cat "$state/source")
   policy=false
   if [ -f "$state/policy" ]; then policy=true; fi
-  printf '[{"plugin":{"id":"agent-sessions-state","status":"loaded","source":"path","version":"0.0.4"},"policy":{"allowConversationAccess":%s},"install":{"source":"path","sourcePath":"%s","installPath":"%s","version":"0.0.4"}}]\n' "$policy" "$source" "$source"
+  printf '[{"plugin":{"id":"agent-sessions-state","status":"loaded","source":"path","version":"0.0.5"},"policy":{"allowConversationAccess":%s},"install":{"source":"path","sourcePath":"%s","installPath":"%s","version":"0.0.5"}}]\n' "$policy" "$source" "$source"
   exit 0
 fi
 if [ "$1 $2" = "plugins install" ]; then
@@ -128,7 +128,7 @@ func TestOpenClawPluginShapeUsesDocumentedTypedHooksWithoutConversationContent(t
 	}
 	for _, required := range []string{
 		`api.on("session_start"`, `api.on("before_agent_run"`, `api.on("agent_end"`, `api.on("session_end"`,
-		`"--lifecycle"`, `"--no-tmux"`, `"--queue"`, `openclaw_session_key`, `openclaw_run_id`,
+		`"--lifecycle"`, `"--no-tmux"`, `openclaw_session_key`, `openclaw_run_id`,
 	} {
 		if !strings.Contains(source, required) {
 			t.Fatalf("expected OpenClaw plugin source to contain %q", required)
