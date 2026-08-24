@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -97,66 +98,94 @@ func (s *FileStore) Observe(ctx context.Context, observation Observation) (Sessi
 	return s.Get(ctx, id)
 }
 
-//nolint:gocognit,cyclop // batch reduction coordinates identity, timestamp, and evidence precedence
 func (s *FileStore) ObserveBatch(ctx context.Context, observations []Observation) ([]Session, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("checking context: %w", err)
 	}
+
 	receivedAt := s.now().UTC()
-	saved := make([]Session, 0, len(observations))
+	var saved []Session
 	err := s.withSnapshot(func(snap *snapshot) error {
-		for index := range observations {
-			if err := ctx.Err(); err != nil {
-				return fmt.Errorf("checking context: %w", err)
-			}
-			observation := observations[index]
-			if observation.Harness == "" {
-				return ErrHarnessRequired
-			}
-			if observation.ObservedAt.IsZero() {
-				observation.ObservedAt = receivedAt
-			}
-			if err := ValidateObservation(observation); err != nil {
-				return err
-			}
-			at, _ := observationTime(observation.ObservedAt, receivedAt)
-			retireConflictingProcessSessions(snap.Sessions, observation, at, receivedAt)
-			id := findAndReconcileMatchingSession(snap.Sessions, observation)
-			if id == "" && observation.Source == ObservationSourceCatalog && (observation.Harness != HarnessClaude || observation.Catalog == nil || !observation.Catalog.Current) {
-				continue
-			}
-			if id == "" {
-				id = sessionIDForObservation(observation)
-			}
-			session := snap.Sessions[id]
-			if session.ID == "" {
-				session = newSession(id, observation.Harness, receivedAt)
-			} else if session.Harness != observation.Harness {
-				id = sessionIDForObservation(observation)
-				session = newSession(id, observation.Harness, receivedAt)
-			}
-			if id != "" && shouldIgnoreNativeAfterGone(session, observation, at) {
-				saved = append(saved, session)
-				continue
-			}
-			if err := applyObservation(&session, observation, at, receivedAt); err != nil {
-				return err
-			}
-			snap.Sessions[session.ID] = session
-			saved = append(saved, session)
-		}
-		deleteExpiredGoneSessions(
-			snap.Sessions,
-			receivedAt,
-			automaticGoneRetention,
-			func(session Session) time.Time { return session.UpdatedAt },
-		)
-		snap.UpdatedAt = maxTime(snap.UpdatedAt, receivedAt)
-		return nil
+		var err error
+		saved, err = applyObservationBatch(ctx, snap, observations, receivedAt)
+
+		return err
 	})
 	if err != nil {
 		return nil, err
 	}
+
+	return saved, nil
+}
+
+//nolint:gocognit,cyclop // one transaction preserves identity and evidence precedence.
+func applyObservationBatch(
+	ctx context.Context,
+	snap *snapshot,
+	observations []Observation,
+	receivedAt time.Time,
+) ([]Session, error) {
+	saved := make([]Session, 0, len(observations))
+	for index := range observations {
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("checking context: %w", err)
+		}
+
+		observation := observations[index]
+		if observation.Harness == "" {
+			return nil, ErrHarnessRequired
+		}
+		if observation.ObservedAt.IsZero() {
+			observation.ObservedAt = receivedAt
+		}
+		if err := ValidateObservation(observation); err != nil {
+			return nil, err
+		}
+
+		at, _ := observationTime(observation.ObservedAt, receivedAt)
+		retireConflictingProcessSessions(snap.Sessions, observation, at, receivedAt)
+		id := findAndReconcileMatchingSession(snap.Sessions, observation)
+		if id == "" &&
+			observation.Source == ObservationSourceCatalog &&
+			(observation.Harness != HarnessClaude || observation.Catalog == nil || !observation.Catalog.Current) {
+			continue
+		}
+		if id == "" {
+			id = sessionIDForObservation(observation)
+		}
+
+		session := snap.Sessions[id]
+		if session.ID == "" {
+			session = newSession(id, observation.Harness, receivedAt)
+		} else if session.Harness != observation.Harness {
+			id = sessionIDForObservation(observation)
+			session = newSession(id, observation.Harness, receivedAt)
+		}
+		sequencedAt, sequenceErr := sequencedObservationTime(session, observation, at)
+		if sequenceErr != nil {
+			return nil, sequenceErr
+		}
+		at = sequencedAt
+		if id != "" && shouldIgnoreNativeAfterGone(session, observation, at) {
+			saved = append(saved, session)
+			continue
+		}
+		if err := applyObservation(&session, observation, at, receivedAt); err != nil {
+			return nil, err
+		}
+
+		snap.Sessions[session.ID] = session
+		saved = append(saved, session)
+	}
+
+	deleteExpiredGoneSessions(
+		snap.Sessions,
+		receivedAt,
+		automaticGoneRetention,
+		func(session Session) time.Time { return session.UpdatedAt },
+	)
+	snap.UpdatedAt = maxTime(snap.UpdatedAt, receivedAt)
+
 	return saved, nil
 }
 
@@ -269,6 +298,49 @@ func existingSlot(session Session, observation Observation) any {
 	}
 }
 
+func sequencedObservationTime(
+	session Session,
+	observation Observation,
+	at time.Time,
+) (time.Time, error) {
+	if observation.Source != ObservationSourceNative {
+		return at, nil
+	}
+
+	reporter := strings.TrimSpace(observation.Attributes["agent_sessions_integration"])
+	previous := session.Observations.Native
+	if reporter == "" ||
+		previous == nil ||
+		strings.TrimSpace(previous.Attributes["agent_sessions_integration"]) != reporter {
+		return at, nil
+	}
+	if previous.Sequence != nil && observation.Sequence == nil {
+		return time.Time{}, fmt.Errorf(
+			"%w: reporter %q omitted sequence after using sequence %d",
+			ErrObservationConflict,
+			reporter,
+			*previous.Sequence,
+		)
+	}
+	if observation.Sequence == nil {
+		return at, nil
+	}
+	if previous.Sequence != nil && *observation.Sequence <= *previous.Sequence {
+		return time.Time{}, fmt.Errorf(
+			"%w: reporter %q sequence %d does not follow %d",
+			ErrObservationConflict,
+			reporter,
+			*observation.Sequence,
+			*previous.Sequence,
+		)
+	}
+	if !at.After(previous.ObservedAt) {
+		at = previous.ObservedAt.Add(time.Nanosecond)
+	}
+
+	return at, nil
+}
+
 func shouldIgnoreNativeAfterGone(session Session, observation Observation, at time.Time) bool {
 	if observation.Source != ObservationSourceNative || session.Presence != PresenceGone {
 		return false
@@ -357,7 +429,7 @@ func storeNativeObservation(session *Session, observation Observation, at time.T
 	if observation.Process != nil {
 		process = *observation.Process
 	}
-	session.Observations.Native = &NativeObservation{Event: observation.NativeEvent, Lifecycle: cloneLifecycle(observation.Lifecycle), Presence: clonePresence(observation.Presence), Activity: cloneActivity(observation.Activity), ActivityAuthoritative: cloneBool(observation.ActivityAuthoritative), SessionID: observation.Identity.SessionID, SessionPath: observation.Identity.SessionPath, ObservedAt: at, Attributes: cloneAttributes(observation.Attributes), RawPayload: cloneRaw(observation.RawPayload), Process: process}
+	session.Observations.Native = &NativeObservation{Event: observation.NativeEvent, Lifecycle: cloneLifecycle(observation.Lifecycle), Presence: clonePresence(observation.Presence), Activity: cloneActivity(observation.Activity), ActivityAuthoritative: cloneBool(observation.ActivityAuthoritative), Sequence: cloneUint64(observation.Sequence), SessionID: observation.Identity.SessionID, SessionPath: observation.Identity.SessionPath, ObservedAt: at, Attributes: cloneAttributes(observation.Attributes), RawPayload: cloneRaw(observation.RawPayload), Process: process}
 }
 
 func storeProcessObservation(session *Session, observation Observation, at time.Time) {
@@ -891,6 +963,15 @@ func cloneBool(value *bool) *bool {
 		return nil
 	}
 	clone := *value
+	return &clone
+}
+
+func cloneUint64(value *uint64) *uint64 {
+	if value == nil {
+		return nil
+	}
+	clone := *value
+
 	return &clone
 }
 

@@ -12,11 +12,11 @@ import (
 )
 
 const (
-	ManagedVersion       = 3
+	ManagedVersion       = 4
 	ManagedMarker        = "agent-sessions managed observer service"
 	managedVersion       = ManagedVersion
 	managedMarker        = ManagedMarker
-	defaultInterval      = 3 * time.Second
+	defaultInterval      = 300 * time.Millisecond
 	serviceDirectoryMode = 0o755
 	serviceRollbackTime  = 10 * time.Second
 )
@@ -346,7 +346,8 @@ func isManaged(content string) bool {
 	}
 	for line := range strings.Lines(content) {
 		switch strings.TrimSpace(line) {
-		case "# version: 2", "# version: 3", "<!-- version: 2 -->", "<!-- version: 3 -->":
+		case "# version: 2", "# version: 3", "# version: 4",
+			"<!-- version: 2 -->", "<!-- version: 3 -->", "<!-- version: 4 -->":
 			return true
 		}
 	}

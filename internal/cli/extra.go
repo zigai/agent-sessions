@@ -8,8 +8,11 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/zigai/agent-sessions/v2/internal/broker"
 	"github.com/zigai/agent-sessions/v2/internal/observer"
 	"github.com/zigai/agent-sessions/v2/internal/service"
+	"github.com/zigai/agent-sessions/v2/pkg/brokerapi"
+	"github.com/zigai/agent-sessions/v2/pkg/registry"
 )
 
 type observeOptions struct {
@@ -19,7 +22,10 @@ type observeOptions struct {
 	grace    time.Duration
 }
 
-const observeDefaultInterval = 3 * time.Second
+const (
+	observeDefaultInterval = 300 * time.Millisecond
+	realtimeComponentCount = 3
+)
 
 var errObserverRunDegraded = errors.New("observer reconciliation degraded")
 
@@ -35,14 +41,36 @@ func (app *application) newMonitorRunCommand() *cobra.Command {
 			if o.grace < 0 {
 				return errInvalidObserveGracePeriod
 			}
+			if o.once {
+				watcher := observer.New(observer.Options{
+					StorePath:   app.store().Path(),
+					Interval:    o.interval,
+					GracePeriod: o.grace,
+					HealthPath:  app.store().Path() + ".observer-health.json",
+					Quiet:       o.quiet,
+				})
+
+				return app.runObserver(cmd.Context(), o, watcher)
+			}
+
+			store, err := registry.OpenMemoryStore(app.store().Path())
+			if err != nil {
+				return fmt.Errorf("opening in-memory registry: %w", err)
+			}
 			watcher := observer.New(observer.Options{
-				StorePath:   app.store().Path(),
+				Store:       store,
+				StorePath:   store.Path(),
 				Interval:    o.interval,
 				GracePeriod: o.grace,
-				HealthPath:  app.store().Path() + ".observer-health.json",
+				HealthPath:  store.Path() + ".observer-health.json",
 				Quiet:       o.quiet,
 			})
-			return app.runObserver(cmd.Context(), o, watcher)
+			server := broker.New(broker.Options{
+				Store:      store,
+				SocketPath: brokerapi.SocketPath(store.Path()),
+			})
+
+			return app.runRealtimeObserver(cmd.Context(), o, watcher, store, server)
 		},
 	}
 	flags := command.Flags()
@@ -51,6 +79,50 @@ func (app *application) newMonitorRunCommand() *cobra.Command {
 	flags.DurationVar(&o.grace, "grace-period", 0, "absence grace period")
 	flags.BoolVar(&o.quiet, "quiet", false, "suppress human cycle output and diagnostics")
 	return command
+}
+
+type trackerComponentResult struct {
+	name string
+	err  error
+}
+
+func (app *application) runRealtimeObserver(
+	ctx context.Context,
+	options observeOptions,
+	watcher *observer.Observer,
+	store *registry.MemoryStore,
+	server *broker.Server,
+) error {
+	runContext, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	results := make(chan trackerComponentResult, realtimeComponentCount)
+	run := func(name string, operation func() error) {
+		go func() {
+			results <- trackerComponentResult{name: name, err: operation()}
+		}()
+	}
+	run("broker", func() error { return server.Serve(runContext) })
+	run("persistence", func() error {
+		return store.RunPersistence(runContext, 0, 0)
+	})
+	run("observer", func() error { return app.runObserver(runContext, options, watcher) })
+
+	first := <-results
+	cancel()
+	all := []trackerComponentResult{first, <-results, <-results}
+	var joined error
+	for _, result := range all {
+		if result.err == nil {
+			continue
+		}
+		joined = errors.Join(joined, fmt.Errorf("%s: %w", result.name, result.err))
+	}
+	if joined != nil {
+		return joined
+	}
+
+	return nil
 }
 
 func (app *application) runObserver(ctx context.Context, options observeOptions, watcher *observer.Observer) error {

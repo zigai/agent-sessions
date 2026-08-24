@@ -31,7 +31,7 @@ const (
 
 const (
 	doctorCheckCapacity    = 10
-	serviceDefaultInterval = 3 * time.Second
+	serviceDefaultInterval = 300 * time.Millisecond
 )
 
 type doctorCheck struct {

@@ -197,6 +197,7 @@ type NativeObservation struct {
 	Presence              *Presence         `json:"presence,omitempty"`
 	Activity              *Activity         `json:"activity,omitempty"`
 	ActivityAuthoritative *bool             `json:"activity_authoritative,omitempty"`
+	Sequence              *uint64           `json:"sequence,omitempty"`
 	SessionID             string            `json:"session_id,omitempty"`
 	SessionPath           string            `json:"session_path,omitempty"`
 	ObservedAt            time.Time         `json:"observed_at"`
@@ -310,6 +311,7 @@ type Observation struct {
 	Presence              *Presence           `json:"presence,omitempty"`
 	Activity              *Activity           `json:"activity,omitempty"`
 	ActivityAuthoritative *bool               `json:"activity_authoritative,omitempty"`
+	Sequence              *uint64             `json:"sequence,omitempty"`
 	NativeEvent           string              `json:"native_event,omitempty"`
 	ProcessPresent        *bool               `json:"process_present,omitempty"`
 	Process               *ProcessIdentity    `json:"process,omitempty"`
@@ -493,6 +495,14 @@ func ValidateObservation(observation Observation) error {
 	}
 	if observation.Source != ObservationSourceNative && observation.ActivityAuthoritative != nil {
 		return fmt.Errorf("%w: activity authority is only accepted for native observations", ErrInvalidObservation)
+	}
+	if observation.Sequence != nil {
+		if observation.Source != ObservationSourceNative {
+			return fmt.Errorf("%w: sequence is only accepted for native observations", ErrInvalidObservation)
+		}
+		if strings.TrimSpace(observation.Attributes["agent_sessions_integration"]) == "" {
+			return fmt.Errorf("%w: sequenced observation requires agent_sessions_integration", ErrInvalidObservation)
+		}
 	}
 	pairOK := (observation.Source == ObservationSourceNative && observation.Evidence == ObservationEvidenceNativeEvent) ||
 		(observation.Source == ObservationSourceProcess && observation.Evidence == ObservationEvidenceProcessPresence) ||
