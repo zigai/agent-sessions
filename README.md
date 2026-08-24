@@ -31,6 +31,11 @@ agent-sessions list
 agent-sessions watch
 agent-sessions show <session>
 ```
+The registry represents current local state. Ended sessions are retained only
+as five-minute tombstones to reject late lifecycle reports, then removed
+automatically on the next registry update. Use `agent-sessions registry clean
+--all` to compact existing state immediately.
+
 
 Check the installation:
 

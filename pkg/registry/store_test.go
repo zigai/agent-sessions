@@ -234,6 +234,65 @@ func TestStoreGCUsesInclusiveAgeBoundary(t *testing.T) {
 	}
 }
 
+func TestObserveAutomaticallyRemovesExpiredGoneSessions(t *testing.T) {
+	t.Parallel()
+
+	base := time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC)
+	now := base
+	store := NewFileStore(filepath.Join(t.TempDir(), "sessions.json"))
+	store.SetNowForTest(func() time.Time { return now })
+
+	gone := PresenceGone
+	if _, err := store.Observe(context.Background(), Observation{
+		Source:     ObservationSourceNative,
+		Evidence:   ObservationEvidenceNativeEvent,
+		Harness:    HarnessCodex,
+		Identity:   ObservationIdentity{SessionID: "ended"},
+		Presence:   &gone,
+		ObservedAt: base.Add(-time.Hour),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	live := PresenceLive
+	observeLive := func() {
+		t.Helper()
+
+		if _, err := store.Observe(context.Background(), Observation{
+			Source:     ObservationSourceNative,
+			Evidence:   ObservationEvidenceNativeEvent,
+			Harness:    HarnessCodex,
+			Identity:   ObservationIdentity{SessionID: "current"},
+			Presence:   &live,
+			ObservedAt: now,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	now = base.Add(automaticGoneRetention - time.Nanosecond)
+	observeLive()
+
+	sessions, err := store.List(context.Background(), Filter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 2 {
+		t.Fatalf("sessions before retention boundary = %#v, want recent tombstone retained", sessions)
+	}
+
+	now = base.Add(automaticGoneRetention)
+	observeLive()
+
+	sessions, err = store.List(context.Background(), Filter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 1 || sessions[0].SessionID != "current" {
+		t.Fatalf("sessions after automatic cleanup = %#v, want only current live session", sessions)
+	}
+}
+
 func TestSummariesCountIndependentPresenceAndActivity(t *testing.T) {
 	t.Parallel()
 

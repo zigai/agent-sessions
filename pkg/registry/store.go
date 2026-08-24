@@ -17,6 +17,7 @@ const (
 	storeSchemaVersion      = 2
 	storeVersion            = storeSchemaVersion
 	maxObservedAtFutureSkew = 5 * time.Minute
+	automaticGoneRetention  = 5 * time.Minute
 )
 
 // IntegrationActivityLease is the maximum age of a matching integration
@@ -144,6 +145,12 @@ func (s *FileStore) ObserveBatch(ctx context.Context, observations []Observation
 			snap.Sessions[session.ID] = session
 			saved = append(saved, session)
 		}
+		deleteExpiredGoneSessions(
+			snap.Sessions,
+			receivedAt,
+			automaticGoneRetention,
+			func(session Session) time.Time { return session.UpdatedAt },
+		)
 		snap.UpdatedAt = maxTime(snap.UpdatedAt, receivedAt)
 		return nil
 	})
@@ -1044,12 +1051,12 @@ func (s *FileStore) GC(ctx context.Context, deleteAfter time.Duration) (GCResult
 	now := s.now().UTC()
 	result := GCResult{Deleted: 0, Remaining: 0}
 	err := s.withSnapshot(func(snap *snapshot) error {
-		for id, session := range snap.Sessions {
-			if deleteAfter >= 0 && session.Presence == PresenceGone && !session.PresenceChangedAt.IsZero() && now.Sub(session.PresenceChangedAt) >= deleteAfter {
-				delete(snap.Sessions, id)
-				result.Deleted++
-			}
-		}
+		result.Deleted = deleteExpiredGoneSessions(
+			snap.Sessions,
+			now,
+			deleteAfter,
+			func(session Session) time.Time { return session.PresenceChangedAt },
+		)
 		result.Remaining = len(snap.Sessions)
 		snap.UpdatedAt = now
 		return nil
@@ -1058,6 +1065,30 @@ func (s *FileStore) GC(ctx context.Context, deleteAfter time.Duration) (GCResult
 		return GCResult{}, err
 	}
 	return result, nil
+}
+
+func deleteExpiredGoneSessions(
+	sessions map[string]Session,
+	now time.Time,
+	deleteAfter time.Duration,
+	changedAt func(Session) time.Time,
+) int {
+	if deleteAfter < 0 {
+		return 0
+	}
+
+	deleted := 0
+	for id, session := range sessions {
+		at := changedAt(session)
+		if session.Presence != PresenceGone || at.IsZero() || now.Sub(at) < deleteAfter {
+			continue
+		}
+
+		delete(sessions, id)
+		deleted++
+	}
+
+	return deleted
 }
 
 func (s *FileStore) Reset(ctx context.Context) (ResetResult, error) {
