@@ -85,20 +85,20 @@ func matchesText(rule Rule, text string) bool {
 	if len(rule.Any) > 0 && !containsAny(text, rule.Any, rule.CaseSensitive) {
 		return false
 	}
-	if containsAny(text, rule.None, rule.CaseSensitive) || !matchesAllRegex(text, rule.RegexAll, rule.CaseSensitive) {
+	if containsAny(text, rule.None, rule.CaseSensitive) || !matchesAllRegex(text, rule.regexAllCompiled) {
 		return false
 	}
-	if len(rule.RegexAny) > 0 && !matchesAnyRegex(text, rule.RegexAny, rule.CaseSensitive) {
+	if len(rule.regexAnyCompiled) > 0 && !matchesAnyRegex(text, rule.regexAnyCompiled) {
 		return false
 	}
-	return !matchesAnyRegex(text, rule.RegexNone, rule.CaseSensitive)
+	return !matchesAnyRegex(text, rule.regexNoneCompiled)
 }
 
 func matchesTitle(rule Rule, title string) bool {
 	if len(rule.TitleAny) > 0 && !containsAny(title, rule.TitleAny, rule.CaseSensitive) {
 		return false
 	}
-	return len(rule.TitleRegexAny) == 0 || matchesAnyRegex(title, rule.TitleRegexAny, rule.CaseSensitive)
+	return len(rule.titleRegexAnyCompiled) == 0 || matchesAnyRegex(title, rule.titleRegexAnyCompiled)
 }
 
 func normalizedLiteral(value string, caseSensitive bool) string {
@@ -117,12 +117,13 @@ func containsAny(text string, values []string, caseSensitive bool) bool {
 	return false
 }
 
-func matchesAllRegex(text string, expressions []string, caseSensitive bool) bool {
+func matchesAllRegex(text string, expressions []*regexp.Regexp) bool {
 	for _, expression := range expressions {
-		if !compileRuleRegex(expression, caseSensitive).MatchString(text) {
+		if !expression.MatchString(text) {
 			return false
 		}
 	}
+
 	return true
 }
 
@@ -133,15 +134,12 @@ func ruleRegexExpression(expression string, caseSensitive bool) string {
 	return "(?i:" + expression + ")"
 }
 
-func compileRuleRegex(expression string, caseSensitive bool) *regexp.Regexp {
-	return regexp.MustCompile(ruleRegexExpression(expression, caseSensitive))
-}
-
-func matchesAnyRegex(text string, expressions []string, caseSensitive bool) bool {
+func matchesAnyRegex(text string, expressions []*regexp.Regexp) bool {
 	for _, expression := range expressions {
-		if compileRuleRegex(expression, caseSensitive).MatchString(text) {
+		if expression.MatchString(text) {
 			return true
 		}
 	}
+
 	return false
 }

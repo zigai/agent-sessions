@@ -24,7 +24,7 @@ import (
 )
 
 const (
-	defaultObserverInterval    = 3 * time.Second
+	defaultObserverInterval    = time.Second
 	defaultMissingSnapshots    = 2
 	commandArgumentPrefixCount = 2
 )
@@ -113,6 +113,13 @@ type trackedProcess struct {
 	missingSince time.Time
 	missingCount int
 }
+type pendingScreenDecision struct {
+	activity      registry.Activity
+	ruleID        string
+	confirmations uint8
+}
+
+const initialScreenConfirmations = 2
 
 type Observer struct {
 	store          registry.Store
@@ -134,11 +141,13 @@ type Observer struct {
 	startedAt       time.Time
 	initialized     bool
 	tracked         map[processKey]trackedProcess
+	screenPending   map[processKey]pendingScreenDecision
 	health          Health
 	lastHealthWrite time.Time
 	lockPath        string
 	lockFile        *os.File
 	running         bool
+	continuous      bool
 }
 
 //nolint:cyclop // constructor applies defaults for each injectable observer dependency
@@ -204,9 +213,10 @@ func New(options Options) *Observer {
 		store: store, storePath: storePath, interval: interval, grace: options.GracePeriod,
 		healthPath: healthPath, processList: processList, paneList: paneList, catalogList: catalogList,
 		screenCapture: screenCapture, tmuxOnly: tmuxOnly, manifestLoader: agentstate.Loader{ConfigDir: options.DetectionConfigDir},
-		now: now, errorWriter: errorWriter, quiet: options.Quiet, tracked: make(map[processKey]trackedProcess),
+		now: now, errorWriter: errorWriter, quiet: options.Quiet,
+		tracked: make(map[processKey]trackedProcess), screenPending: make(map[processKey]pendingScreenDecision),
 		mu: sync.Mutex{}, startedAt: time.Time{}, initialized: false, health: Health{PID: 0, StartIdentity: "", Interval: 0, GracePeriod: 0, StartedAt: time.Time{}, LastAttemptAt: time.Time{}, LastSuccessAt: time.Time{}, LastEnumerationErrorCategory: "", LastEnumerationError: "", Cycles: 0, Observations: 0, Sessions: 0, Degraded: false},
-		lastHealthWrite: time.Time{}, lockPath: lockPath, lockFile: nil, running: false,
+		lastHealthWrite: time.Time{}, lockPath: lockPath, lockFile: nil, running: false, continuous: false,
 	}
 }
 
@@ -229,6 +239,8 @@ func (o *Observer) run(ctx context.Context, handle func(Result) error) error {
 		return err
 	}
 	defer o.releaseLock()
+	o.continuous = true
+	defer func() { o.continuous = false }()
 	for {
 		result, err := o.runCycle(ctx)
 		if handle != nil {
@@ -388,7 +400,7 @@ func (o *Observer) runCycle(ctx context.Context) (Result, error) {
 			})
 		}
 		screenObservation, detected, detectErr := o.detectScreenState(ctx, knownSessions, harnessID, process, pane, at)
-		if detected {
+		if detected && o.screenDecisionReady(knownSessions, harnessID, process, screenObservation) {
 			observations = append(observations, screenObservation)
 		}
 		if detectErr != nil {
@@ -445,6 +457,7 @@ func (o *Observer) runCycle(ctx context.Context) (Result, error) {
 	absences := absenceObservationsForUnobservedSessions(knownSessions, processByPID, at)
 	observations = append(observations, absences...)
 	result.Gone += len(absences)
+	o.prunePendingScreenDecisions(current)
 	result.Observations = len(observations)
 	if len(observations) > 0 {
 		sessions, observeErr := o.observeBatch(ctx, observations)
@@ -688,6 +701,13 @@ func (o *Observer) detectScreenState(ctx context.Context, sessions []registry.Se
 		return registry.Observation{}, false, fmt.Errorf("capturing %s pane %s for detection: %w", harnessID, pane.Location.PaneID, captureErr)
 	}
 	decision := agentstate.Evaluate(manifest, agentstate.NormalizeSnapshot(snapshot.Text, snapshot.Title))
+	if decision.Activity == registry.ActivityUnknown &&
+		decision.Reason == "no_rule_matched" &&
+		session.Activity != nil &&
+		*session.Activity != registry.ActivityUnknown {
+		var empty registry.Observation
+		return empty, false, nil
+	}
 	observedAt := screenObservationTime(at, o.now().UTC())
 	fallback, fallbackReason := screenFallbackMetadata(session, harnessID, at)
 	screen := &registry.ScreenObservation{Activity: decision.Activity, Authority: string(agentstate.AuthorityScreen), Reason: decision.Reason, RuleID: decision.RuleID, ManifestSource: decision.ManifestSource, ManifestVersion: decision.ManifestVersion, FallbackForIntegration: fallback, FallbackReason: fallbackReason, Process: *identity, ObservedAt: observedAt}
@@ -699,6 +719,67 @@ func (o *Observer) detectScreenState(ctx context.Context, sessions []registry.Se
 		return observation, true, fmt.Errorf("%w: %s", errDetectionOverrideInvalid, manifest.Warning)
 	}
 	return observation, true, nil
+}
+
+//nolint:funcorder // screen stabilization stays beside screen detection.
+func (o *Observer) screenDecisionReady(
+	sessions []registry.Session,
+	harnessID registry.Harness,
+	process processinfo.Process,
+	observation registry.Observation,
+) bool {
+	if !o.continuous ||
+		observation.Screen == nil ||
+		observation.Activity == nil ||
+		observation.Screen.Authority != string(agentstate.AuthorityScreen) {
+		return true
+	}
+
+	identity := processIdentity(process)
+	session := sessionForProcess(sessions, harnessID, identity)
+	if session.Observations.Screen != nil &&
+		session.Observations.Screen.Process.Equal(*identity) {
+		delete(o.screenPending, processKey{
+			harness: harnessID,
+			pid:     process.PID,
+			start:   process.StartIdentity,
+		})
+
+		return true
+	}
+
+	key := processKey{harness: harnessID, pid: process.PID, start: process.StartIdentity}
+	pending := o.screenPending[key]
+	if pending.activity != *observation.Activity ||
+		pending.ruleID != observation.Screen.RuleID {
+		o.screenPending[key] = pendingScreenDecision{
+			activity:      *observation.Activity,
+			ruleID:        observation.Screen.RuleID,
+			confirmations: 1,
+		}
+
+		return false
+	}
+
+	pending.confirmations++
+	if pending.confirmations < initialScreenConfirmations {
+		o.screenPending[key] = pending
+
+		return false
+	}
+
+	delete(o.screenPending, key)
+
+	return true
+}
+
+//nolint:funcorder // screen stabilization stays beside screen detection.
+func (o *Observer) prunePendingScreenDecisions(current map[processKey]trackedProcess) {
+	for key := range o.screenPending {
+		if _, ok := current[key]; !ok {
+			delete(o.screenPending, key)
+		}
+	}
 }
 
 func shouldDetectScreen(session registry.Session, at time.Time) bool {

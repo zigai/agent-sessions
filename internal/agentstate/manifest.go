@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/pelletier/go-toml/v2"
 
@@ -54,9 +55,22 @@ type Rule struct {
 	RegexNone     []string `json:"regex_none,omitempty"      toml:"regex_none"`
 	TitleAny      []string `json:"title_any,omitempty"       toml:"title_any"`
 	TitleRegexAny []string `json:"title_regex_any,omitempty" toml:"title_regex_any"`
+
+	regexAllCompiled      []*regexp.Regexp
+	regexAnyCompiled      []*regexp.Regexp
+	regexNoneCompiled     []*regexp.Regexp
+	titleRegexAnyCompiled []*regexp.Regexp
 }
 
 type Loader struct{ ConfigDir string }
+
+type manifestCacheEntry struct {
+	fingerprint string
+	manifest    Manifest
+	err         error
+}
+
+var manifestCache sync.Map
 
 func DefaultConfigDir() string {
 	if value := strings.TrimSpace(os.Getenv("XDG_CONFIG_HOME")); value != "" {
@@ -78,6 +92,27 @@ func (l Loader) Supports(harness registry.Harness) bool {
 }
 
 func (l Loader) Load(harness registry.Harness) (Manifest, error) {
+	path := l.overridePath(harness)
+	key := string(harness) + "\x00" + path
+	fingerprint := manifestFileFingerprint(path)
+	if cached, ok := manifestCache.Load(key); ok {
+		if entry, valid := cached.(manifestCacheEntry); valid &&
+			entry.fingerprint == fingerprint {
+			return entry.manifest, entry.err
+		}
+	}
+
+	manifest, err := l.loadUncached(harness, path)
+	manifestCache.Store(key, manifestCacheEntry{
+		fingerprint: fingerprint,
+		manifest:    manifest,
+		err:         err,
+	})
+
+	return manifest, err
+}
+
+func (l Loader) loadUncached(harness registry.Harness, path string) (Manifest, error) {
 	var bundled Manifest
 	if SupportsScreen(harness) {
 		var err error
@@ -86,13 +121,13 @@ func (l Loader) Load(harness registry.Harness) (Manifest, error) {
 			return Manifest{}, err
 		}
 	}
-	path := l.overridePath(harness)
 	if path == "" {
 		if SupportsScreen(harness) {
 			return bundled, nil
 		}
 		return Manifest{}, fmt.Errorf("%w: unsupported screen harness %q", errManifestInvalid, harness)
 	}
+
 	data, readErr := readManifestFile(path)
 	if errors.Is(readErr, os.ErrNotExist) {
 		if SupportsScreen(harness) {
@@ -107,6 +142,7 @@ func (l Loader) Load(harness registry.Harness) (Manifest, error) {
 		bundled.Warning = fmt.Sprintf("reading local override %s: %v", path, readErr)
 		return bundled, nil
 	}
+
 	local, parseErr := ParseManifest(data, harness)
 	if parseErr != nil {
 		if !SupportsScreen(harness) {
@@ -116,7 +152,23 @@ func (l Loader) Load(harness registry.Harness) (Manifest, error) {
 		return bundled, nil
 	}
 	local.Source = path
+
 	return local, nil
+}
+
+func manifestFileFingerprint(path string) string {
+	if path == "" {
+		return "none"
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "missing"
+		}
+		return "error:" + err.Error()
+	}
+
+	return fmt.Sprintf("%d:%d:%d", info.ModTime().UnixNano(), info.Size(), info.Mode())
 }
 
 func (l Loader) overridePath(harness registry.Harness) string {
@@ -160,7 +212,45 @@ func ParseManifest(data []byte, harness registry.Harness) (Manifest, error) {
 	if err := validateManifest(manifest); err != nil {
 		return Manifest{}, err
 	}
+	if err := compileManifestRules(&manifest); err != nil {
+		return Manifest{}, err
+	}
+
 	return manifest, nil
+}
+
+func compileManifestRules(manifest *Manifest) error {
+	for index := range manifest.Rules {
+		rule := &manifest.Rules[index]
+		var err error
+		if rule.regexAllCompiled, err = compileRuleExpressions(rule.RegexAll, rule.CaseSensitive); err != nil {
+			return fmt.Errorf("compiling rule %q regex_all: %w", rule.ID, err)
+		}
+		if rule.regexAnyCompiled, err = compileRuleExpressions(rule.RegexAny, rule.CaseSensitive); err != nil {
+			return fmt.Errorf("compiling rule %q regex_any: %w", rule.ID, err)
+		}
+		if rule.regexNoneCompiled, err = compileRuleExpressions(rule.RegexNone, rule.CaseSensitive); err != nil {
+			return fmt.Errorf("compiling rule %q regex_none: %w", rule.ID, err)
+		}
+		if rule.titleRegexAnyCompiled, err = compileRuleExpressions(rule.TitleRegexAny, rule.CaseSensitive); err != nil {
+			return fmt.Errorf("compiling rule %q title_regex_any: %w", rule.ID, err)
+		}
+	}
+
+	return nil
+}
+
+func compileRuleExpressions(expressions []string, caseSensitive bool) ([]*regexp.Regexp, error) {
+	compiled := make([]*regexp.Regexp, 0, len(expressions))
+	for _, expression := range expressions {
+		pattern, err := regexp.Compile(ruleRegexExpression(expression, caseSensitive))
+		if err != nil {
+			return nil, fmt.Errorf("compiling regular expression %q: %w", expression, err)
+		}
+		compiled = append(compiled, pattern)
+	}
+
+	return compiled, nil
 }
 
 func loadBundled(harness registry.Harness) (Manifest, error) {
