@@ -27,7 +27,7 @@ function report(eventName, context, transition) {
     "--pid", String(process.pid),
     "--event", eventName,
     "--observed-at", new Date().toISOString(),
-    "--queue", "--quiet",
+    "--quiet",
     "--attribute", "agent_sessions_integration=cline-plugin",
     "--attribute", `agent_sessions_integration_version=${integrationVersion}`,
   ];

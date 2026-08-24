@@ -39,7 +39,7 @@ function report(eventName, event, ctx, transition) {
   const args = [
     "report", "openclaw", "--session-id", sessionId,
     "--event", eventName, "--observed-at", new Date().toISOString(),
-    "--queue", "--quiet", "--no-tmux",
+    "--quiet", "--no-tmux",
     "--attribute", "agent_sessions_integration=openclaw-plugin",
     "--attribute", `agent_sessions_integration_version=${integrationVersion}`,
   ];

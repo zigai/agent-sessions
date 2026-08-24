@@ -234,7 +234,6 @@ func reportHookCommand[T hookTransition](
 		parts,
 		"--attribute", ShellQuote("agent_sessions_integration_version="+strconv.Itoa(IntegrationVersionFor(harness))),
 		"--attribute", ShellQuote("agent_sessions_integration="+source),
-		"--queue",
 		stdinFlag,
 		"--quiet",
 	)

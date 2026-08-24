@@ -174,9 +174,9 @@ func gooseReportScript(binary string) string {
 		"  exit 0",
 		"fi",
 		"if [ \"$transition\" = gone ]; then",
-		"  " + ShellQuote(binary) + " report " + ShellQuote(string(registry.HarnessGoose)) + " --presence \"$transition\" --event \"$event\" --attribute " + ShellQuote("agent_sessions_integration_version="+strconv.Itoa(IntegrationVersionFor(registry.HarnessGoose))) + " --attribute " + ShellQuote("agent_sessions_integration="+gooseIntegrationSource) + " --queue --raw-stdin-defaults-only --quiet >/dev/null 2>&1 || true",
+		"  " + ShellQuote(binary) + " report " + ShellQuote(string(registry.HarnessGoose)) + " --presence \"$transition\" --event \"$event\" --attribute " + ShellQuote("agent_sessions_integration_version="+strconv.Itoa(IntegrationVersionFor(registry.HarnessGoose))) + " --attribute " + ShellQuote("agent_sessions_integration="+gooseIntegrationSource) + " --raw-stdin-defaults-only --quiet >/dev/null 2>&1 || true",
 		"else",
-		"  " + ShellQuote(binary) + " report " + ShellQuote(string(registry.HarnessGoose)) + " --activity \"$transition\" --event \"$event\" --attribute " + ShellQuote("agent_sessions_integration_version="+strconv.Itoa(IntegrationVersionFor(registry.HarnessGoose))) + " --attribute " + ShellQuote("agent_sessions_integration="+gooseIntegrationSource) + " --queue --raw-stdin-defaults-only --quiet >/dev/null 2>&1 || true",
+		"  " + ShellQuote(binary) + " report " + ShellQuote(string(registry.HarnessGoose)) + " --activity \"$transition\" --event \"$event\" --attribute " + ShellQuote("agent_sessions_integration_version="+strconv.Itoa(IntegrationVersionFor(registry.HarnessGoose))) + " --attribute " + ShellQuote("agent_sessions_integration="+gooseIntegrationSource) + " --raw-stdin-defaults-only --quiet >/dev/null 2>&1 || true",
 		"fi",
 		"",
 	}, "\n")

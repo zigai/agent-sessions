@@ -41,21 +41,13 @@ func tryExecuteFastPath(ctx context.Context, args []string, stdin io.Reader, std
 		if !ok || e != nil {
 			return ok, e
 		}
-		e = app.runReport(ctx, stdin, o)
-		if e == nil && !o.queue {
-			app.kickQueueDrainer(ctx, app.store().Path())
-		}
-		return true, e
+		return true, app.runReport(ctx, stdin, o)
 	case hookCommandName:
 		h, o, ok, e := parseFastManagedHookOptions(c, a)
 		if !ok || e != nil {
 			return ok, e
 		}
-		e = app.runManagedHook(ctx, stdin, h, o)
-		if e == nil && !o.queue {
-			app.kickQueueDrainer(ctx, app.store().Path())
-		}
-		return true, e
+		return true, app.runManagedHook(ctx, stdin, h, o)
 	}
 	return false, nil
 }
@@ -157,6 +149,9 @@ func parseFastReportOptions(args []string) (reportOptions, bool, error) {
 		case "--observed-at":
 			v, e = need()
 			s.o.observedAt = v
+		case "--sequence":
+			v, e = need()
+			s.o.sequence = v
 		case "--evidence":
 			v, e = need()
 			s.o.evidence = v

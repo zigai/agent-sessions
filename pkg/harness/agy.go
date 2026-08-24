@@ -133,7 +133,6 @@ func agyHookCommand(binary string, event string) string {
 		"hook",
 		string(registry.HarnessAgy),
 		"--event", ShellQuote(event),
-		"--queue",
 	}, " ")
 }
 

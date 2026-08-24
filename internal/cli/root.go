@@ -9,16 +9,19 @@ import (
 	"maps"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/zigai/agent-sessions/v2/internal/agentstate"
 	"github.com/zigai/agent-sessions/v2/internal/processinfo"
+	"github.com/zigai/agent-sessions/v2/pkg/brokerapi"
 	harnesspkg "github.com/zigai/agent-sessions/v2/pkg/harness"
 	"github.com/zigai/agent-sessions/v2/pkg/herdrctx"
 	"github.com/zigai/agent-sessions/v2/pkg/registry"
@@ -40,6 +43,7 @@ var (
 	errInvalidObserveInterval    = errors.New("interval must be positive")
 	errInvalidObserveGracePeriod = errors.New("grace period must be nonnegative")
 	errGonePresenceActivity      = errors.New("gone presence cannot include activity")
+	errProcessEvidenceSequence   = errors.New("process evidence cannot include sequence")
 	errProcessEvidenceIdentity   = errors.New("process evidence requires pid and start identity")
 	errProcessEvidenceActivity   = errors.New("process evidence cannot include activity")
 	errManagedHookJSONRequired   = errors.New("hook commands require --json for their protocol response")
@@ -81,11 +85,7 @@ func NewRootCommand(stdout io.Writer, stderr io.Writer) *cobra.Command {
 
 func newRootCommand(app *application) *cobra.Command {
 	var showVersion bool
-	root := &cobra.Command{Use: "agent-sessions", Short: "Track local coding-agent sessions and where they are running", SilenceErrors: true, SilenceUsage: true, PersistentPreRun: func(cmd *cobra.Command, _ []string) {
-		if shouldKickQueueDrainer(cmd) {
-			app.kickQueueDrainer(cmd.Context(), app.store().Path())
-		}
-	}, RunE: func(cmd *cobra.Command, _ []string) error {
+	root := &cobra.Command{Use: "agent-sessions", Short: "Track local coding-agent sessions and where they are running", SilenceErrors: true, SilenceUsage: true, RunE: func(cmd *cobra.Command, _ []string) error {
 		if showVersion {
 			if app.outputJSON {
 				return app.writeJSON(map[string]string{"version": version, "commit": commit, "built": date})
@@ -117,24 +117,9 @@ func newRootCommand(app *application) *cobra.Command {
 		inCommandGroup(app.newMonitorCommand(), systemGroupID),
 		inCommandGroup(app.newRegistryCommand(), systemGroupID),
 		inCommandGroup(app.newDoctorCommand(), systemGroupID),
-		app.newReportCommand(), app.newDrainQueueCommand(), app.newQueueStatusCommand(),
+		app.newReportCommand(),
 	)
 	return root
-}
-
-func shouldKickQueueDrainer(command *cobra.Command) bool {
-	if command == command.Root() || command.Name() == "help" || command.Name() == drainQueueCommandName || command.Name() == queueStatusCommandName || command.Name() == cobra.ShellCompRequestCmd {
-		return false
-	}
-	for current := command; current != nil; current = current.Parent() {
-		if current.Name() == "completion" {
-			return false
-		}
-	}
-	if queue, err := command.Flags().GetBool("queue"); err == nil && queue {
-		return false
-	}
-	return true
 }
 
 func inCommandGroup(command *cobra.Command, groupID string) *cobra.Command {
@@ -143,7 +128,10 @@ func inCommandGroup(command *cobra.Command, groupID string) *cobra.Command {
 }
 
 func Execute() {
-	if code := executeCLI(context.Background(), os.Args[1:], os.Stdin, os.Stdout, os.Stderr); code != 0 {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	code := executeCLI(ctx, os.Args[1:], os.Stdin, os.Stdout, os.Stderr)
+	stop()
+	if code != 0 {
 		os.Exit(code)
 	}
 }
@@ -156,7 +144,8 @@ func executeCLI(ctx context.Context, args []string, stdin io.Reader, stdout, std
 		}
 		return 0
 	}
-	root := NewRootCommand(stdout, stderr) //nolint:contextcheck // command construction defers all queue work to Cobra's execution context
+	//nolint:contextcheck // Cobra propagates ExecuteContext to every command operation.
+	root := NewRootCommand(stdout, stderr)
 	root.SetArgs(args)
 	if err := root.ExecuteContext(ctx); err != nil {
 		_, _ = fmt.Fprintln(stderr, err)
@@ -165,8 +154,11 @@ func executeCLI(ctx context.Context, args []string, stdin io.Reader, stdout, std
 	return 0
 }
 
-func (app *application) store() *registry.FileStore    { return registry.NewFileStore(app.storePath) }
-func (app *application) registryStore() registry.Store { return app.store() }
+func (app *application) store() *registry.FileStore { return registry.NewFileStore(app.storePath) }
+func (app *application) registryStore() registry.Store {
+	return brokerapi.NewStore(app.storePath)
+}
+
 func (app *application) writeJSON(value any) error {
 	e := json.NewEncoder(app.stdout)
 	e.SetIndent("", jsonIndent)
@@ -232,6 +224,7 @@ type reportOptions struct {
 	tty             string
 	event           string
 	observedAt      string
+	sequence        string
 	attributes      []string
 	rawStdin        bool
 	rawDefaultsOnly bool
@@ -287,6 +280,7 @@ func (app *application) newReportCommand() *cobra.Command {
 	f.StringVar(&options.tty, "tty", options.tty, "agent tty")
 	f.StringVar(&options.event, "event", options.event, "native harness event name")
 	f.StringVar(&options.observedAt, "observed-at", options.observedAt, "RFC3339 timestamp")
+	f.StringVar(&options.sequence, "sequence", options.sequence, "strictly increasing integration report sequence")
 	f.StringArrayVar(&options.attributes, "attribute", nil, "extra key=value attribute")
 	f.StringArrayVar(&options.resumeCommand, "resume-command", nil, "resume command argv item, repeatable")
 	f.StringVar(&options.evidence, "evidence", options.evidence, "evidence kind (managed shims)")
@@ -301,7 +295,7 @@ func (app *application) newReportCommand() *cobra.Command {
 }
 
 func defaultReportOptionsFromEnv() reportOptions {
-	return reportOptions{harness: firstEnv("AGENT_SESSIONS_HARNESS", "AGENT_HARNESS"), sessionID: firstEnv(harnesspkg.EnvNames(harnesspkg.EnvSessionID)...), sessionPath: firstEnv(harnesspkg.EnvNames(harnesspkg.EnvSessionPath)...), cwdAuto: true, projectRoot: firstEnv(harnesspkg.EnvNames(harnesspkg.EnvProjectRoot)...), pid: firstEnvInt(harnesspkg.EnvNames(harnesspkg.EnvPID)...), ppid: firstEnvInt("AGENT_SESSIONS_PPID", "AGENT_PPID"), tty: firstEnv("AGENT_SESSIONS_TTY", "TTY"), event: firstEnv(harnesspkg.EnvNames(harnesspkg.EnvEvent)...)}
+	return reportOptions{harness: firstEnv("AGENT_SESSIONS_HARNESS", "AGENT_HARNESS"), sessionID: firstEnv(harnesspkg.EnvNames(harnesspkg.EnvSessionID)...), sessionPath: firstEnv(harnesspkg.EnvNames(harnesspkg.EnvSessionPath)...), cwdAuto: true, projectRoot: firstEnv(harnesspkg.EnvNames(harnesspkg.EnvProjectRoot)...), pid: firstEnvInt(harnesspkg.EnvNames(harnesspkg.EnvPID)...), ppid: firstEnvInt("AGENT_SESSIONS_PPID", "AGENT_PPID"), tty: firstEnv("AGENT_SESSIONS_TTY", "TTY"), event: firstEnv(harnesspkg.EnvNames(harnesspkg.EnvEvent)...), sequence: firstEnv("AGENT_SESSIONS_SEQUENCE")}
 }
 
 func parseObservedAt(value string) (time.Time, error) {
@@ -316,10 +310,20 @@ func parseObservedAt(value string) (time.Time, error) {
 	return t, nil
 }
 
-func (app *application) runReport(ctx context.Context, stdin io.Reader, options reportOptions) error {
-	if options.queue {
-		return app.runQueuedReport(ctx, stdin, options)
+func parseReportSequence(value string) (uint64, bool, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0, false, nil
 	}
+	sequence, err := strconv.ParseUint(value, 10, 64)
+	if err != nil {
+		return 0, false, fmt.Errorf("parsing sequence: %w", err)
+	}
+
+	return sequence, true, nil
+}
+
+func (app *application) runReport(ctx context.Context, stdin io.Reader, options reportOptions) error {
 	prepared, err := app.prepareReport(stdin, options, reportRuntimeContext{
 		tmux:        reportTmuxContext(ctx, options.noTmux),
 		multiplexer: reportMultiplexerContext(),
@@ -344,7 +348,7 @@ func (app *application) runReport(ctx context.Context, stdin io.Reader, options 
 	return app.writeReportResult(session, options.quiet)
 }
 
-//nolint:gocognit,cyclop // report preparation deliberately validates independent evidence dimensions in order
+//nolint:gocognit,cyclop,nestif // report preparation validates independent evidence dimensions in order
 func (app *application) prepareReport(stdin io.Reader, options reportOptions, runtime reportRuntimeContext) (preparedReport, error) {
 	if options.rawStdin && options.rawDefaultsOnly {
 		return preparedReport{}, errConflictingReportStdin
@@ -402,6 +406,10 @@ func (app *application) prepareReport(stdin io.Reader, options reportOptions, ru
 	if observedAt.IsZero() {
 		observedAt = time.Now().UTC()
 	}
+	sequence, sequenceSet, err := parseReportSequence(options.sequence)
+	if err != nil {
+		return preparedReport{}, err
+	}
 	if presence == "" && activity == "" && lifecycle == "" && options.event == "" && options.sessionID == "" && options.sessionPath == "" {
 		return preparedReport{}, errMissingReportIdentity
 	}
@@ -414,6 +422,9 @@ func (app *application) prepareReport(stdin io.Reader, options reportOptions, ru
 		if activity != "" {
 			return preparedReport{}, errProcessEvidenceActivity
 		}
+		if sequenceSet {
+			return preparedReport{}, errProcessEvidenceSequence
+		}
 		process := processEvidenceIdentity(options, runtime.processes)
 		if process == nil || !process.Complete() {
 			return preparedReport{}, errProcessEvidenceIdentity
@@ -425,6 +436,9 @@ func (app *application) prepareReport(stdin io.Reader, options reportOptions, ru
 		}
 	} else {
 		observation = nativeReportObservation(harness, identity, options, runtime, attrs, rawPayload, presence, activity, lifecycle, observedAt)
+		if sequenceSet {
+			observation.Sequence = &sequence
+		}
 	}
 	if options.cwd != "" || options.projectRoot != "" || len(options.resumeCommand) > 0 {
 		observation.Catalog = &registry.CatalogMetadata{ResumeCommand: append([]string(nil), options.resumeCommand...), CWD: options.cwd, ProjectRoot: options.projectRoot}

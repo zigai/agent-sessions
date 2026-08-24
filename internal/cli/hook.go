@@ -13,11 +13,9 @@ import (
 	"fmt"
 	"io"
 	"strings"
-	"time"
 
 	"github.com/spf13/cobra"
 
-	"github.com/zigai/agent-sessions/v2/internal/reportqueue"
 	harnesspkg "github.com/zigai/agent-sessions/v2/pkg/harness"
 	"github.com/zigai/agent-sessions/v2/pkg/registry"
 	"github.com/zigai/agent-sessions/v2/pkg/tmuxctx"
@@ -78,50 +76,11 @@ func (app *application) runManagedHook(
 		result.Report.Process = reportProcessIdentity(harness, reportProcessAncestors(ctx, 0))
 	}
 
-	if options.queue {
-		app.queueManagedHook(ctx, result, parentArgs)
-	} else if err := reportManagedHook(ctx, app.registryStore(), result); err != nil {
+	if err := reportManagedHook(ctx, app.registryStore(), result); err != nil {
 		app.warnf("warning: %v\n", err)
 	}
 
 	return app.writeJSON(result.Response)
-}
-
-func (app *application) queueManagedHook(
-	ctx context.Context,
-	result harnesspkg.HookResult,
-	parentArgs []string,
-) {
-	if !result.ReportOK {
-		return
-	}
-	now := time.Now().UTC()
-	observation := result.Report
-	if observation.ObservedAt.IsZero() {
-		observation.ObservedAt = now
-	}
-	storePath := app.store().Path()
-	queue := reportqueue.New(storePath)
-	runtime, cachedTmux := queuedReportRuntime(queue, now, parentArgs)
-	_, err := queue.Enqueue(ctx, reportqueue.Envelope{
-		Version:       reportqueue.EnvelopeVersion,
-		CreatedAt:     now,
-		StorePath:     storePath,
-		Kind:          reportqueue.KindReport,
-		Report:        reportqueue.ReportFromRegistry(observation),
-		RawPayloadSet: len(observation.RawPayload) > 0,
-		Runtime:       runtime,
-		CachedTmux:    cachedTmux,
-	}, reportqueue.EnqueueOptions{Now: func() time.Time { return now }})
-	if err != nil {
-		app.warnf("warning: queueing managed hook report failed: %v\n", err)
-		if err := reportManagedHook(ctx, app.registryStore(), result); err != nil {
-			app.warnf("warning: %v\n", err)
-		}
-
-		return
-	}
-	app.kickQueueDrainer(ctx, storePath)
 }
 
 func reportManagedHook(ctx context.Context, store registry.Store, result harnesspkg.HookResult) error {

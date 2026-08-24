@@ -12,6 +12,8 @@ import (
 
 	"github.com/fsnotify/fsnotify"
 
+	"github.com/zigai/agent-sessions/v2/pkg/brokerapi"
+
 	"github.com/zigai/agent-sessions/v2/pkg/registry"
 )
 
@@ -76,7 +78,6 @@ type watchEvent struct {
 	Multiplexer      string             `json:"multiplexer,omitempty"`
 }
 
-//nolint:gocognit,cyclop // watch orchestration keeps filesystem, registry, and timer transitions together
 func (app *application) runWatch(ctx context.Context, o watchOptions) error {
 	if o.formatSet && strings.TrimSpace(o.format) == "" {
 		return fmt.Errorf("%w: empty value", errInvalidWatchFormat)
@@ -91,6 +92,78 @@ func (app *application) runWatch(ctx context.Context, o watchOptions) error {
 	if !app.outputJSON && o.format != watchFormatTable && o.format != watchFormatPlain {
 		return fmt.Errorf("%w: %q", errInvalidWatchFormat, o.format)
 	}
+
+	subscription, err := brokerapi.NewClient(app.store().Path()).Subscribe(ctx, o.filter)
+	if err == nil {
+		defer subscription.Close()
+
+		return app.runBrokerWatch(ctx, o, subscription)
+	}
+	if !brokerapi.IsUnavailable(err) {
+		return fmt.Errorf("subscribing to registry broker: %w", err)
+	}
+
+	return app.runFilesystemWatch(ctx, o)
+}
+
+//nolint:gocognit,cyclop // subscription closure and snapshot channels share one lifecycle loop.
+func (app *application) runBrokerWatch(
+	ctx context.Context,
+	o watchOptions,
+	subscription *brokerapi.Subscription,
+) error {
+	var previous []registry.Session
+	initialized := false
+	snapshots := subscription.Snapshots
+	errorsChannel := subscription.Errors
+
+	for snapshots != nil || errorsChannel != nil {
+		select {
+		case <-ctx.Done():
+			return nil
+		case err, ok := <-errorsChannel:
+			if !ok {
+				errorsChannel = nil
+				continue
+			}
+			if err != nil {
+				return fmt.Errorf("watching registry broker: %w", err)
+			}
+		case state, ok := <-snapshots:
+			if !ok {
+				snapshots = nil
+				continue
+			}
+
+			if !initialized {
+				initialized = true
+				previous = state.Sessions
+				if !o.noSnapshot {
+					if err := app.writeWatchEvents(snapshotWatchEvents(previous, o.now()), o.format); err != nil {
+						return err
+					}
+				}
+				notifyWatchReady(o.ready)
+				continue
+			}
+
+			events := diffWatchEvents(
+				watchSessionMap(previous),
+				watchSessionMap(state.Sessions),
+				o.now(),
+			)
+			if err := app.writeWatchEvents(events, o.format); err != nil {
+				return err
+			}
+			previous = state.Sessions
+		}
+	}
+
+	return nil
+}
+
+//nolint:gocognit,cyclop // fallback orchestration keeps filesystem, registry, and timer transitions together
+func (app *application) runFilesystemWatch(ctx context.Context, o watchOptions) error {
 	s := app.store()
 	target, dir, e := watchTarget(s)
 	if e != nil {

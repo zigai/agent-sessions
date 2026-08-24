@@ -7,12 +7,33 @@ import { spawn } from "node:child_process";
 
 const agentSessionsBin = {{BINARY}};
 const currentSessionSource = {{SOURCE}};
+const idleDebounceMs = 150;
+const retryGraceMs = 2500;
+const commandTimeoutMs = 3000;
+const retryableErrorPattern =
+  /overloaded|provider.?returned.?error|rate.?limit|too many requests|429|500|502|503|504|service.?unavailable|server.?error|internal.?error|network.?error|connection.?error|connection.?refused|connection.?lost|websocket.?closed|websocket.?error|other side closed|fetch failed|upstream.?connect|reset before headers|socket hang up|ended without|http2 request did not get a response|timed? out|timeout|terminated|retry delay/i;
 
+type Activity = "running" | "waiting" | "idle" | "failed" | "interrupted";
 type SessionRef = {
   id?: string;
   path?: string;
   cwd?: string;
 };
+type PendingState = {
+  activity: Activity;
+  message?: string;
+  ctx?: any;
+  event?: any;
+  sequence: number;
+};
+
+let reportSequence = Date.now() * 1000;
+let commandQueue = Promise.resolve();
+
+function nextSequence(): number {
+  reportSequence += 1;
+  return reportSequence;
+}
 
 function isSubagentSession(ctx: any): boolean {
   try {
@@ -29,17 +50,14 @@ function sessionRef(ctx: any): SessionRef {
     const file = sessionManager?.getSessionFile?.();
     if (typeof file === "string" && file.length > 0) ref.path = file;
   } catch {}
-
   try {
     const id = sessionManager?.getSessionId?.();
     if (typeof id === "string" && id.length > 0) ref.id = id;
   } catch {}
-
   try {
     const cwd = typeof ctx?.cwd === "string" && ctx.cwd.length > 0 ? ctx.cwd : sessionManager?.getCwd?.();
     if (typeof cwd === "string" && cwd.length > 0) ref.cwd = cwd;
   } catch {}
-
   return ref;
 }
 
@@ -49,30 +67,72 @@ function addAttribute(args: string[], key: string, value: unknown): void {
   }
 }
 
-function addEvent(args: string[], value: unknown): void {
-  if (typeof value === "string" && value.length > 0) {
-    args.push("--event", value);
-  }
-}
-
 function addResumeCommand(args: string[], ref: SessionRef): void {
   const session = ref.path ?? ref.id;
   if (!session) return;
-
   for (const item of ["omp", "--session", session]) {
     args.push("--resume-command", item);
   }
 }
 
-function report(activity: string | undefined, presence: string | undefined, ctx?: any, event?: any): void {
-  if (isSubagentSession(ctx)) return;
+function runCommand(args: string[]): Promise<void> {
+  return new Promise((resolve) => {
+    try {
+      const child = spawn(agentSessionsBin, args, { stdio: "ignore" });
+      let complete = false;
+      const finish = () => {
+        if (complete) return;
+        complete = true;
+        clearTimeout(timeout);
+        resolve();
+      };
+      const timeout = setTimeout(() => {
+        child.kill();
+        finish();
+      }, commandTimeoutMs);
+      timeout.unref?.();
+      child.once("error", finish);
+      child.once("close", finish);
+    } catch {
+      resolve();
+    }
+  });
+}
 
-  const observedAt = new Date().toISOString();
+function enqueueCommand(args: string[]): Promise<void> {
+  commandQueue = commandQueue.then(
+    () => runCommand(args),
+    () => runCommand(args),
+  );
+  return commandQueue;
+}
+
+function report(
+  activity: Activity | undefined,
+  presence: string | undefined,
+  ctx?: any,
+  event?: any,
+  lifecycle?: string,
+  sequence = nextSequence(),
+  message?: string,
+): Promise<void> {
+  if (isSubagentSession(ctx)) return Promise.resolve();
   const ref = sessionRef(ctx);
-  const args = ["report", "omp", "--observed-at", observedAt, "--queue", "--quiet"];
+  const args = [
+    "report",
+    "omp",
+    "--observed-at",
+    new Date().toISOString(),
+    "--sequence",
+    String(sequence),
+    "--quiet",
+  ];
   if (presence) args.push("--presence", presence);
   if (activity) args.push("--activity", activity);
-  addEvent(args, event?.type);
+  if (lifecycle) args.push("--lifecycle", lifecycle);
+  if (typeof event?.type === "string" && event.type.length > 0) {
+    args.push("--event", event.type);
+  }
   args.push("--attribute", `agent_sessions_integration_version={{INTEGRATION_VERSION}}`);
   args.push("--attribute", `agent_sessions_integration=${currentSessionSource}`);
   addAttribute(args, "omp_event", event?.type);
@@ -80,10 +140,10 @@ function report(activity: string | undefined, presence: string | undefined, ctx?
   addAttribute(args, "omp_tool_name", event?.toolName);
   addAttribute(args, "omp_approval_mode", event?.approvalMode);
   addAttribute(args, "omp_approval_reason", event?.reason);
+  addAttribute(args, "agent_state_message", message);
   if (typeof event?.approved === "boolean") {
     addAttribute(args, "omp_approved", String(event.approved));
   }
-
   if (ref.path) {
     args.push("--session-path", ref.path);
   } else if (ref.id) {
@@ -91,65 +151,265 @@ function report(activity: string | undefined, presence: string | undefined, ctx?
   }
   if (ref.cwd) args.push("--cwd", ref.cwd);
   addResumeCommand(args, ref);
+  return enqueueCommand(args);
+}
 
-  try {
-    const child = spawn(agentSessionsBin, args, {
-      detached: true,
-      stdio: "ignore",
-    });
-    child.on("error", () => {});
-    child.unref();
-  } catch {
-    // Session reporting must never break oh-my-pi startup or turns.
+function lastAssistantMessage(messages: unknown[]): any | undefined {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index] as any;
+    if (message?.role === "assistant") return message;
   }
+  return undefined;
+}
+
+function retryableErrorMessage(event: any): string | undefined {
+  const assistant = lastAssistantMessage(Array.isArray(event?.messages) ? event.messages : []);
+  const message = String(
+    assistant?.errorMessage ?? event?.error?.message ?? event?.error ?? event?.message ?? "",
+  );
+  const failed =
+    assistant?.stopReason === "error" ||
+    event?.reason === "error" ||
+    event?.status === "error" ||
+    event?.status === "failed" ||
+    event?.error;
+  return failed && retryableErrorPattern.test(message) ? message || "retryable provider error" : undefined;
+}
+
+function askMessage(args: any): string {
+  const questions = Array.isArray(args?.questions) ? args.questions : [];
+  const question = questions.find((value: any) => typeof value?.question === "string");
+  return question?.question ?? "waiting for user input";
 }
 
 export default function (pi: any) {
+  let rootSession = false;
+  let agentActive = false;
+  let retryHoldActive = false;
+  let failureActive = false;
+  let failureMessage: string | undefined;
+  let blockedCount = 0;
+  let blockedMessage: string | undefined;
+  let lastActivity: Activity | undefined;
+  let lastMessage: string | undefined;
+  let currentContext: any;
+  let idleTimer: ReturnType<typeof setTimeout> | undefined;
+  let retryTimer: ReturnType<typeof setTimeout> | undefined;
+  let stateSendInFlight = false;
+  let pendingState: PendingState | undefined;
+
+  function clearTimer(timer: ReturnType<typeof setTimeout> | undefined): void {
+    if (timer) clearTimeout(timer);
+  }
+
+  function clearTimers(): void {
+    clearTimer(idleTimer);
+    clearTimer(retryTimer);
+    idleTimer = undefined;
+    retryTimer = undefined;
+  }
+
+  function desiredState(): { activity: Activity; message?: string } {
+    if (blockedCount > 0) return { activity: "waiting", message: blockedMessage };
+    if (failureActive) return { activity: "failed", message: failureMessage };
+    if (agentActive || retryHoldActive) return { activity: "running" };
+    return { activity: "idle" };
+  }
+
+  function queueState(activity: Activity, message?: string, event?: any, force = false): void {
+    if (!force && activity === lastActivity && message === lastMessage) return;
+    lastActivity = activity;
+    lastMessage = message;
+    pendingState = {
+      activity,
+      message,
+      ctx: currentContext,
+      event,
+      sequence: nextSequence(),
+    };
+    if (!stateSendInFlight) void drainStateQueue();
+  }
+
+  async function drainStateQueue(): Promise<void> {
+    if (stateSendInFlight) return;
+    stateSendInFlight = true;
+    try {
+      while (pendingState) {
+        const next = pendingState;
+        pendingState = undefined;
+        await report(next.activity, undefined, next.ctx, next.event, undefined, next.sequence, next.message);
+      }
+    } finally {
+      stateSendInFlight = false;
+      if (pendingState) void drainStateQueue();
+    }
+  }
+
+  function publishDesired(event?: any, force = false): void {
+    const desired = desiredState();
+    queueState(desired.activity, desired.message, event, force);
+  }
+
+  function activateRoot(ctx: any): boolean {
+    if (ctx?.hasUI !== true || isSubagentSession(ctx)) return false;
+    rootSession = true;
+    currentContext = ctx;
+    return true;
+  }
+
+  function resetState(): void {
+    clearTimers();
+    agentActive = false;
+    retryHoldActive = false;
+    failureActive = false;
+    failureMessage = undefined;
+    blockedCount = 0;
+    blockedMessage = undefined;
+  }
+
+  function activateBlocked(message?: string, event?: any): void {
+    clearTimers();
+    blockedCount += 1;
+    blockedMessage = message;
+    publishDesired(event);
+  }
+
+  function deactivateBlocked(event?: any): void {
+    blockedCount = Math.max(0, blockedCount - 1);
+    if (blockedCount === 0) blockedMessage = undefined;
+    publishDesired(event);
+  }
+
+  function holdRetry(message: string, event?: any): void {
+    clearTimers();
+    retryHoldActive = true;
+    failureActive = false;
+    failureMessage = message;
+    publishDesired(event);
+    retryTimer = setTimeout(() => {
+      retryTimer = undefined;
+      retryHoldActive = false;
+      failureActive = true;
+      publishDesired(event);
+    }, retryGraceMs);
+    retryTimer.unref?.();
+  }
+
+  function scheduleIdle(event?: any): void {
+    clearTimers();
+    retryHoldActive = false;
+    failureActive = false;
+    failureMessage = undefined;
+    idleTimer = setTimeout(() => {
+      idleTimer = undefined;
+      publishDesired(event);
+    }, idleDebounceMs);
+    idleTimer.unref?.();
+  }
+
   pi.on("session_start", (event: any, ctx: any) => {
-    report("idle", "live", ctx, event);
+    if (!activateRoot(ctx)) return;
+    resetState();
+    void report("idle", "live", ctx, event, "start");
+    lastActivity = "idle";
   });
 
   for (const eventName of ["session_switch", "session_branch", "session_tree"]) {
     pi.on(eventName, (event: any, ctx: any) => {
-      report("idle", undefined, ctx, event);
+      if (!activateRoot(ctx)) return;
+      resetState();
+      void report("idle", "live", ctx, event, "resume");
+      lastActivity = "idle";
     });
   }
 
-  pi.on("before_agent_start", (event: any, ctx: any) => {
-    report("running", undefined, ctx, event);
-  });
-
-  pi.on("agent_start", (event: any, ctx: any) => {
-    report("running", undefined, ctx, event);
-  });
-
-  pi.on("agent_end", (event: any, ctx: any) => {
-    if (event?.error || event?.reason === "error" || event?.status === "error" || event?.status === "failed") {
-      report("failed", undefined, ctx, event);
-    } else if (event?.reason === "interrupted" || event?.reason === "cancelled" || event?.interrupted === true) {
-      report("interrupted", undefined, ctx, event);
-    } else {
-      report(event?.willContinue === true ? "running" : "idle", undefined, ctx, event);
-    }
-  });
-
-  pi.on("agent_error", (event: any, ctx: any) => {
-    report("failed", undefined, ctx, event);
-  });
+  for (const eventName of ["before_agent_start", "agent_start"]) {
+    pi.on(eventName, (event: any, ctx: any) => {
+      if (!rootSession && !activateRoot(ctx)) return;
+      currentContext = ctx;
+      clearTimers();
+      retryHoldActive = false;
+      failureActive = false;
+      failureMessage = undefined;
+      agentActive = true;
+      publishDesired(event);
+    });
+  }
 
   pi.on("tool_approval_requested", (event: any, ctx: any) => {
-    report("waiting", undefined, ctx, event);
+    if (!rootSession && !activateRoot(ctx)) return;
+    currentContext = ctx;
+    activateBlocked(event?.reason ?? `${event?.toolName ?? "Tool"} approval`, event);
   });
 
   pi.on("tool_approval_resolved", (event: any, ctx: any) => {
-    report("running", undefined, ctx, event);
+    if (!rootSession && !activateRoot(ctx)) return;
+    currentContext = ctx;
+    deactivateBlocked(event);
+  });
+
+  pi.on("tool_execution_start", (event: any, ctx: any) => {
+    if (event?.toolName !== "ask") return;
+    if (!rootSession && !activateRoot(ctx)) return;
+    currentContext = ctx;
+    activateBlocked(askMessage(event?.args), event);
+  });
+
+  pi.on("tool_execution_end", (event: any, ctx: any) => {
+    if (event?.toolName !== "ask") return;
+    if (!rootSession && !activateRoot(ctx)) return;
+    currentContext = ctx;
+    deactivateBlocked(event);
+  });
+
+  pi.on("agent_end", (event: any, ctx: any) => {
+    if (!rootSession || !agentActive || event?.willContinue === true) return;
+    currentContext = ctx ?? currentContext;
+    agentActive = false;
+    const retryable = retryableErrorMessage(event);
+    if (retryable) {
+      holdRetry(retryable, event);
+      return;
+    }
+    if (event?.reason === "interrupted" || event?.reason === "cancelled" || event?.interrupted === true) {
+      queueState("interrupted", event?.reason, event);
+      return;
+    }
+    if (event?.error || event?.reason === "error" || event?.status === "error" || event?.status === "failed") {
+      failureActive = true;
+      failureMessage = String(event?.error?.message ?? event?.error ?? event?.reason ?? "agent failed");
+      publishDesired(event);
+      return;
+    }
+    scheduleIdle(event);
+  });
+
+  pi.on("agent_error", (event: any, ctx: any) => {
+    if (!rootSession && !activateRoot(ctx)) return;
+    currentContext = ctx;
+    agentActive = false;
+    const retryable = retryableErrorMessage(event);
+    if (retryable) {
+      holdRetry(retryable, event);
+      return;
+    }
+    failureActive = true;
+    failureMessage = String(event?.error?.message ?? event?.error ?? event?.message ?? "agent failed");
+    publishDesired(event);
   });
 
   pi.on("session_stop", (event: any, ctx: any) => {
-    report("idle", undefined, ctx, event);
+    if (!rootSession) return;
+    currentContext = ctx ?? currentContext;
+    resetState();
+    publishDesired(event, true);
   });
 
   pi.on("session_shutdown", (event: any, ctx: any) => {
-    report(undefined, "gone", ctx, event);
+    if (!rootSession) return;
+    clearTimers();
+    currentContext = ctx ?? currentContext;
+    void report(undefined, "gone", currentContext, event, "end");
+    rootSession = false;
   });
 }

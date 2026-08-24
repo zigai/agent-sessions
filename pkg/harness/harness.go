@@ -54,8 +54,8 @@ type Definition struct {
 }
 
 const (
-	IntegrationVersion    = 4
-	ompIntegrationVersion = 6
+	IntegrationVersion    = 5
+	ompIntegrationVersion = 7
 )
 
 // IntegrationVersionFor returns the managed artifact generation for a harness.

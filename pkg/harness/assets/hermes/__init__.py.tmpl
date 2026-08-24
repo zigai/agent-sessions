@@ -62,7 +62,7 @@ def _report(event: str, transition: dict[str, str], values: dict[str, Any]) -> N
         "--event", event,
         "--observed-at", datetime.now(timezone.utc).isoformat(),
         "--cwd", cwd, "--project-root", cwd,
-        "--queue", "--quiet", "--no-tmux",
+        "--quiet", "--no-tmux",
         "--attribute", "agent_sessions_integration=hermes-plugin",
         "--attribute", f"agent_sessions_integration_version={_INTEGRATION_VERSION}",
     ]

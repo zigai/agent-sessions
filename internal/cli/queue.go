@@ -31,6 +31,7 @@ var (
 	errUnsupportedQueueEnvelopeKind    = errors.New("unsupported queue envelope kind")
 )
 
+//nolint:unused // Queue code is isolated from the realtime hot path for offline recovery tooling.
 func (app *application) newDrainQueueCommand() *cobra.Command {
 	var maxItems int
 	var lease time.Duration
@@ -56,6 +57,7 @@ func (app *application) newDrainQueueCommand() *cobra.Command {
 	return c
 }
 
+//nolint:unused // Queue code is isolated from the realtime hot path for offline recovery tooling.
 func (app *application) newQueueStatusCommand() *cobra.Command {
 	return &cobra.Command{Use: queueStatusCommandName, Hidden: true, RunE: func(cmd *cobra.Command, _ []string) error {
 		s, e := reportqueue.New(app.store().Path()).Status(cmd.Context())
@@ -79,6 +81,7 @@ func (app *application) newQueueStatusCommand() *cobra.Command {
 	}}
 }
 
+//nolint:unused // Queue code is isolated from the realtime hot path for offline recovery tooling.
 func (app *application) drainQueue(ctx context.Context, o reportqueue.DrainOptions) (reportqueue.DrainResult, error) {
 	q := reportqueue.New(app.store().Path())
 	o.Processor = func(c context.Context, e reportqueue.Envelope) error { return app.processQueuedReport(c, q, e) }
@@ -175,6 +178,7 @@ func (app *application) queuedReportTmux(ctx context.Context, q reportqueue.Queu
 	return e.CachedTmux
 }
 
+//nolint:unused // Queue code is isolated from the realtime hot path for offline recovery tooling.
 func (app *application) kickQueueDrainer(ctx context.Context, path string) {
 	drainer := app.queueDrainer
 	if drainer == nil {
@@ -185,6 +189,7 @@ func (app *application) kickQueueDrainer(ctx context.Context, path string) {
 	}
 }
 
+//nolint:unused // Queue code is isolated from the realtime hot path for offline recovery tooling.
 func (app *application) runQueuedReport(ctx context.Context, stdin io.Reader, o reportOptions) error {
 	p, e := app.prepareReport(stdin, o, reportRuntimeContext{
 		processes:         reportProcessAncestors(ctx, o.pid),
@@ -237,6 +242,7 @@ func queuedReportEnvelope(
 	}
 }
 
+//nolint:unused // Queue code is isolated from the realtime hot path for offline recovery tooling.
 func queuedReportRuntime(q reportqueue.Queue, now time.Time, parentArgs []string) (reportqueue.RuntimeContext, registry.TmuxContext) {
 	tmuxEnv := tmuxctx.Env{TMUX: os.Getenv("TMUX"), TMUXPane: os.Getenv("TMUX_PANE")}
 	minimalTmux := tmuxctx.ContextFromEnv(tmuxEnv)
