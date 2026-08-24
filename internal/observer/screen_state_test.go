@@ -160,6 +160,38 @@ func TestObserverPreservesKnownActivityWhenScreenCaptureFails(t *testing.T) {
 	assertIdleSince(t, store, at.Add(-2*time.Minute))
 }
 
+func TestObserverPreservesIdleSinceAcrossUnrecognizedScreenRedraw(t *testing.T) {
+	t.Parallel()
+
+	store := registry.NewFileStore(filepath.Join(t.TempDir(), "state.json"))
+	process, pane := detectionProcessPane(199, "codex")
+	at := time.Date(2026, 8, 24, 9, 0, 0, 0, time.UTC)
+	screen := "› next task\nContext 63% used"
+	options := detectionObserverOptions(store, process, pane, t.TempDir())
+	options.Now = func() time.Time { return at }
+	options.ScreenCapture = func(context.Context, tmuxctx.Pane) (tmuxctx.ScreenSnapshot, error) {
+		return tmuxctx.ScreenSnapshot{Text: screen, Title: "codex"}, nil
+	}
+	observer := New(options)
+	if _, err := observer.RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	screen = ""
+	at = at.Add(time.Minute)
+	if _, err := observer.RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	assertIdleSince(t, store, at.Add(-time.Minute))
+
+	screen = "› next task\nContext 63% used"
+	at = at.Add(time.Minute)
+	if _, err := observer.RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	assertIdleSince(t, store, at.Add(-2*time.Minute))
+}
+
 func TestObserverReportsDetectionManifestLoadFailure(t *testing.T) {
 	t.Parallel()
 
