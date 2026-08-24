@@ -18,6 +18,18 @@ import (
 
 var errTestPaneList = errors.New("pane inventory unavailable")
 
+func TestObserverCommandDefaultsUseResponsiveInterval(t *testing.T) {
+	t.Parallel()
+
+	if observeDefaultInterval != 300*time.Millisecond || serviceDefaultInterval != 300*time.Millisecond {
+		t.Fatalf(
+			"observer command intervals = run:%s service:%s, want 300ms",
+			observeDefaultInterval,
+			serviceDefaultInterval,
+		)
+	}
+}
+
 func TestQuietLongRunningObserverStreamsRequestedJSONLines(t *testing.T) {
 	t.Parallel()
 	ctx, cancel := context.WithCancel(context.Background())

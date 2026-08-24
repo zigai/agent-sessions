@@ -36,12 +36,24 @@ func (r *recordingExecutor) Run(_ context.Context, name string, args ...string) 
 	return nil, nil
 }
 
+func TestDefaultObserverServiceIntervalIsResponsive(t *testing.T) {
+	t.Parallel()
+
+	options, err := normalizeOptions(Options{Binary: "agent-sessions", StorePath: "state.json"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if options.Interval != 300*time.Millisecond {
+		t.Fatalf("default observer service interval = %s, want 300ms", options.Interval)
+	}
+}
+
 func TestRenderSystemdUnit(t *testing.T) {
 	got, err := RenderSystemdUnit(Options{Binary: "/tmp/agent sessions", StorePath: "/tmp/state.json", Interval: 3 * time.Second, GracePeriod: 0})
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "# agent-sessions managed observer service\n# version: 3\n[Unit]\nDescription=Agent Sessions observer\n\n[Service]\nExecStart=\"/tmp/agent sessions\" --store /tmp/state.json monitor run --interval 3s --grace-period 0s --quiet\nRestart=on-failure\n\n[Install]\nWantedBy=default.target\n"
+	want := "# agent-sessions managed observer service\n# version: 4\n[Unit]\nDescription=Agent Sessions observer\n\n[Service]\nExecStart=\"/tmp/agent sessions\" --store /tmp/state.json monitor run --interval 3s --grace-period 0s --quiet\nRestart=on-failure\n\n[Install]\nWantedBy=default.target\n"
 	if got != want {
 		t.Fatalf("rendered unit = %q, want %q", got, want)
 	}
@@ -200,7 +212,7 @@ func TestUpdateRestartsManagedService(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(content), "# version: 3") || !strings.Contains(string(content), " monitor run ") {
+	if !strings.Contains(string(content), "# version: 4") || !strings.Contains(string(content), " monitor run ") {
 		t.Fatalf("updated service did not migrate command surface: %s", content)
 	}
 }
