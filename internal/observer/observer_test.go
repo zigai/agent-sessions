@@ -568,6 +568,55 @@ func TestObserverKeepsHookCreatedLiveProcessAndRetiresReusedPid(t *testing.T) {
 	}
 }
 
+func TestObserverMarksHookCreatedSessionWithDeadPanePIDGone(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "sessions.json")
+	at := time.Now().UTC().Add(-time.Minute)
+	activity := registry.ActivityRunning
+	presence := registry.PresenceLive
+	_, err := registry.NewFileStore(path).Observe(context.Background(), registry.Observation{
+		Source:      registry.ObservationSourceNative,
+		Evidence:    registry.ObservationEvidenceNativeEvent,
+		Harness:     registry.HarnessPi,
+		Identity:    registry.ObservationIdentity{SessionID: "hook-pi-pane"},
+		NativeEvent: "agent_start",
+		Presence:    &presence,
+		Activity:    &activity,
+		Tmux:        &registry.TmuxContext{Inside: true, SessionName: "0", PaneID: "%1", PanePID: 1392},
+		ObservedAt:  at,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	options := Options{
+		StorePath: path,
+		Now:       func() time.Time { return at },
+		ProcessList: func(context.Context) ([]processinfo.Process, error) {
+			// Process 1392 has died, only unrelated process exists
+			return []processinfo.Process{{PID: 99999, StartIdentity: "boot:99999"}}, nil
+		},
+		PaneList:    func(context.Context) ([]tmuxctx.Pane, error) { return nil, nil },
+		CatalogList: func(context.Context) ([]CatalogEntry, error) { return nil, nil },
+		HealthPath:  path + ".health",
+	}
+	result, err := New(options).RunOnce(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Gone != 1 {
+		t.Fatalf("result gone = %d, want 1: %#v", result.Gone, result)
+	}
+
+	sessions, err := registry.NewFileStore(path).List(context.Background(), registry.Filter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 1 || sessions[0].Presence != registry.PresenceGone {
+		t.Fatalf("sessions after dead pane PID sweep: %#v", sessions)
+	}
+}
+
 func TestResolveHarnessIgnoresLaterArguments(t *testing.T) {
 	t.Parallel()
 	process := processinfo.Process{Executable: "/usr/bin/tmux", Args: []string{"/usr/bin/tmux", "new-session", "-s", "agent-test", "/tmp/codex"}}

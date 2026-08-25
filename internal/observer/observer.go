@@ -595,15 +595,23 @@ func absenceObservationsForUnobservedSessions(sessions []registry.Session, proce
 		if session.Presence != registry.PresenceLive || session.Observations.Process != nil {
 			continue
 		}
-		if session.Process == nil || !session.Process.Complete() {
-			continue
-		}
-		if process, ok := processByPID[session.Process.PID]; ok && (process.StartIdentity == "" || process.StartIdentity == session.Process.StartIdentity) {
-			continue
-		}
 
+		if observation, ok := unobservedSessionAbsence(session, processByPID, at); ok {
+			observations = append(observations, observation)
+		}
+	}
+
+	return observations
+}
+
+func unobservedSessionAbsence(session registry.Session, processByPID map[int]processinfo.Process, at time.Time) (registry.Observation, bool) {
+	var empty registry.Observation
+	if session.Process != nil && session.Process.Complete() {
+		if process, ok := processByPID[session.Process.PID]; ok && (process.StartIdentity == "" || process.StartIdentity == session.Process.StartIdentity) {
+			return empty, false
+		}
 		present := false
-		observations = append(observations, registry.Observation{ //nolint:exhaustruct // absence observations intentionally omit unrelated evidence dimensions
+		return registry.Observation{ //nolint:exhaustruct // absence observations intentionally omit unrelated evidence dimensions
 			Source:         registry.ObservationSourceProcess,
 			Evidence:       registry.ObservationEvidenceProcessPresence,
 			Harness:        session.Harness,
@@ -614,10 +622,30 @@ func absenceObservationsForUnobservedSessions(sessions []registry.Session, proce
 				StartIdentity: session.Process.StartIdentity,
 			},
 			ObservedAt: at,
-		})
+		}, true
 	}
 
-	return observations
+	panePID := session.Multiplexer.PanePID
+	if panePID == 0 {
+		panePID = session.Tmux.PanePID
+	}
+	if session.Process == nil && panePID > 0 {
+		if _, ok := processByPID[panePID]; ok {
+			return empty, false
+		}
+
+		present := false
+		return registry.Observation{ //nolint:exhaustruct // absence observations intentionally omit unrelated evidence dimensions
+			Source:         registry.ObservationSourceProcess,
+			Evidence:       registry.ObservationEvidenceProcessPresence,
+			Harness:        session.Harness,
+			Identity:       registry.ObservationIdentity{SessionID: session.SessionID, SessionPath: session.SessionPath},
+			ProcessPresent: &present,
+			ObservedAt:     at,
+		}, true
+	}
+
+	return empty, false
 }
 
 func sessionForProcess(sessions []registry.Session, harnessID registry.Harness, identity *registry.ProcessIdentity) registry.Session {
