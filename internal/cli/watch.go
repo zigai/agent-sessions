@@ -110,10 +110,10 @@ func (app *application) runBrokerWatch(
 	subscription *brokerapi.Subscription,
 ) error {
 	var previous []registry.Session
+	writer := &watchEventWriter{app: app, format: o.format}
 	initialized := false
 	snapshots := subscription.Snapshots
 	errorsChannel := subscription.Errors
-
 	for snapshots != nil || errorsChannel != nil {
 		select {
 		case <-ctx.Done():
@@ -136,7 +136,7 @@ func (app *application) runBrokerWatch(
 				initialized = true
 				previous = state.Sessions
 				if !o.noSnapshot {
-					if err := app.writeWatchEvents(snapshotWatchEvents(previous, o.now()), o.format); err != nil {
+					if err := writer.write(snapshotWatchEvents(previous, o.now())); err != nil {
 						return err
 					}
 				}
@@ -149,7 +149,7 @@ func (app *application) runBrokerWatch(
 				watchSessionMap(state.Sessions),
 				o.now(),
 			)
-			if err := app.writeWatchEvents(events, o.format); err != nil {
+			if err := writer.write(events); err != nil {
 				return err
 			}
 			previous = state.Sessions
@@ -166,8 +166,8 @@ func (app *application) runFilesystemWatch(ctx context.Context, o watchOptions) 
 		return e
 	}
 	var previous []registry.Session
+	writer := &watchEventWriter{app: app, format: o.format}
 	err := s.Watch(ctx, registry.WatchOptions{
-		Filter:            o.filter,
 		Debounce:          o.debounce,
 		ReconcileInterval: 0,
 	}, func(result registry.WatchResult) error {
@@ -177,7 +177,7 @@ func (app *application) runFilesystemWatch(ctx context.Context, o watchOptions) 
 		if result.Initial {
 			previous = result.Sessions
 			if !o.noSnapshot {
-				if e := app.writeWatchEvents(snapshotWatchEvents(result.Sessions, o.now()), o.format); e != nil {
+				if e := writer.write(snapshotWatchEvents(result.Sessions, o.now())); e != nil {
 					return e
 				}
 			}
@@ -185,7 +185,7 @@ func (app *application) runFilesystemWatch(ctx context.Context, o watchOptions) 
 			return nil
 		}
 		events := diffWatchEvents(watchSessionMap(previous), watchSessionMap(result.Sessions), o.now())
-		if e := app.writeWatchEvents(events, o.format); e != nil {
+		if e := writer.write(events); e != nil {
 			return e
 		}
 		previous = result.Sessions
@@ -284,7 +284,7 @@ func diffWatchEvents(p, n map[string]registry.Session, at time.Time) []watchEven
 		if !activityEqual(v.Activity, old.Activity) {
 			o = append(o, watchEventFromSession(watchActionActivityChanged, v, old, at))
 		}
-		if v.Multiplexer != old.Multiplexer || v.Tmux != old.Tmux {
+		if !multiplexerLocationEqual(v.Multiplexer, old.Multiplexer) || !tmuxLocationEqual(v.Tmux, old.Tmux) {
 			o = append(o, watchEventFromSession(watchActionLocationChanged, v, old, at))
 		}
 		if nativeEvent(v) != nativeEvent(old) {
@@ -305,6 +305,32 @@ func activityEqual(a, b *registry.Activity) bool {
 		return a == b
 	}
 	return *a == *b
+}
+
+func tmuxLocationEqual(a, b registry.TmuxContext) bool {
+	return a.Inside == b.Inside &&
+		a.ServerSocket == b.ServerSocket &&
+		a.SessionID == b.SessionID &&
+		a.SessionName == b.SessionName &&
+		a.WindowID == b.WindowID &&
+		a.WindowIndex == b.WindowIndex &&
+		a.PaneID == b.PaneID &&
+		a.PaneIndex == b.PaneIndex
+}
+
+func multiplexerLocationEqual(a, b registry.MultiplexerContext) bool {
+	return a.Kind == b.Kind &&
+		a.ServerID == b.ServerID &&
+		a.SessionID == b.SessionID &&
+		a.SessionName == b.SessionName &&
+		a.WorkspaceID == b.WorkspaceID &&
+		a.WorkspaceName == b.WorkspaceName &&
+		a.TabID == b.TabID &&
+		a.TabIndex == b.TabIndex &&
+		a.WindowID == b.WindowID &&
+		a.WindowIndex == b.WindowIndex &&
+		a.PaneID == b.PaneID &&
+		a.PaneIndex == b.PaneIndex
 }
 
 func nativeEvent(s registry.Session) string {
@@ -390,24 +416,43 @@ func watchMultiplexerLabel(context registry.MultiplexerContext) string {
 	return strings.Join(parts, ":")
 }
 
-func (app *application) writeWatchEvents(e []watchEvent, f string) error {
+type watchEventWriter struct {
+	app           *application
+	format        string
+	headerWritten bool
+}
+
+func (w *watchEventWriter) write(e []watchEvent) error {
+	if len(e) == 0 {
+		return nil
+	}
+	if w.format == watchFormatTable && !w.headerWritten {
+		if err := w.app.writeln(formatWatchTableHeader()); err != nil {
+			return err
+		}
+		w.headerWritten = true
+	}
 	for _, v := range e {
-		switch f {
+		switch w.format {
 		case watchFormatJSON:
-			if er := app.writeJSONLine(v); er != nil {
+			if er := w.app.writeJSONLine(v); er != nil {
 				return er
 			}
 		case watchFormatPlain:
-			if er := app.writeln(formatWatchPlainEvent(v)); er != nil {
+			if er := w.app.writeln(formatWatchPlainEvent(v)); er != nil {
 				return er
 			}
 		default:
-			if er := app.writeln(formatWatchTableEvent(v)); er != nil {
+			if er := w.app.writeln(formatWatchTableEvent(v)); er != nil {
 				return er
 			}
 		}
 	}
 	return nil
+}
+
+func formatWatchTableHeader() string {
+	return fmt.Sprintf("%-20s  %-18s  %-10s  %-8s  %-8s  %s", "TIME", "EVENT", "AGENT", "PRESENCE", "ACTIVITY", "SESSION")
 }
 
 func formatWatchPlainEvent(e watchEvent) string {
@@ -417,9 +462,17 @@ func formatWatchPlainEvent(e watchEvent) string {
 	return truncateHumanText(strings.Join([]string{e.Time.UTC().Format(time.RFC3339), e.Action, string(e.Harness), string(e.Presence), appReportActivity(registry.Session{Activity: e.Activity}), "session=" + e.Label}, " "), humanLineWidth)
 }
 
+const (
+	watchTimeWidth     = 20
+	watchActionWidth   = 18
+	watchHarnessWidth  = 10
+	watchPresenceWidth = 8
+	watchActivityWidth = 8
+)
+
 func formatWatchTableEvent(e watchEvent) string {
 	if e.Action == watchActionSnapshotEmpty {
 		return e.Time.UTC().Format(time.RFC3339) + "  snapshot_empty      no sessions"
 	}
-	return truncateHumanText(fmt.Sprintf("%s  %-18s  %-10s  %-8s  %-8s  %s", e.Time.UTC().Format(time.RFC3339), e.Action, e.Harness, e.Presence, appReportActivity(registry.Session{Activity: e.Activity}), e.Label), humanLineWidth)
+	return fmt.Sprintf("%s  %-18s  %-10s  %-8s  %-8s  %s", e.Time.UTC().Format(time.RFC3339), e.Action, e.Harness, e.Presence, appReportActivity(registry.Session{Activity: e.Activity}), sanitizeHumanText(e.Label))
 }

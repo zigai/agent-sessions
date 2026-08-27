@@ -45,6 +45,37 @@ func TestDiffWatchEventsReportsMultiplexerLocationChanges(t *testing.T) {
 	}
 }
 
+func TestDiffWatchEventsIgnoresTransientWindowNameAndPathChanges(t *testing.T) {
+	t.Parallel()
+	at := time.Now().UTC()
+	activity := registry.ActivityIdle
+	old := registry.Session{
+		ID:       "s",
+		Harness:  registry.HarnessOmp,
+		Presence: registry.PresenceLive,
+		Activity: &activity,
+		Tmux: registry.TmuxContext{
+			Inside:          true,
+			SessionName:     "0",
+			WindowIndex:     "2",
+			WindowName:      "zsh",
+			PaneID:          "%1",
+			PaneCurrentPath: "/home/zigai/Projects/agent-sessions",
+		},
+		UpdatedAt: at,
+	}
+	// Only WindowName (fleeting command name) and PaneCurrentPath change
+	next := old
+	next.Tmux.WindowName = "git"
+	next.Tmux.PaneCurrentPath = "/home/zigai/Projects/agent-sessions/internal"
+	next.UpdatedAt = at.Add(time.Second)
+
+	events := diffWatchEvents(map[string]registry.Session{"s": old}, map[string]registry.Session{"s": next}, at.Add(2*time.Second))
+	if len(events) != 0 {
+		t.Fatalf("expected 0 events for transient window name/path change, got %#v", events)
+	}
+}
+
 func TestWatchJSONModeEmitsJSONLinesOnlyWhenRequested(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "sessions.json")
 	store := registry.NewFileStore(path)
@@ -97,7 +128,7 @@ func TestWatchDefaultsToHumanTable(t *testing.T) {
 	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(stdout.String(), "snapshot") || !strings.Contains(stdout.String(), "watch-human") || strings.HasPrefix(strings.TrimSpace(stdout.String()), "{") {
+	if !strings.Contains(stdout.String(), "TIME") || !strings.Contains(stdout.String(), "EVENT") || !strings.Contains(stdout.String(), "snapshot") || !strings.Contains(stdout.String(), "watch-human") || strings.HasPrefix(strings.TrimSpace(stdout.String()), "{") {
 		t.Fatalf("watch default output = %q", stdout.String())
 	}
 }
@@ -189,5 +220,83 @@ func TestFormatEmptyWatchSnapshotIsExplicit(t *testing.T) {
 			t.Fatalf("empty snapshot output = %q", output)
 		}
 		assertHumanLinesBounded(t, output)
+	}
+}
+
+func TestFormatWatchTableAlignsColumns(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 8, 27, 21, 8, 54, 0, time.UTC)
+	idle := registry.ActivityIdle
+	unknown := registry.ActivityUnknown
+
+	ompEvent := watchEvent{
+		Time:     at,
+		Action:   watchActionSnapshot,
+		Harness:  registry.HarnessOmp,
+		Presence: registry.PresenceLive,
+		Activity: &idle,
+		Label:    "Format watch command column alignment",
+	}
+	piEvent := watchEvent{
+		Time:     at,
+		Action:   watchActionSnapshot,
+		Harness:  registry.HarnessPi,
+		Presence: registry.PresenceLive,
+		Activity: &idle,
+		Label:    "/home/zigai/.pi/agent/sessions/--home-zigai-Projects-config--/2026-08-27T20-…",
+	}
+	locationEvent := watchEvent{
+		Time:     at,
+		Action:   watchActionLocationChanged,
+		Harness:  registry.HarnessOmp,
+		Presence: registry.PresenceLive,
+		Activity: &unknown,
+		Label:    "01a044e3-a40c-77dc-8593-f0f6a3a7c42f",
+	}
+
+	ompOutput := formatWatchTableEvent(ompEvent)
+	piOutput := formatWatchTableEvent(piEvent)
+	locOutput := formatWatchTableEvent(locationEvent)
+
+	header := formatWatchTableHeader()
+	assertHumanLinesBounded(t, header)
+
+	// Columns start at fixed character offsets:
+	// time (0), action (22), harness (42), presence (54), activity (64), label (74)
+	actionOffset := watchTimeWidth + humanColumnGap
+	harnessOffset := actionOffset + watchActionWidth + humanColumnGap
+	presenceOffset := harnessOffset + watchHarnessWidth + humanColumnGap
+	activityOffset := presenceOffset + watchPresenceWidth + humanColumnGap
+	labelOffset := activityOffset + watchActivityWidth + humanColumnGap
+
+	for name, row := range map[string]struct {
+		output   string
+		action   string
+		harness  string
+		presence string
+		activity string
+		label    string
+	}{
+		"header":           {output: header, action: "EVENT", harness: "AGENT", presence: "PRESENCE", activity: "ACTIVITY", label: "SESSION"},
+		"omp snapshot":     {output: ompOutput, action: "snapshot", harness: "omp", presence: "live", activity: "idle", label: "Format watch command column alignment"},
+		"pi snapshot":      {output: piOutput, action: "snapshot", harness: "pi", presence: "live", activity: "idle", label: "/home/zigai/.pi/agent/sessions/--home-zigai-Projects-config--/2026-08-27T20-…"},
+		"location changed": {output: locOutput, action: "location_changed", harness: "omp", presence: "live", activity: "unknown", label: "01a044e3-a40c-77dc-8593-f0f6a3a7c42f"},
+	} {
+		if !strings.HasPrefix(row.output[actionOffset:], row.action) {
+			t.Fatalf("%s: expected action %q at offset %d, got %q", name, row.action, actionOffset, row.output[actionOffset:])
+		}
+		if !strings.HasPrefix(row.output[harnessOffset:], row.harness) {
+			t.Fatalf("%s: expected harness %q at offset %d, got %q", name, row.harness, harnessOffset, row.output[harnessOffset:])
+		}
+		if !strings.HasPrefix(row.output[presenceOffset:], row.presence) {
+			t.Fatalf("%s: expected presence %q at offset %d, got %q", name, row.presence, presenceOffset, row.output[presenceOffset:])
+		}
+		if !strings.HasPrefix(row.output[activityOffset:], row.activity) {
+			t.Fatalf("%s: expected activity %q at offset %d, got %q", name, row.activity, activityOffset, row.output[activityOffset:])
+		}
+		expectedLabel := sanitizeHumanText(row.label)
+		if !strings.HasPrefix(row.output[labelOffset:], expectedLabel) {
+			t.Fatalf("%s: expected label %q at offset %d, got %q", name, expectedLabel, labelOffset, row.output[labelOffset:])
+		}
 	}
 }
