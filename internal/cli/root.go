@@ -16,7 +16,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
-
+	"unicode/utf8"
 	"github.com/spf13/cobra"
 
 	"github.com/zigai/agent-sessions/v2/internal/agentstate"
@@ -840,21 +840,6 @@ func buildFilter(o listOptions) (registry.Filter, error) {
 }
 
 func (app *application) runListSessions(ctx context.Context, o listOptions) error {
-	const (
-		listIDWidth               = 16
-		listAgentWidth            = 10
-		listSessionWidth          = 14
-		listPresenceWidth         = 8
-		listActivityWidth         = 8
-		listLocationWidth         = 18
-		listCWDWidth              = 18
-		listUpdatedWidth          = 10
-		listAbsoluteIDWidth       = 14
-		listAbsoluteSessionWidth  = 12
-		listAbsoluteLocationWidth = 16
-		listAbsoluteCWDWidth      = 14
-		listAbsoluteUpdatedWidth  = 20
-	)
 	var err error
 	o, err = normalizedListOptions(o)
 	if err != nil {
@@ -883,11 +868,68 @@ func (app *application) runListSessions(ctx context.Context, o listOptions) erro
 			watchMultiplexerLabel(s.Multiplexer), formatHumanPath(s.CWD), formatUpdatedAt(s.UpdatedAt, now, o.absoluteTime),
 		})
 	}
-	columns := []humanColumn{{heading: "ID", width: listIDWidth}, {heading: "AGENT", width: listAgentWidth}, {heading: "SESSION", width: listSessionWidth}, {heading: "PRESENCE", width: listPresenceWidth}, {heading: "ACTIVITY", width: listActivityWidth}, {heading: "LOCATION", width: listLocationWidth}, {heading: "CWD", width: listCWDWidth}, {heading: "UPDATED", width: listUpdatedWidth}}
-	if o.absoluteTime {
-		columns = []humanColumn{{heading: "ID", width: listAbsoluteIDWidth}, {heading: "AGENT", width: listAgentWidth}, {heading: "SESSION", width: listAbsoluteSessionWidth}, {heading: "PRESENCE", width: listPresenceWidth}, {heading: "ACTIVITY", width: listActivityWidth}, {heading: "LOCATION", width: listAbsoluteLocationWidth}, {heading: "CWD", width: listAbsoluteCWDWidth}, {heading: "UPDATED", width: listAbsoluteUpdatedWidth}}
-	}
+	columns := listTableColumns(rows, app.maxLineWidth())
 	return app.writeHumanTable(columns, rows)
+}
+
+func listTableColumns(rows [][]string, maxWidth int) []humanColumn {
+	if maxWidth <= 0 {
+		maxWidth = humanLineWidth
+	}
+	headings := []string{"ID", "AGENT", "SESSION", "PRESENCE", "ACTIVITY", "LOCATION", "CWD", "UPDATED"}
+	maxLen := make([]int, len(headings))
+	for i, h := range headings {
+		maxLen[i] = utf8.RuneCountInString(h)
+	}
+	for _, row := range rows {
+		for i, cell := range row {
+			if i < len(maxLen) {
+				maxLen[i] = max(maxLen[i], utf8.RuneCountInString(cell))
+			}
+		}
+	}
+
+	idWidth := max(len("ID"), min(maxLen[0], 16))
+	agentWidth := max(len("AGENT"), min(maxLen[1], 10))
+	presenceWidth := max(len("PRESENCE"), min(maxLen[3], 8))
+	activityWidth := max(len("ACTIVITY"), min(maxLen[4], 8))
+	locationWidth := max(len("LOCATION"), min(maxLen[5], 24))
+	updatedWidth := max(len("UPDATED"), maxLen[7])
+
+	gapsTotal := (len(headings) - 1) * humanColumnGap
+	fixedTotal := idWidth + agentWidth + presenceWidth + activityWidth + locationWidth + updatedWidth + gapsTotal
+
+	sessionNeeded := max(len("SESSION"), maxLen[2])
+	cwdNeeded := max(len("CWD"), maxLen[6])
+	available := maxWidth - fixedTotal
+
+	var sessionWidth, cwdWidth int
+	if available >= sessionNeeded+cwdNeeded {
+		sessionWidth = sessionNeeded
+		cwdWidth = cwdNeeded
+	} else if available > 0 {
+		totalNeeded := sessionNeeded + cwdNeeded
+		sessionWidth = max(len("SESSION"), (available*sessionNeeded)/totalNeeded)
+		cwdWidth = max(len("CWD"), available-sessionWidth)
+		if cwdWidth > cwdNeeded {
+			sessionWidth += cwdWidth - cwdNeeded
+			cwdWidth = cwdNeeded
+		}
+	} else {
+		sessionWidth = len("SESSION")
+		cwdWidth = len("CWD")
+	}
+
+	return []humanColumn{
+		{heading: "ID", width: idWidth},
+		{heading: "AGENT", width: agentWidth},
+		{heading: "SESSION", width: sessionWidth},
+		{heading: "PRESENCE", width: presenceWidth},
+		{heading: "ACTIVITY", width: activityWidth},
+		{heading: "LOCATION", width: locationWidth},
+		{heading: "CWD", width: cwdWidth},
+		{heading: "UPDATED", width: updatedWidth},
+	}
 }
 
 func normalizedListOptions(options listOptions) (listOptions, error) {

@@ -37,7 +37,7 @@ func (app *application) writeWrappedHumanTable(columns []humanColumn, rows [][]s
 }
 
 func (app *application) writeHumanTableRows(columns []humanColumn, rows [][]string, wrap bool) error {
-	if err := validateHumanColumns(columns); err != nil {
+	if err := validateHumanColumns(columns, app.maxLineWidth()); err != nil {
 		return err
 	}
 	headings := make([]string, len(columns))
@@ -85,7 +85,19 @@ func (app *application) writeWrappedHumanTableRow(columns []humanColumn, row []s
 	return nil
 }
 
-func validateHumanColumns(columns []humanColumn) error {
+func (app *application) maxLineWidth() int {
+	if app != nil && app.stdout != nil {
+		if w := terminalWidth(app.stdout); w > 0 {
+			return w
+		}
+	}
+	return humanLineWidth
+}
+
+func validateHumanColumns(columns []humanColumn, maxLineWidth int) error {
+	if maxLineWidth <= 0 {
+		maxLineWidth = humanLineWidth
+	}
 	width := max(0, len(columns)-1) * humanColumnGap
 	for _, column := range columns {
 		if column.width <= 0 {
@@ -93,8 +105,8 @@ func validateHumanColumns(columns []humanColumn) error {
 		}
 		width += column.width
 	}
-	if width > humanLineWidth {
-		return fmt.Errorf("%w: %d > %d", errHumanTableWidth, width, humanLineWidth)
+	if width > maxLineWidth {
+		return fmt.Errorf("%w: %d > %d", errHumanTableWidth, width, maxLineWidth)
 	}
 	return nil
 }

@@ -668,3 +668,31 @@ func TestVersionDefaultsToHumanOutput(t *testing.T) {
 		t.Fatalf("version default output = %q", stdout.String())
 	}
 }
+
+func TestListTableColumnsExpandsSessionAndCWDWhenWidthAllows(t *testing.T) {
+	t.Parallel()
+	rows := [][]string{
+		{"omp-5afa9c61", "omp", "Format watch command column alignment", "live", "running", "tmux:0:2:zsh:%1", "~/Projects/agent-sessions", "1s ago"},
+		{"pi-ea2cacd9", "pi", "2026-08-27T20-22-44-492Z_01a044e3-a40c-77dc-8593-f0f6a3a7c42f", "live", "idle", "tmux:0:3:zsh:%2", "~/Projects/config", "1s ago"},
+	}
+
+	// In a wide terminal (e.g. 200 columns), SESSION and CWD should not be truncated.
+	wideCols := listTableColumns(rows, 200)
+	sessionCol := wideCols[2]
+	cwdCol := wideCols[6]
+	if sessionCol.width < len("2026-08-27T20-22-44-492Z_01a044e3-a40c-77dc-8593-f0f6a3a7c42f") {
+		t.Fatalf("session width in wide terminal = %d, want >= 60", sessionCol.width)
+	}
+	if cwdCol.width < len("~/Projects/agent-sessions") {
+		t.Fatalf("CWD width in wide terminal = %d, want >= 25", cwdCol.width)
+	}
+
+	// In standard 120 width, SESSION and CWD get dynamic proportioned widths instead of static 14/18.
+	stdCols := listTableColumns(rows, 120)
+	if stdCols[2].width < 25 {
+		t.Fatalf("session width in 120 terminal = %d, want >= 25", stdCols[2].width)
+	}
+	if stdCols[6].width < 15 {
+		t.Fatalf("CWD width in 120 terminal = %d, want >= 15", stdCols[6].width)
+	}
+}
