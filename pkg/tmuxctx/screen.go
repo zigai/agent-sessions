@@ -38,15 +38,16 @@ func CapturePaneWithOptions(ctx context.Context, pane Pane, options CaptureOptio
 	if run == nil {
 		run = runTmuxWithEnv
 	}
-	lines := options.Lines
-	if lines <= 0 || lines > defaultCaptureLines {
-		lines = defaultCaptureLines
-	}
+	lines := min(options.Lines, defaultCaptureLines)
 	serverArgs, err := serverArgsForIdentity(pane.ServerIdentity)
 	if err != nil {
 		return ScreenSnapshot{}, err
 	}
-	captureArgs := append(append([]string{}, serverArgs...), "capture-pane", "-p", "-J", "-e", "-S", "-"+strconv.Itoa(lines), "-t", pane.Tmux.PaneID)
+	captureArgs := append(append([]string{}, serverArgs...), "capture-pane", "-p", "-J", "-e")
+	if lines > 0 {
+		captureArgs = append(captureArgs, "-S", "-"+strconv.Itoa(lines))
+	}
+	captureArgs = append(captureArgs, "-t", pane.Tmux.PaneID)
 	text, err := run(ctx, options.Env, captureArgs...)
 	if err != nil {
 		return ScreenSnapshot{}, fmt.Errorf("capturing pane %s: %w", pane.Tmux.PaneID, err)
@@ -56,7 +57,10 @@ func CapturePaneWithOptions(ctx context.Context, pane Pane, options CaptureOptio
 	if titleErr != nil {
 		title = ""
 	}
-	return ScreenSnapshot{Text: boundBottomLines(text, lines), Title: strings.TrimRight(title, "\r\n")}, nil
+	if lines > 0 {
+		text = boundBottomLines(text, lines)
+	}
+	return ScreenSnapshot{Text: text, Title: strings.TrimRight(title, "\r\n")}, nil
 }
 
 func boundBottomLines(text string, limit int) string {

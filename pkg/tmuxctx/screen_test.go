@@ -34,6 +34,28 @@ func TestCapturePaneUsesBoundedBottomBufferAndServer(t *testing.T) {
 	}
 }
 
+func TestCapturePaneDefaultsToVisibleViewport(t *testing.T) {
+	t.Parallel()
+	var calls [][]string
+	run := func(_ context.Context, _ Env, args ...string) (string, error) {
+		calls = append(calls, append([]string(nil), args...))
+		return "visible screen", nil
+	}
+	pane := Pane{Tmux: testTmuxContext("%8"), ServerIdentity: "-L:work", PanePID: 1, PaneTTY: "/dev/pts/2"}
+
+	snapshot, err := CapturePaneWithOptions(context.Background(), pane, CaptureOptions{Run: run})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Text != "visible screen" {
+		t.Fatalf("snapshot.Text = %q, want visible screen", snapshot.Text)
+	}
+	wantCapture := []string{"-L", "work", "capture-pane", "-p", "-J", "-e", "-t", "%8"}
+	if !reflect.DeepEqual(calls[0], wantCapture) {
+		t.Fatalf("capture args = %#v, want visible viewport %#v", calls[0], wantCapture)
+	}
+}
+
 func TestBoundBottomLinesPreservesBlankRows(t *testing.T) {
 	t.Parallel()
 	input := strings.Join(append([]string{"discard"}, append(make([]string, 99), "last")...), "\n") + "\n\n"
