@@ -360,9 +360,15 @@ func selectRegion(value string, lines []string) ([]string, error) {
 	if err != nil || count <= 0 {
 		return nil, fmt.Errorf("%w: %q", errInvalidRegion, value)
 	}
-	count = min(count, len(lines))
 	if parts[0] == "top" {
+		count = min(count, len(lines))
 		return lines[:count], nil
 	}
+
+	for len(lines) > 0 && strings.TrimSpace(lines[len(lines)-1]) == "" {
+		lines = lines[:len(lines)-1]
+	}
+	count = min(count, len(lines))
+
 	return lines[len(lines)-count:], nil
 }

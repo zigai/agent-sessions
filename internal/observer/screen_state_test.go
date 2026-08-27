@@ -14,18 +14,20 @@ import (
 	"github.com/zigai/agent-sessions/v2/pkg/tmuxctx"
 )
 
-func TestObserverDetectsScreenStateForFourTargetAgents(t *testing.T) {
+func TestObserverDetectsScreenStateForTargetAgents(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
-		harness registry.Harness
-		command string
-		screen  string
-		want    registry.Activity
+		harness      registry.Harness
+		command      string
+		screen       string
+		want         registry.Activity
+		wantFallback bool
 	}{
-		{registry.HarnessCodex, "codex", "› next task\nContext 63% used", registry.ActivityIdle},
-		{registry.HarnessClaude, "claude", "Do you want to proceed?", registry.ActivityWaiting},
-		{registry.HarnessOpenCode, "opencode", "Working · esc to interrupt", registry.ActivityRunning},
-		{registry.HarnessPi, "pi", "Type a message · Enter to send", registry.ActivityIdle},
+		{harness: registry.HarnessCodex, command: "codex", screen: "› next task\nContext 63% used", want: registry.ActivityIdle},
+		{harness: registry.HarnessClaude, command: "claude", screen: "Do you want to proceed?", want: registry.ActivityWaiting},
+		{harness: registry.HarnessOpenCode, command: "opencode", screen: "Working · esc to interrupt", want: registry.ActivityRunning, wantFallback: true},
+		{harness: registry.HarnessPi, command: "pi", screen: "Type a message · Enter to send", want: registry.ActivityIdle, wantFallback: true},
+		{harness: registry.HarnessOmp, command: "omp", screen: " ⠋ Working... (40s)", want: registry.ActivityRunning, wantFallback: true},
 	}
 	for index, test := range tests {
 		t.Run(string(test.harness), func(t *testing.T) {
@@ -46,28 +48,22 @@ func TestObserverDetectsScreenStateForFourTargetAgents(t *testing.T) {
 			if len(sessions) != 1 || sessions[0].Activity == nil || *sessions[0].Activity != test.want || sessions[0].ActivityDecision == nil || sessions[0].ActivityDecision.Authority != "screen" {
 				t.Fatalf("sessions = %#v, want one %s screen decision", sessions, test.want)
 			}
-			if (test.harness == registry.HarnessPi || test.harness == registry.HarnessOpenCode) && sessions[0].ActivityDecision.FallbackReason != "integration_report_missing" {
+			if test.wantFallback && sessions[0].ActivityDecision.FallbackReason != "integration_report_missing" {
 				t.Fatalf("screen fallback reason = %q, want integration_report_missing", sessions[0].ActivityDecision.FallbackReason)
 			}
 		})
 	}
 }
 
-func TestObserverUsesLocalOmpOverrideOnlyWhenNativeIntegrationIsMissing(t *testing.T) {
+func TestObserverUsesBundledOmpFallbackWhenNativeIntegrationIsMissing(t *testing.T) {
 	t.Parallel()
-	configDir := t.TempDir()
-	if err := os.WriteFile(
-		filepath.Join(configDir, "omp.toml"),
-		[]byte("version=1\nagent='omp'\n[[rules]]\nid='custom_footer'\nstate='idle'\nregion='bottom:12'\nany=['Codex · GPT-5.6-Sol · medium']\n"),
-		0o600,
-	); err != nil {
-		t.Fatal(err)
-	}
 	store := registry.NewFileStore(filepath.Join(t.TempDir(), "state.json"))
 	process, pane := detectionProcessPane(198, "omp")
-	options := detectionObserverOptions(store, process, pane, configDir)
+	options := detectionObserverOptions(store, process, pane, t.TempDir())
 	options.ScreenCapture = func(context.Context, tmuxctx.Pane) (tmuxctx.ScreenSnapshot, error) {
-		return tmuxctx.ScreenSnapshot{Text: "╰────────╯\n ~/Projects/config · Codex · GPT-5.6-Sol · medium 22.7%/272K"}, nil
+		text := "╰────────╯\n ~/Projects/config · Codex · GPT-5.6-Sol · medium 22.7%/1M" +
+			strings.Repeat("\n ", 20)
+		return tmuxctx.ScreenSnapshot{Text: text}, nil
 	}
 	if _, err := New(options).RunOnce(context.Background()); err != nil {
 		t.Fatal(err)
@@ -76,11 +72,57 @@ func TestObserverUsesLocalOmpOverrideOnlyWhenNativeIntegrationIsMissing(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(sessions) != 1 || sessions[0].Activity == nil || *sessions[0].Activity != registry.ActivityIdle || sessions[0].ActivityDecision == nil || sessions[0].ActivityDecision.RuleID != "custom_footer" {
-		t.Fatalf("sessions = %#v, want local OMP footer idle decision", sessions)
+	if len(sessions) != 1 ||
+		sessions[0].Activity == nil ||
+		*sessions[0].Activity != registry.ActivityIdle ||
+		sessions[0].ActivityDecision == nil ||
+		sessions[0].ActivityDecision.RuleID != "custom_input_prompt" {
+		t.Fatalf("sessions = %#v, want bundled OMP footer idle decision", sessions)
 	}
 	if sessions[0].ActivityDecision.FallbackReason != "integration_report_missing" {
 		t.Fatalf("fallback reason = %q, want integration_report_missing", sessions[0].ActivityDecision.FallbackReason)
+	}
+}
+
+func TestObserverTracksOmpScreenStateTransitions(t *testing.T) {
+	t.Parallel()
+	store := registry.NewFileStore(filepath.Join(t.TempDir(), "state.json"))
+	process, pane := detectionProcessPane(208, "omp")
+	at := time.Date(2026, 8, 25, 8, 0, 0, 0, time.UTC)
+	screen := ""
+	options := detectionObserverOptions(store, process, pane, t.TempDir())
+	options.Now = func() time.Time { return at }
+	options.ScreenCapture = func(context.Context, tmuxctx.Pane) (tmuxctx.ScreenSnapshot, error) {
+		return tmuxctx.ScreenSnapshot{Text: screen}, nil
+	}
+	observer := New(options)
+
+	transitions := []struct {
+		screen string
+		want   registry.Activity
+		rule   string
+	}{
+		{screen: " ⠋ Working... (40s)", want: registry.ActivityRunning, rule: "custom_working"},
+		{screen: "Permission required: allow / deny", want: registry.ActivityWaiting, rule: "permission_prompt"},
+		{screen: " ~/Projects/config · Codex · GPT-5.6-Sol · medium 22.7%/1M" + strings.Repeat("\n ", 20), want: registry.ActivityIdle, rule: "custom_input_prompt"},
+	}
+	for _, transition := range transitions {
+		screen = transition.screen
+		if _, err := observer.RunOnce(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		sessions, err := store.List(context.Background(), registry.Filter{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(sessions) != 1 ||
+			sessions[0].Activity == nil ||
+			*sessions[0].Activity != transition.want ||
+			sessions[0].ActivityDecision == nil ||
+			sessions[0].ActivityDecision.RuleID != transition.rule {
+			t.Fatalf("sessions = %#v, want %s via %s", sessions, transition.want, transition.rule)
+		}
+		at = at.Add(time.Second)
 	}
 }
 
@@ -202,11 +244,14 @@ func TestObserverReportsDetectionManifestLoadFailure(t *testing.T) {
 	store := registry.NewFileStore(filepath.Join(t.TempDir(), "state.json"))
 	process, pane := detectionProcessPane(298, "omp")
 	options := detectionObserverOptions(store, process, pane, configDir)
+	options.ScreenCapture = func(context.Context, tmuxctx.Pane) (tmuxctx.ScreenSnapshot, error) {
+		return tmuxctx.ScreenSnapshot{Text: "ordinary screen", Title: ""}, nil
+	}
 	result, err := New(options).RunOnce(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !result.Degraded || !strings.Contains(result.Error, "loading omp detection manifest") {
+	if !result.Degraded || !strings.Contains(result.Error, errDetectionOverrideInvalid.Error()) {
 		t.Fatalf("manifest load failure result = %#v, want degraded detection error", result)
 	}
 }

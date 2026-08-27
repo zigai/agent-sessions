@@ -413,7 +413,7 @@ func createSkippedStopSession(t *testing.T) (string, registry.Session) {
 	session, err := store.Observe(context.Background(), registry.Observation{
 		Harness: registry.HarnessCodex, Source: registry.ObservationSourceProcess, Evidence: registry.ObservationEvidenceProcessPresence,
 		Identity: registry.ObservationIdentity{SessionID: "stop-session"}, ProcessPresent: &present,
-		Process: &registry.ProcessIdentity{PID: 4242, StartIdentity: "boot:4242"}, ObservedAt: time.Now(),
+		Process: &registry.ProcessIdentity{PID: 1_000_000_000, StartIdentity: "missing:1000000000"}, ObservedAt: time.Now(),
 	})
 	if err != nil {
 		t.Fatal(err)

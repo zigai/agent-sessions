@@ -30,10 +30,9 @@ func TestDoctorRejectsInvalidLocalOnlyDetectionManifest(t *testing.T) {
 	if err := os.MkdirAll(detectionDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(detectionDir, "omp.toml"), []byte("invalid ["), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(detectionDir, "agy.toml"), []byte("invalid ["), 0o600); err != nil {
 		t.Fatal(err)
 	}
-
 	result := doctorResult{OK: true, Checks: nil, Capabilities: nil}
 	(&application{}).addDetectionManifestCheck(&result)
 	if len(result.Checks) != 1 || result.Checks[0].Name != "detection.manifests" || result.Checks[0].Status != doctorError {

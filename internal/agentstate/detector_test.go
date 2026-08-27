@@ -69,6 +69,11 @@ func TestBundledManifestsClassifyTargetAgents(t *testing.T) {
 		{registry.HarnessPi, "Type a message · Enter to send", registry.ActivityIdle, "input_prompt"},
 		{registry.HarnessPi, "API Error: Rate limit exceeded", registry.ActivityFailed, "error_prompt"},
 		{registry.HarnessPi, "Interrupted by user", registry.ActivityInterrupted, "interrupted_prompt"},
+		{registry.HarnessOmp, " ⠋ Working... (40s)", registry.ActivityRunning, "custom_working"},
+		{registry.HarnessOmp, " ~/Projects/sesh · Codex · GPT-5.6 Sol · medium 7.1%/1M" + strings.Repeat("\n ", 20), registry.ActivityIdle, "custom_input_prompt"},
+		{registry.HarnessOmp, "Permission required: allow / deny", registry.ActivityWaiting, "permission_prompt"},
+		{registry.HarnessOmp, "API Error: Rate limit exceeded", registry.ActivityFailed, "error_prompt"},
+		{registry.HarnessOmp, "Interrupted by user", registry.ActivityInterrupted, "interrupted_prompt"},
 	}
 	for _, test := range tests {
 		t.Run(string(test.harness)+"/"+test.rule, func(t *testing.T) {
@@ -272,30 +277,30 @@ func TestLoaderUsesValidOverrideAndFallsBackFromInvalidOverride(t *testing.T) {
 	}
 }
 
-func TestLoaderUsesLocalOnlyOmpOverrideWithoutChangingDefaultSupport(t *testing.T) {
+func TestLoaderUsesLocalOnlyAgyOverrideWithoutChangingDefaultSupport(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	loader := Loader{ConfigDir: dir}
-	if loader.Supports(registry.HarnessOmp) {
-		t.Fatal("OMP screen detection should require a local override")
+	if loader.Supports(registry.HarnessAgy) {
+		t.Fatal("Agy screen detection should require a local override")
 	}
-	if _, err := loader.Load(registry.HarnessOmp); err == nil {
-		t.Fatal("OMP screen manifest loaded without a local override")
+	if _, err := loader.Load(registry.HarnessAgy); err == nil {
+		t.Fatal("Agy screen manifest loaded without a local override")
 	}
 
-	path := filepath.Join(dir, "omp.toml")
-	if err := os.WriteFile(path, []byte("version=1\nagent='omp'\n[[rules]]\nid='custom_footer'\nstate='idle'\nany=['Codex · GPT-5.6-Sol · medium']\n"), 0o600); err != nil {
+	path := filepath.Join(dir, "agy.toml")
+	if err := os.WriteFile(path, []byte("version=1\nagent='agy'\n[[rules]]\nid='custom_footer'\nstate='idle'\nany=['ready']\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if !loader.Supports(registry.HarnessOmp) {
-		t.Fatal("local OMP override did not enable screen detection")
+	if !loader.Supports(registry.HarnessAgy) {
+		t.Fatal("local Agy override did not enable screen detection")
 	}
-	manifest, err := loader.Load(registry.HarnessOmp)
+	manifest, err := loader.Load(registry.HarnessAgy)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if manifest.Source != path || Evaluate(manifest, NormalizeSnapshot("Codex · GPT-5.6-Sol · medium", "")).RuleID != "custom_footer" {
-		t.Fatalf("local-only OMP override not used: %#v", manifest)
+	if manifest.Source != path || Evaluate(manifest, NormalizeSnapshot("ready", "")).RuleID != "custom_footer" {
+		t.Fatalf("local-only Agy override not used: %#v", manifest)
 	}
 }
 
@@ -355,7 +360,7 @@ func TestOmpHookAuthorityUsesNativeIntegration(t *testing.T) {
 	session := ompSession(now)
 
 	policy := PolicyFor(registry.HarnessOmp)
-	if policy.Primary != AuthorityHook || policy.ScreenFallback || policy.IntegrationValue != "omp-extension" {
+	if policy.Primary != AuthorityHook || !policy.ScreenFallback || policy.IntegrationValue != "omp-extension" {
 		t.Fatalf("OMP policy = %#v", policy)
 	}
 	evaluation := EvaluateHook(session, now)
@@ -363,18 +368,21 @@ func TestOmpHookAuthorityUsesNativeIntegration(t *testing.T) {
 		t.Fatalf("OMP hook evaluation = %#v", evaluation)
 	}
 	if ShouldDetectScreen(session, now) {
-		t.Fatal("OMP should not fall back to screen detection")
+		t.Fatal("fresh OMP hook should not fall back to screen detection")
 	}
 }
 
-func TestOmpHookAuthorityRemainsAuthoritativeWhenStale(t *testing.T) {
+func TestOmpHookAuthorityFallsBackToScreenWhenStale(t *testing.T) {
 	t.Parallel()
 	now := time.Now().UTC()
 	session := ompSession(now.Add(-registry.IntegrationActivityLease - time.Second))
 
 	evaluation := EvaluateHook(session, now)
-	if !evaluation.Active || evaluation.Fresh || !evaluation.ProcessMatches || evaluation.Reason != "integration_report_stale" {
+	if evaluation.Active || evaluation.Fresh || !evaluation.ProcessMatches || evaluation.Reason != "integration_report_stale" {
 		t.Fatalf("stale OMP hook evaluation = %#v", evaluation)
+	}
+	if !ShouldDetectScreen(session, now) {
+		t.Fatal("stale OMP hook must fall back to screen detection")
 	}
 }
 

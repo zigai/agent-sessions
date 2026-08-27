@@ -35,7 +35,7 @@ func PolicyFor(harness registry.Harness) Policy {
 	case registry.HarnessPi:
 		return Policy{Primary: AuthorityHook, ScreenFallback: true, IntegrationValue: "pi-extension"}
 	case registry.HarnessOmp:
-		return Policy{Primary: AuthorityHook, ScreenFallback: false, IntegrationValue: "omp-extension"}
+		return Policy{Primary: AuthorityHook, ScreenFallback: true, IntegrationValue: "omp-extension"}
 	case registry.HarnessCursor, registry.HarnessCopilot, registry.HarnessCline, registry.HarnessKimiCode,
 		registry.HarnessGrok, registry.HarnessGoose, registry.HarnessAgy,
 		registry.HarnessKilo, registry.HarnessDroid, registry.HarnessOpenClaw, registry.HarnessHermes:
@@ -47,10 +47,10 @@ func PolicyFor(harness registry.Harness) Policy {
 
 func SupportsScreen(harness registry.Harness) bool {
 	switch harness {
-	case registry.HarnessCodex, registry.HarnessClaude, registry.HarnessOpenCode, registry.HarnessPi:
+	case registry.HarnessCodex, registry.HarnessClaude, registry.HarnessOpenCode, registry.HarnessPi, registry.HarnessOmp:
 		return true
 	case registry.HarnessCursor, registry.HarnessCopilot, registry.HarnessCline, registry.HarnessKimiCode,
-		registry.HarnessGrok, registry.HarnessGoose, registry.HarnessOmp, registry.HarnessAgy,
+		registry.HarnessGrok, registry.HarnessGoose, registry.HarnessAgy,
 		registry.HarnessKilo, registry.HarnessDroid, registry.HarnessOpenClaw, registry.HarnessHermes:
 		return false
 	default:
