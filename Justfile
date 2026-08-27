@@ -12,9 +12,14 @@ help:
 test:
     go test ./...
 
-# Run tests with coverage
+# Run tests and display coverage
 coverage:
-    go test -cover ./...
+    #!/usr/bin/env sh
+    set -e
+    coverage_file=$(mktemp)
+    trap 'rm -f "$coverage_file"' EXIT
+    go test -coverprofile="$coverage_file" ./...
+    go tool cover -func="$coverage_file"
 
 # Run tests with the race detector
 race:
