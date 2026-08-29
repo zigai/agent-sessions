@@ -12,6 +12,8 @@ let currentSessionId: string | undefined;
 let currentSessionPath: string | undefined;
 let currentCwd: string | undefined;
 
+let lastTurnActivity: string | undefined;
+
 function updateSessionRef(ctx: any): void {
   try {
     const file = ctx?.sessionManager?.getSessionFile?.();
@@ -40,6 +42,37 @@ function addEvent(args: string[], value: unknown): void {
   if (typeof value === "string" && value.length > 0) {
     args.push("--event", value);
   }
+}
+function lastAssistantMessage(messages: unknown[]): any | undefined {
+  if (!Array.isArray(messages)) return undefined;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index] as any;
+    if (message?.role === "assistant") return message;
+  }
+  return undefined;
+}
+
+function resolveActivity(event: any, willContinue = false): string {
+  const assistant = lastAssistantMessage(event?.messages);
+  if (
+    event?.error ||
+    event?.reason === "error" ||
+    event?.status === "error" ||
+    event?.status === "failed" ||
+    assistant?.stopReason === "error"
+  ) {
+    return "failed";
+  }
+  if (
+    event?.reason === "interrupted" ||
+    event?.reason === "cancelled" ||
+    event?.interrupted === true ||
+    assistant?.stopReason === "aborted" ||
+    assistant?.stopReason === "cancelled"
+  ) {
+    return "interrupted";
+  }
+  return willContinue ? "running" : "idle";
 }
 
 function report(transition: string, ctx?: any, event?: any): void {
@@ -79,43 +112,39 @@ function report(transition: string, ctx?: any, event?: any): void {
 }
 export default function (pi: any) {
   pi.on("session_start", (event: any, ctx: any) => {
+    lastTurnActivity = undefined;
     report("idle", ctx, event);
   });
 
   pi.on("before_agent_start", (event: any, ctx: any) => {
+    lastTurnActivity = undefined;
     report("running", ctx, event);
   });
 
   pi.on("agent_start", (event: any, ctx: any) => {
+    lastTurnActivity = undefined;
     report("running", ctx, event);
   });
 
   pi.on("ui_prompt_start", (event: any, ctx: any) => {
     report("waiting", ctx, event);
   });
-
   pi.on("ui_prompt_end", (event: any, ctx: any) => {
     report(ctx.isIdle() ? "idle" : "running", ctx, event);
   });
 
   pi.on("agent_settled", (event: any, ctx: any) => {
-    if (event?.error || event?.reason === "error" || event?.status === "error" || event?.status === "failed") {
-      report("failed", ctx, event);
-    } else if (event?.reason === "interrupted" || event?.reason === "cancelled" || event?.interrupted === true) {
-      report("interrupted", ctx, event);
-    } else {
-      report("idle", ctx, event);
+    if (lastTurnActivity === "interrupted" || lastTurnActivity === "failed") {
+      report(lastTurnActivity, ctx, event);
+      return;
     }
+    report(resolveActivity(event, false), ctx, event);
   });
 
   pi.on("agent_end", (event: any, ctx: any) => {
-    if (event?.error || event?.reason === "error" || event?.status === "error" || event?.status === "failed") {
-      report("failed", ctx, event);
-    } else if (event?.reason === "interrupted" || event?.reason === "cancelled" || event?.interrupted === true) {
-      report("interrupted", ctx, event);
-    } else {
-      report(event?.willContinue === true ? "running" : "idle", ctx, event);
-    }
+    const activity = resolveActivity(event, event?.willContinue === true);
+    lastTurnActivity = activity;
+    report(activity, ctx, event);
   });
 
   pi.on("session_shutdown", (event: any, ctx: any) => {

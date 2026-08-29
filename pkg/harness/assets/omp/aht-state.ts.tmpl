@@ -372,13 +372,26 @@ export default function (pi: any) {
       holdRetry(retryable, event);
       return;
     }
-    if (event?.reason === "interrupted" || event?.reason === "cancelled" || event?.interrupted === true) {
-      queueState("interrupted", event?.reason, event);
+    const assistant = lastAssistantMessage(Array.isArray(event?.messages) ? event.messages : []);
+    if (
+      event?.reason === "interrupted" ||
+      event?.reason === "cancelled" ||
+      event?.interrupted === true ||
+      assistant?.stopReason === "aborted" ||
+      assistant?.stopReason === "cancelled"
+    ) {
+      queueState("interrupted", event?.reason ?? assistant?.errorMessage ?? "interrupted", event);
       return;
     }
-    if (event?.error || event?.reason === "error" || event?.status === "error" || event?.status === "failed") {
+    if (
+      event?.error ||
+      event?.reason === "error" ||
+      event?.status === "error" ||
+      event?.status === "failed" ||
+      assistant?.stopReason === "error"
+    ) {
       failureActive = true;
-      failureMessage = String(event?.error?.message ?? event?.error ?? event?.reason ?? "agent failed");
+      failureMessage = String(assistant?.errorMessage ?? event?.error?.message ?? event?.error ?? event?.reason ?? "agent failed");
       publishDesired(event);
       return;
     }

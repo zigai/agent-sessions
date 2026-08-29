@@ -74,6 +74,10 @@ type Service struct {
 	executor CommandExecutor
 }
 
+type legacyMigrator interface {
+	migrateLegacy(ctx context.Context, executor CommandExecutor, dryRun bool) (bool, error)
+}
+
 type osCommandExecutor struct{}
 
 func (osCommandExecutor) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
@@ -207,24 +211,7 @@ func (s *Service) apply(ctx context.Context, options Options, update bool) (Resu
 	result.Installed = installed
 	result.Current = installed && string(content) == backend.content()
 	if installed && result.Current {
-		running, _, err := backend.running(ctx, s.executor)
-		if err != nil {
-			return result, err
-		}
-		if running {
-			result.Running = true
-			result.Message = "already enabled"
-			return result, nil
-		}
-		if options.DryRun {
-			result.Message = "would start"
-			return result, nil
-		}
-		if err := backend.load(ctx, s.executor); err != nil {
-			return result, err
-		}
-		result.Running, result.Changed, result.Message = true, true, "started"
-		return result, nil
+		return s.applyCurrent(ctx, options, backend, result)
 	}
 	if installed && !result.Current && !update {
 		result.Message = "stale; run update"
@@ -255,7 +242,64 @@ func (s *Service) apply(ctx context.Context, options Options, update bool) (Resu
 	if installed {
 		result.Message = "updated"
 	}
+	if _, err := migrateLegacyService(ctx, backend, s.executor, false); err != nil {
+		return result, err
+	}
 	return result, nil
+}
+
+func (s *Service) applyCurrent(ctx context.Context, options Options, backend backend, result Result) (Result, error) {
+	running, _, err := backend.running(ctx, s.executor)
+	if err != nil {
+		return result, err
+	}
+	if !running {
+		if options.DryRun {
+			result.Message = "would start"
+			return result, nil
+		}
+		if err := backend.load(ctx, s.executor); err != nil {
+			return result, err
+		}
+		result.Running, result.Changed, result.Message = true, true, "started"
+		migrated, migrateErr := migrateLegacyService(ctx, backend, s.executor, false)
+		if migrateErr != nil {
+			return result, migrateErr
+		}
+		if migrated {
+			result.Message = "started and migrated legacy service"
+		}
+		return result, nil
+	}
+
+	result.Running = true
+	result.Message = "already enabled"
+	migrated, err := migrateLegacyService(ctx, backend, s.executor, options.DryRun)
+	if err != nil {
+		return result, err
+	}
+	if !migrated {
+		return result, nil
+	}
+	result.Changed = !options.DryRun
+	if options.DryRun {
+		result.Message = "would migrate legacy service"
+	} else {
+		result.Message = "migrated legacy service"
+	}
+	return result, nil
+}
+
+func migrateLegacyService(ctx context.Context, backend backend, executor CommandExecutor, dryRun bool) (bool, error) {
+	migrator, ok := backend.(legacyMigrator)
+	if !ok {
+		return false, nil
+	}
+	migrated, err := migrator.migrateLegacy(ctx, executor, dryRun)
+	if err != nil {
+		return false, fmt.Errorf("migrate legacy observer service: %w", err)
+	}
+	return migrated, nil
 }
 
 func (s *Service) rollbackDefinition(

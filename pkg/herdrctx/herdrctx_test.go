@@ -70,6 +70,26 @@ func TestListPanesUsesSnapshotProcessInfoAndSemanticState(t *testing.T) {
 	}
 }
 
+func TestListPanesSkipsStoppedSessions(t *testing.T) {
+	t.Parallel()
+	var calls [][]string
+	run := func(_ context.Context, _ map[string]string, args ...string) (string, error) {
+		calls = append(calls, append([]string(nil), args...))
+		if strings.Join(args, " ") == "session list --json" {
+			return `{"sessions":[{"default":true,"name":"default","running":false}]}`, nil
+		}
+		return "", errUnexpectedCommand
+	}
+
+	panes, err := ListPanesWithOptions(context.Background(), ListOptions{Run: run})
+	if err != nil || len(panes) != 0 {
+		t.Fatalf("ListPanesWithOptions() = %#v, %v", panes, err)
+	}
+	if len(calls) != 1 || strings.Join(calls[0], " ") != "session list --json" {
+		t.Fatalf("stopped session triggered API calls: %#v", calls)
+	}
+}
+
 func TestListPanesSkipsWhenHerdrIsNotInstalled(t *testing.T) {
 	t.Parallel()
 	panes, err := ListPanesWithOptions(context.Background(), ListOptions{LookPath: func(string) (string, error) {

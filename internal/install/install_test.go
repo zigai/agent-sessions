@@ -889,7 +889,7 @@ func TestInstallPiWritesExtension(t *testing.T) {
 		`pi.on("ui_prompt_end"`,
 		`report(ctx.isIdle() ? "idle" : "running", ctx, event)`,
 		"AHT_INTEGRATION_ID=pi",
-		"AHT_INTEGRATION_VERSION=9",
+		"AHT_INTEGRATION_VERSION=10",
 		`"report", "pi"`,
 		`"--observed-at", observedAt`,
 		"addEvent(args, event?.type)",
@@ -949,7 +949,7 @@ func TestInstallOmpWritesExtension(t *testing.T) {
 		`retryableErrorPattern`,
 		`entry?.type === "session_init"`,
 		"if (isSubagentSession(ctx)) return Promise.resolve()",
-		"AHT_INTEGRATION_VERSION=10",
+		"AHT_INTEGRATION_VERSION=11",
 	}, "oh-my-pi extension")
 	if strings.Contains(result.Snippet, `pi.on("input"`) {
 		t.Fatalf("OMP extension must not treat local interactive input as agent activity: %q", result.Snippet)

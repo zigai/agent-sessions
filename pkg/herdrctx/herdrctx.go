@@ -167,7 +167,7 @@ func parseSessions(output string) ([]string, error) {
 			continue
 		}
 		record, ok := item.(map[string]any)
-		if !ok || boolField(record, "exited", "dead") {
+		if !ok || boolField(record, "exited", "dead") || explicitlyNotRunning(record) {
 			continue
 		}
 		name := stringField(record, "name", "session_name", "id")
@@ -394,6 +394,15 @@ func boolField(record map[string]any, keys ...string) bool {
 		}
 	}
 	return false
+}
+
+func explicitlyNotRunning(record map[string]any) bool {
+	running, present := record["running"]
+	if !present {
+		return false
+	}
+	value, valid := running.(bool)
+	return valid && !value
 }
 
 func stringSliceField(record map[string]any, keys ...string) []string {

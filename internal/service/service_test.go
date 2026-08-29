@@ -97,6 +97,59 @@ func TestInstallUsesAtomicContentAndManagerArgv(t *testing.T) {
 	}
 }
 
+func TestInstallMigratesManagedLegacySystemdUnit(t *testing.T) {
+	config := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", config)
+	legacyPath := filepath.Join(config, "systemd", "user", legacyLinuxUnitName)
+	if err := os.MkdirAll(filepath.Dir(legacyPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	legacyContent := "# " + legacyManagedMarker + "\n# version: 4\n[Service]\n"
+	if err := os.WriteFile(legacyPath, []byte(legacyContent), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	executor := &recordingExecutor{}
+	result, err := New(executor).Install(context.Background(), Options{Binary: "/bin/aht", StorePath: "/tmp/store"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Installed || !result.Running {
+		t.Fatalf("unexpected result: %+v", result)
+	}
+	if _, err := os.Stat(legacyPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("legacy unit was not removed: %v", err)
+	}
+	wantTail := [][]string{
+		{"systemctl", "--user", "disable", "--now", legacyLinuxUnitName},
+		{"systemctl", "--user", "daemon-reload"},
+	}
+	if len(executor.calls) != 4 || !reflect.DeepEqual(executor.calls[2:], wantTail) {
+		t.Fatalf("calls = %#v, want migration tail %#v", executor.calls, wantTail)
+	}
+}
+
+func TestInstallPreservesForeignLegacySystemdUnit(t *testing.T) {
+	config := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", config)
+	legacyPath := filepath.Join(config, "systemd", "user", legacyLinuxUnitName)
+	if err := os.MkdirAll(filepath.Dir(legacyPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(legacyPath, []byte("foreign"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := New(&recordingExecutor{}).Install(context.Background(), Options{Binary: "/bin/aht", StorePath: "/tmp/store"})
+	if !errors.Is(err, ErrForeign) || !result.Installed || !result.Running {
+		t.Fatalf("Install() = %+v, %v; want running current service and ErrForeign", result, err)
+	}
+	content, readErr := os.ReadFile(legacyPath)
+	if readErr != nil || string(content) != "foreign" {
+		t.Fatalf("foreign legacy unit changed: %q, %v", content, readErr)
+	}
+}
+
 func TestInstallDryRunAndForeignRefusal(t *testing.T) {
 	config := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", config)

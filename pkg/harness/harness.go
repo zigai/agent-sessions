@@ -55,8 +55,8 @@ type Definition struct {
 
 const (
 	IntegrationVersion    = 7
-	piIntegrationVersion  = 9
-	ompIntegrationVersion = 10
+	piIntegrationVersion  = 10
+	ompIntegrationVersion = 11
 )
 
 // IntegrationVersionFor returns the managed artifact generation for a harness.

@@ -795,6 +795,33 @@ func TestSetupDryRunCombinesIntegrationAndTracker(t *testing.T) {
 	}
 }
 
+func TestSetupEnablesTrackerWhenIntegrationFails(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	t.Setenv(registry.StateDirEnv, filepath.Join(home, "state"))
+	binDir := t.TempDir()
+	systemctlPath := filepath.Join(binDir, "systemctl")
+	if err := os.WriteFile(systemctlPath, []byte("#!/bin/sh\nexit 0\n"), 0o600); err != nil {
+		t.Fatalf("writing fake systemctl: %v", err)
+	}
+	if err := os.Chmod(systemctlPath, 0o700); err != nil {
+		t.Fatalf("making fake systemctl executable: %v", err)
+	}
+	t.Setenv("PATH", binDir)
+
+	var stdout bytes.Buffer
+	root := NewRootCommand(&stdout, &bytes.Buffer{})
+	root.SetArgs([]string{"--store", filepath.Join(home, "sessions.json"), "manage", "setup", "openclaw", "--binary", "/bin/aht"})
+	err := root.ExecuteContext(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "OpenClaw CLI is required") {
+		t.Fatalf("setup error = %v, want missing OpenClaw CLI", err)
+	}
+	if !strings.Contains(stdout.String(), "tracker: installed") {
+		t.Fatalf("setup did not continue to tracker after integration failure: %q", stdout.String())
+	}
+}
+
 func TestAgentSelectionSupportsMultipleDeduplicatedAgentsAndAll(t *testing.T) {
 	t.Parallel()
 	selected, err := selectedHarnesses([]string{"codex", "claude", "codex"}, false)

@@ -50,28 +50,31 @@ func (app *application) newSetupCommand() *cobra.Command {
 		Short: "Set up harness integrations and start background tracking",
 		Args:  cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			integrations, err := app.installIntegrations(cmd.Context(), args, options)
-			if err != nil {
-				return err
-			}
+			integrations, integrationErr := app.installIntegrations(cmd.Context(), args, options)
 			serviceConfig.binary = options.binary
 			serviceConfig.dryRun = options.dryRun
 			serviceOptions, err := app.parseServiceOptions(serviceConfig)
 			if err != nil {
-				return err
+				return errors.Join(integrationErr, err)
 			}
-			tracker, err := runServiceOperation(cmd.Context(), "update", serviceOptions)
-			if err != nil {
-				return fmt.Errorf("enable tracker: %w", err)
+			tracker, trackerErr := runServiceOperation(cmd.Context(), "update", serviceOptions)
+			if trackerErr != nil {
+				trackerErr = fmt.Errorf("enable tracker: %w", trackerErr)
 			}
 			result := setupResult{Integrations: integrations, Tracker: tracker}
 			if app.outputJSON {
-				return app.writeJSON(result)
+				if err := app.writeJSON(result); err != nil {
+					return err
+				}
+				return errors.Join(integrationErr, trackerErr)
 			}
 			if err := app.writeIntegrationResults(integrations, false); err != nil {
 				return err
 			}
-			return app.writef("tracker: %s\nnext: aht list\n", tracker.Message)
+			if err := app.writef("tracker: %s\nnext: aht list\n", tracker.Message); err != nil {
+				return err
+			}
+			return errors.Join(integrationErr, trackerErr)
 		},
 	}
 	flags := command.Flags()
