@@ -6,11 +6,11 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/zigai/agent-sessions/v2/pkg/registry"
+	"github.com/zigai/aht/v2/pkg/registry"
 )
 
 const (
-	grokHookFileName      = "agent-sessions-state.json"
+	grokHookFileName      = "aht-state.json"
 	grokIntegrationSource = "grok-hook"
 )
 

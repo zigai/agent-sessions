@@ -10,27 +10,27 @@ import (
 	"strings"
 	"testing"
 
-	harnesspkg "github.com/zigai/agent-sessions/v2/pkg/harness"
-	"github.com/zigai/agent-sessions/v2/pkg/registry"
+	harnesspkg "github.com/zigai/aht/v2/pkg/harness"
+	"github.com/zigai/aht/v2/pkg/registry"
 )
 
 const (
-	testInstallBinary     = "/usr/local/bin/agent-sessions"
-	piExtensionName       = "agent-sessions-state.ts"
-	ompExtensionName      = "agent-sessions-state.ts"
-	openCodePluginName    = "agent-sessions-state.ts"
-	kiloPluginName        = "agent-sessions-state.ts"
-	agyPluginName         = "agent-sessions-state"
-	agyMarkerFileName     = ".agent-sessions-managed"
+	testInstallBinary     = "/usr/local/bin/aht"
+	piExtensionName       = "aht-state.ts"
+	ompExtensionName      = "aht-state.ts"
+	openCodePluginName    = "aht-state.ts"
+	kiloPluginName        = "aht-state.ts"
+	agyPluginName         = "aht-state"
+	agyMarkerFileName     = ".aht-managed"
 	agyImportManifestName = "import_manifest.json"
 	agyImportSource       = "antigravity"
 	agyImportComponent    = "hooks"
-	copilotHookFileName   = "agent-sessions.json"
-	goosePluginName       = "agent-sessions-state"
-	gooseMarkerFileName   = ".agent-sessions-managed"
-	kimiCodeManagedStart  = "# BEGIN agent-sessions managed integration: kimi-code"
-	kimiCodeManagedEnd    = "# END agent-sessions managed integration: kimi-code"
-	grokHookFileName      = "agent-sessions-state.json"
+	copilotHookFileName   = "aht.json"
+	goosePluginName       = "aht-state"
+	gooseMarkerFileName   = ".aht-managed"
+	kimiCodeManagedStart  = "# BEGIN aht managed integration: kimi-code"
+	kimiCodeManagedEnd    = "# END aht managed integration: kimi-code"
+	grokHookFileName      = "aht-state.json"
 )
 
 func TestContextAwareIntegrationEntryPointsPreserveCancellation(t *testing.T) {
@@ -125,7 +125,7 @@ func TestInstallCodexReplacesManagedHooks(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatalf("creating codex dir: %v", err)
 	}
-	oldConfig := `{"hooks":{"SessionStart":[{"matcher":"startup|resume","hooks":[{"type":"command","command":"old-agent-sessions report --harness codex --state idle --source codex-hook"}]}]}}`
+	oldConfig := `{"hooks":{"SessionStart":[{"matcher":"startup|resume","hooks":[{"type":"command","command":"old-aht report --harness codex --state idle --source codex-hook"}]}]}}`
 	if err := os.WriteFile(path, []byte(oldConfig), 0o600); err != nil {
 		t.Fatalf("writing old hooks: %v", err)
 	}
@@ -133,7 +133,7 @@ func TestInstallCodexReplacesManagedHooks(t *testing.T) {
 	requireManagedReplacement(t, managedReplacementCase{
 		Harness:              registry.HarnessCodex,
 		Path:                 path,
-		RemovedText:          "old-agent-sessions",
+		RemovedText:          "old-aht",
 		RequiredText:         []string{"--raw-stdin", "--quiet"},
 		FirstChangeMessage:   "expected codex install to replace old managed hook",
 		SecondChangedMessage: "expected second codex install to be idempotent",
@@ -173,7 +173,7 @@ func TestInstallClaudeWritesHooks(t *testing.T) {
 	requireTextContains(t, string(data), []string{
 		"--raw-stdin",
 		"--quiet",
-		"agent_sessions_integration=claude-hook",
+		"aht_integration=claude-hook",
 		managedMarker,
 	})
 }
@@ -223,7 +223,7 @@ func TestInstallClaudeReplacesManagedHooks(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatalf("creating claude dir: %v", err)
 	}
-	oldConfig := `{"hooks":{"SessionStart":[{"matcher":"startup|resume","hooks":[{"type":"command","command":"old-agent-sessions report --harness claude --state idle --source claude-hook --attribute agent_sessions_integration=claude-hook","statusMessage":"agent-sessions managed integration"}]}]}}`
+	oldConfig := `{"hooks":{"SessionStart":[{"matcher":"startup|resume","hooks":[{"type":"command","command":"old-aht report --harness claude --state idle --source claude-hook --attribute aht_integration_version=5 --attribute aht_integration=claude-hook","statusMessage":"aht managed integration"}]}]}}`
 	if err := os.WriteFile(path, []byte(oldConfig), 0o600); err != nil {
 		t.Fatalf("writing old hooks: %v", err)
 	}
@@ -231,8 +231,8 @@ func TestInstallClaudeReplacesManagedHooks(t *testing.T) {
 	requireManagedReplacement(t, managedReplacementCase{
 		Harness:              registry.HarnessClaude,
 		Path:                 path,
-		RemovedText:          "old-agent-sessions",
-		RequiredText:         []string{"--raw-stdin", "agent_sessions_integration_version=5"},
+		RemovedText:          "old-aht",
+		RequiredText:         []string{"--raw-stdin", "aht_integration_version=7"},
 		FirstChangeMessage:   "expected claude install to replace old managed hook",
 		SecondChangedMessage: "expected second claude install to be idempotent",
 	})
@@ -334,7 +334,7 @@ func TestInstallCursorWritesHooks(t *testing.T) {
 	text := string(data)
 	requireTextContainsAll(t, text, []string{
 		"--raw-stdin-defaults-only",
-		"agent_sessions_integration=cursor-hook",
+		"aht_integration=cursor-hook",
 		"continue",
 	}, "cursor hooks")
 	if strings.Contains(text, "--raw-stdin ") {
@@ -349,7 +349,7 @@ func TestInstallCursorReplacesManagedHooks(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatalf("creating cursor dir: %v", err)
 	}
-	oldConfig := `{"version":1,"hooks":{"sessionStart":[{"command":"./user-hook.sh"},{"command":"old-agent-sessions report --harness cursor --state idle --source cursor-hook --attribute agent_sessions_integration=cursor-hook"}]}}`
+	oldConfig := `{"version":1,"hooks":{"sessionStart":[{"command":"./user-hook.sh"},{"command":"old-aht report --harness cursor --state idle --source cursor-hook --attribute aht_integration=cursor-hook"}]}}`
 	if err := os.WriteFile(path, []byte(oldConfig), 0o600); err != nil {
 		t.Fatalf("writing old hooks: %v", err)
 	}
@@ -374,7 +374,7 @@ func TestInstallCursorReplacesManagedHooks(t *testing.T) {
 		t.Fatalf("reading installed hooks: %v", err)
 	}
 	text := string(data)
-	if strings.Contains(text, "old-agent-sessions") {
+	if strings.Contains(text, "old-aht") {
 		t.Fatalf("expected old managed hook to be removed: %s", text)
 	}
 	if !strings.Contains(text, "./user-hook.sh") {
@@ -437,7 +437,7 @@ func TestInstallCopilotWritesHooks(t *testing.T) {
 	text := string(readTestFile(t, result.Path, "reading copilot hooks text"))
 	requireTextContainsAll(t, text, []string{
 		"--raw-stdin-defaults-only",
-		"agent_sessions_integration=copilot-hook",
+		"aht_integration=copilot-hook",
 		"copilot_hook_event=preToolUse",
 		managedMarker,
 		"|| true",
@@ -447,7 +447,7 @@ func TestInstallCopilotWritesHooks(t *testing.T) {
 func TestInstallClineWritesNativePlugin(t *testing.T) {
 	clineDir := filepath.Join(t.TempDir(), ".cline")
 	t.Setenv("CLINE_DIR", clineDir)
-	pluginDir := filepath.Join(clineDir, "plugins", "agent-sessions-state")
+	pluginDir := filepath.Join(clineDir, "plugins", "aht-state")
 
 	result, err := Run(Options{
 		Harness:      registry.HarnessCline,
@@ -528,7 +528,7 @@ func requireClineAgentPlugin(t *testing.T, pluginDir string) {
 		"ctx?.workspaceInfo?.rootPath",
 		"snapshot.runId",
 		"--pid",
-		"agent_sessions_integration=cline-plugin",
+		"aht_integration=cline-plugin",
 		"child.on(\"error\", () => {})",
 	}, "Cline AgentPlugin")
 	if strings.Contains(text, "context.input") || strings.Contains(text, "context.result") || strings.Contains(text, "outputText") {
@@ -538,19 +538,19 @@ func requireClineAgentPlugin(t *testing.T, pluginDir string) {
 
 func requireClinePluginMarker(t *testing.T, pluginDir string) {
 	t.Helper()
-	marker := string(readTestFile(t, filepath.Join(pluginDir, ".agent-sessions-managed"), "reading Cline plugin marker"))
+	marker := string(readTestFile(t, filepath.Join(pluginDir, ".aht-managed"), "reading Cline plugin marker"))
 	requireTextContainsAll(t, marker, []string{
 		managedMarker,
-		"AGENT_SESSIONS_INTEGRATION_ID=cline",
-		"AGENT_SESSIONS_INTEGRATION_VERSION=6",
-		"AGENT_SESSIONS_SOURCE=cline-plugin",
+		"AHT_INTEGRATION_ID=cline",
+		"AHT_INTEGRATION_VERSION=8",
+		"AHT_SOURCE=cline-plugin",
 	}, "Cline plugin marker")
 }
 
 func TestInstallClineRequiresForceForForeignPlugin(t *testing.T) {
 	clineDir := filepath.Join(t.TempDir(), ".cline")
 	t.Setenv("CLINE_DIR", clineDir)
-	pluginDir := filepath.Join(clineDir, "plugins", "agent-sessions-state")
+	pluginDir := filepath.Join(clineDir, "plugins", "aht-state")
 	if err := os.MkdirAll(pluginDir, 0o700); err != nil {
 		t.Fatalf("creating Cline plugin dir: %v", err)
 	}
@@ -579,7 +579,7 @@ func TestInstallClineMigratesManagedLegacyHooks(t *testing.T) {
 		t.Fatal(err)
 	}
 	managedPath := filepath.Join(hooksDir, "TaskStart.sh")
-	managed := "#!/bin/sh\n# " + managedMarker + "\n# AGENT_SESSIONS_INTEGRATION_ID=cline\n# AGENT_SESSIONS_INTEGRATION_VERSION=3\n"
+	managed := "#!/bin/sh\n# " + managedMarker + "\n# AHT_INTEGRATION_ID=cline\n# AHT_INTEGRATION_VERSION=3\n"
 	if err := os.WriteFile(managedPath, []byte(managed), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -792,9 +792,26 @@ func TestInstallShimRejectsManagedShimTarget(t *testing.T) {
 	}
 }
 
+func writeStalePiExtension(t *testing.T, dir string) string {
+	t.Helper()
+	path := filepath.Join(dir, "extensions", piExtensionName)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	stale := `"aht managed integration";
+"AHT_INTEGRATION_ID=pi";
+"AHT_INTEGRATION_VERSION=5";
+`
+	if err := os.WriteFile(path, []byte(stale), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
 func TestInstallPiWritesExtension(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("PI_CODING_AGENT_DIR", dir)
+	path := writeStalePiExtension(t, dir)
 
 	result, err := Run(Options{
 		Harness:      registry.HarnessPi,
@@ -810,7 +827,7 @@ func TestInstallPiWritesExtension(t *testing.T) {
 	if !result.Changed {
 		t.Fatal("expected pi install to report changed")
 	}
-	if result.Path != filepath.Join(dir, "extensions", piExtensionName) {
+	if result.Path != path {
 		t.Fatalf("unexpected path %q", result.Path)
 	}
 	if !strings.Contains(result.Snippet, `pi.on("agent_start"`) {
@@ -819,7 +836,7 @@ func TestInstallPiWritesExtension(t *testing.T) {
 	if !strings.Contains(result.Snippet, `pi.on("before_agent_start"`) {
 		t.Fatalf("expected before_agent_start hook in snippet: %q", result.Snippet)
 	}
-	if !strings.Contains(result.Snippet, "AGENT_SESSIONS_INTEGRATION_ID=pi") {
+	if !strings.Contains(result.Snippet, "AHT_INTEGRATION_ID=pi") {
 		t.Fatalf("expected integration id in snippet: %q", result.Snippet)
 	}
 	if !strings.Contains(result.Snippet, `"report", "pi"`) {
@@ -855,7 +872,7 @@ func TestInstallOmpWritesExtension(t *testing.T) {
 		t.Fatalf("unexpected path %q", result.Path)
 	}
 	requireTextContainsAll(t, result.Snippet, []string{
-		"AGENT_SESSIONS_INTEGRATION_ID=omp",
+		"AHT_INTEGRATION_ID=omp",
 		`pi.on("session_start"`,
 		`pi.on("agent_end"`,
 		`event?.willContinue === true`,
@@ -879,7 +896,7 @@ func TestInstallOmpWritesExtension(t *testing.T) {
 		`retryableErrorPattern`,
 		`entry?.type === "session_init"`,
 		"if (isSubagentSession(ctx)) return Promise.resolve()",
-		"AGENT_SESSIONS_INTEGRATION_VERSION=7",
+		"AHT_INTEGRATION_VERSION=9",
 	}, "oh-my-pi extension")
 	if strings.Contains(result.Snippet, `pi.on("input"`) {
 		t.Fatalf("OMP extension must not treat local interactive input as agent activity: %q", result.Snippet)
@@ -908,7 +925,7 @@ func TestPiAndOmpRefuseToOverwriteSharedExtension(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(current) != string(original) || !strings.Contains(string(current), "AGENT_SESSIONS_INTEGRATION_ID=pi") {
+	if string(current) != string(original) || !strings.Contains(string(current), "AHT_INTEGRATION_ID=pi") {
 		t.Fatalf("Pi extension changed after refused OMP install: %s", current)
 	}
 }
@@ -960,7 +977,7 @@ func TestInstallOpenCodeWritesPlugin(t *testing.T) {
 	if result.Path != filepath.Join(dir, "opencode", "plugins", openCodePluginName) {
 		t.Fatalf("unexpected path %q", result.Path)
 	}
-	if !strings.Contains(result.Snippet, "AGENT_SESSIONS_INTEGRATION_ID=opencode") {
+	if !strings.Contains(result.Snippet, "AHT_INTEGRATION_ID=opencode") {
 		t.Fatalf("expected integration id in snippet: %q", result.Snippet)
 	}
 	if !strings.Contains(result.Snippet, `event: async ({ event }`) {
@@ -999,16 +1016,16 @@ func TestInstallKiloWritesPlugin(t *testing.T) {
 		t.Fatalf("unexpected path %q", result.Path)
 	}
 	requireTextContainsAll(t, result.Snippet, []string{
-		"AGENT_SESSIONS_INTEGRATION_ID=kilo",
-		`export default { id: "agent-sessions-state", server: AgentSessionsPlugin };`,
+		"AHT_INTEGRATION_ID=kilo",
+		`export default { id: "aht-state", server: AHTPlugin };`,
 		`event: async ({ event }`,
 		`"permission.asked"`,
 		`"session.deleted"`,
 		`state === "gone" ? "--presence"`,
-		`"AGENT_SESSIONS_INTEGRATION_VERSION=5"`,
+		`"AHT_INTEGRATION_VERSION=7"`,
 		`"--observed-at", observedAt`,
 		`"kilo_status"`,
-		`"agent_sessions_integration", source`,
+		`"aht_integration", source`,
 	}, "kilo snippet")
 }
 
@@ -1019,8 +1036,8 @@ func TestInstallKiloReplacesManagedPlugin(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatalf("creating kilo plugin dir: %v", err)
 	}
-	oldPlugin := `"agent-sessions managed integration";
-const old = "old-agent-sessions";
+	oldPlugin := `"aht managed integration";
+const old = "old-aht";
 `
 	if err := os.WriteFile(path, []byte(oldPlugin), 0o600); err != nil {
 		t.Fatalf("writing old plugin: %v", err)
@@ -1046,7 +1063,7 @@ const old = "old-agent-sessions";
 		t.Fatalf("reading installed plugin: %v", err)
 	}
 	text := string(data)
-	if strings.Contains(text, "old-agent-sessions") {
+	if strings.Contains(text, "old-aht") {
 		t.Fatalf("expected old managed plugin to be removed: %s", text)
 	}
 	second, err := Run(Options{
@@ -1150,6 +1167,14 @@ func TestInstallAgyRequiresForceForForeignPlugin(t *testing.T) {
 func TestInstallGooseWritesPlugin(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	pluginPath := filepath.Join(home, ".agents", "plugins", goosePluginName)
+	if err := os.MkdirAll(pluginPath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	staleMarker := "aht managed integration\nAHT_INTEGRATION_ID=goose\nAHT_INTEGRATION_VERSION=5\n"
+	if err := os.WriteFile(filepath.Join(pluginPath, gooseMarkerFileName), []byte(staleMarker), 0o600); err != nil {
+		t.Fatal(err)
+	}
 
 	result, err := Run(Options{
 		Harness:      registry.HarnessGoose,
@@ -1165,7 +1190,7 @@ func TestInstallGooseWritesPlugin(t *testing.T) {
 	if !result.Changed {
 		t.Fatal("expected goose install to report changed")
 	}
-	if result.Path != filepath.Join(home, ".agents", "plugins", goosePluginName) {
+	if result.Path != pluginPath {
 		t.Fatalf("unexpected path %q", result.Path)
 	}
 
@@ -1173,6 +1198,10 @@ func TestInstallGooseWritesPlugin(t *testing.T) {
 	requireGoosePluginHooks(t, result.Path)
 	requireGoosePluginScript(t, result.Path)
 	requireGoosePluginMarker(t, result.Path)
+	marker := readTestFile(t, filepath.Join(pluginPath, gooseMarkerFileName), "reading updated Goose marker")
+	if !strings.Contains(string(marker), "AHT_INTEGRATION_VERSION=7") {
+		t.Fatalf("stale Goose integration was not updated: %s", marker)
+	}
 
 	second, err := Run(Options{
 		Harness:      registry.HarnessGoose,
@@ -1251,8 +1280,8 @@ func TestInstallDroidWritesHooks(t *testing.T) {
 	text := string(data)
 	requireTextContainsAll(t, text, []string{
 		"--raw-stdin-defaults-only",
-		"agent_sessions_integration=droid-hook",
-		"agent_sessions_integration_version=5",
+		"aht_integration=droid-hook",
+		"aht_integration_version=7",
 	}, "droid hooks")
 	if strings.Contains(text, "statusMessage") {
 		t.Fatalf("expected Droid hooks not to include unsupported statusMessage field: %s", text)
@@ -1329,8 +1358,8 @@ func TestInstallKimiCodeWritesHooks(t *testing.T) {
 		`event = "SessionEnd"` + "\nmatcher = \"exit\"",
 		"--raw-stdin",
 		"--quiet",
-		"agent_sessions_integration=kimi-code-hook",
-		"agent_sessions_integration_version=5",
+		"aht_integration=kimi-code-hook",
+		"aht_integration_version=7",
 		managedMarker,
 		"--activity idle --event SessionStart",
 		"--activity running --event UserPromptSubmit",
@@ -1366,7 +1395,7 @@ func TestInstallKimiCodeReplacesManagedBlockAndPreservesConfig(t *testing.T) {
 		kimiCodeManagedStart,
 		"[[hooks]]",
 		`event = "` + hookEventSessionStart + `"`,
-		`command = "old-agent-sessions report --harness kimi-code --source kimi-code-hook"`,
+		`command = "old-aht report --harness kimi-code --source kimi-code-hook"`,
 		kimiCodeManagedEnd,
 		"",
 		"[thinking]",
@@ -1402,7 +1431,7 @@ func TestInstallKimiCodeReplacesManagedBlockAndPreservesConfig(t *testing.T) {
 			t.Fatalf("expected preserved config %q in snippet: %s", want, text)
 		}
 	}
-	if strings.Contains(text, "old-agent-sessions") {
+	if strings.Contains(text, "old-aht") {
 		t.Fatalf("expected old managed hook to be removed: %s", text)
 	}
 
@@ -1504,7 +1533,7 @@ func TestInstallGrokWritesHooks(t *testing.T) {
 	if !strings.Contains(text, "--raw-stdin") || !strings.Contains(text, "--quiet") {
 		t.Fatalf("expected stdin-aware quiet grok hook: %s", text)
 	}
-	if !strings.Contains(text, "agent_sessions_integration=grok-hook") {
+	if !strings.Contains(text, "aht_integration=grok-hook") {
 		t.Fatalf("expected managed grok hook marker: %s", text)
 	}
 	if !strings.Contains(text, managedMarker) {
@@ -1519,7 +1548,7 @@ func TestInstallGrokReplacesManagedHooks(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatalf("creating grok dir: %v", err)
 	}
-	oldConfig := `{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"old-agent-sessions report --harness grok --state idle --source grok-hook --attribute agent_sessions_integration=grok-hook","statusMessage":"agent-sessions managed integration"}]}]}}`
+	oldConfig := `{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"old-aht report --harness grok --state idle --source grok-hook --attribute aht_integration=grok-hook","statusMessage":"aht managed integration"}]}]}}`
 	if err := os.WriteFile(path, []byte(oldConfig), 0o600); err != nil {
 		t.Fatalf("writing old hooks: %v", err)
 	}
@@ -1544,7 +1573,7 @@ func TestInstallGrokReplacesManagedHooks(t *testing.T) {
 		t.Fatalf("reading installed hooks: %v", err)
 	}
 	text := string(data)
-	if strings.Contains(text, "old-agent-sessions") {
+	if strings.Contains(text, "old-aht") {
 		t.Fatalf("expected old managed hook to be removed: %s", text)
 	}
 
@@ -1819,8 +1848,8 @@ func requireAgyPluginMarker(t *testing.T, dir string) {
 	if !strings.Contains(string(marker), managedMarker) {
 		t.Fatalf("expected managed marker, got %q", marker)
 	}
-	if !strings.Contains(string(marker), "AGENT_SESSIONS_INTEGRATION_VERSION=6") {
-		t.Fatalf("expected agy integration version 6 marker, got %q", marker)
+	if !strings.Contains(string(marker), "AHT_INTEGRATION_VERSION=8") {
+		t.Fatalf("expected agy integration version 8 marker, got %q", marker)
 	}
 }
 
@@ -1903,8 +1932,8 @@ func requireGoosePluginScript(t *testing.T, dir string) {
 	requireTextContainsAll(t, text, []string{
 		managedMarker,
 		"--raw-stdin-defaults-only",
-		"agent_sessions_integration=goose-hook",
-		"agent_sessions_integration_version=5",
+		"aht_integration=goose-hook",
+		"aht_integration_version=7",
 		`--presence "$transition"`,
 		`--activity "$transition"`,
 		`--event "$event"`,

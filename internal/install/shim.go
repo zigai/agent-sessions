@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	harnesspkg "github.com/zigai/agent-sessions/v2/pkg/harness"
-	"github.com/zigai/agent-sessions/v2/pkg/registry"
+	harnesspkg "github.com/zigai/aht/v2/pkg/harness"
+	"github.com/zigai/aht/v2/pkg/registry"
 )
 
 const shimFileMode = 0o700
@@ -189,16 +189,16 @@ func shimScript(binary string, harness string, target string, version int) strin
 	return fmt.Sprintf(`#!/bin/sh
 set -u
 
-agent_sessions_managed_marker=%s
-AGENT_SESSIONS_INTEGRATION_ID=%s-shim
-AGENT_SESSIONS_INTEGRATION_VERSION=%d
-agent_sessions_bin=%s
+aht_managed_marker=%s
+AHT_INTEGRATION_ID=%s-shim
+AHT_INTEGRATION_VERSION=%d
+aht_bin=%s
 harness_bin=%s
 
-"$agent_sessions_bin" report %s --presence live --evidence process --pid "$$" --event process.start --attribute agent_sessions_integration_version=%d --attribute agent_sessions_integration=%s-shim --quiet >/dev/null 2>&1 || true
+"$aht_bin" report %s --presence live --evidence process --pid "$$" --event process.start --attribute aht_integration_version=%d --attribute aht_integration=%s-shim --quiet >/dev/null 2>&1 || true
 "$harness_bin" "$@"
 status=$?
-"$agent_sessions_bin" report %s --presence gone --evidence process --pid "$$" --event process.exit --attribute agent_sessions_integration_version=%d --attribute agent_sessions_integration=%s-shim --quiet >/dev/null 2>&1 || true
+"$aht_bin" report %s --presence gone --evidence process --pid "$$" --event process.exit --attribute aht_integration_version=%d --attribute aht_integration=%s-shim --quiet >/dev/null 2>&1 || true
 exit "$status"
 `, harnesspkg.ShellQuote(managedMarker), harness, version, harnesspkg.ShellQuote(binary), harnesspkg.ShellQuote(target), harnesspkg.ShellQuote(harness), version, harness, harnesspkg.ShellQuote(harness), version, harness)
 }

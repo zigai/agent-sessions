@@ -10,7 +10,7 @@ formatters:
   settings:
     goimports:
       local-prefixes:
-        - github.com/zigai/agent-sessions/v2
+        - github.com/zigai/aht/v2
 
 linters:
   enable:

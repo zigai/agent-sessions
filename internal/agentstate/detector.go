@@ -4,7 +4,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/zigai/agent-sessions/v2/pkg/registry"
+	"github.com/zigai/aht/v2/pkg/registry"
 )
 
 const maxSnapshotLines = 100

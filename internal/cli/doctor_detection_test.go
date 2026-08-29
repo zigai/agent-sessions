@@ -9,7 +9,7 @@ import (
 func TestDoctorWarnsAndFallsBackForInvalidDetectionOverride(t *testing.T) {
 	configHome := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", configHome)
-	detectionDir := filepath.Join(configHome, "agent-sessions", "detection")
+	detectionDir := filepath.Join(configHome, "aht", "detection")
 	if err := os.MkdirAll(detectionDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -26,7 +26,7 @@ func TestDoctorWarnsAndFallsBackForInvalidDetectionOverride(t *testing.T) {
 func TestDoctorRejectsInvalidLocalOnlyDetectionManifest(t *testing.T) {
 	configHome := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", configHome)
-	detectionDir := filepath.Join(configHome, "agent-sessions", "detection")
+	detectionDir := filepath.Join(configHome, "aht", "detection")
 	if err := os.MkdirAll(detectionDir, 0o700); err != nil {
 		t.Fatal(err)
 	}

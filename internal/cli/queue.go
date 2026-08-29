@@ -14,9 +14,9 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/zigai/agent-sessions/v2/internal/reportqueue"
-	"github.com/zigai/agent-sessions/v2/pkg/registry"
-	"github.com/zigai/agent-sessions/v2/pkg/tmuxctx"
+	"github.com/zigai/aht/v2/internal/reportqueue"
+	"github.com/zigai/aht/v2/pkg/registry"
+	"github.com/zigai/aht/v2/pkg/tmuxctx"
 )
 
 const (

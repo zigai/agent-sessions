@@ -9,13 +9,13 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/zigai/agent-sessions/v2/pkg/registry"
+	"github.com/zigai/aht/v2/pkg/registry"
 )
 
 const (
 	agyCommand                     = "agy"
-	agyPluginName                  = "agent-sessions-state"
-	agyMarkerFileName              = ".agent-sessions-managed"
+	agyPluginName                  = "aht-state"
+	agyMarkerFileName              = ".aht-managed"
 	agyImportManifestName          = "import_manifest.json"
 	agyImportSource                = "antigravity"
 	agyImportComponent             = "hooks"
@@ -139,9 +139,9 @@ func agyHookCommand(binary string, event string) string {
 func agyMarkerContent() string {
 	return strings.Join([]string{
 		ManagedMarker,
-		"AGENT_SESSIONS_INTEGRATION_ID=" + agyIntegrationID,
-		"AGENT_SESSIONS_INTEGRATION_VERSION=" + strconv.Itoa(IntegrationVersionFor(registry.HarnessAgy)),
-		"AGENT_SESSIONS_SOURCE=" + agyHookSource,
+		"AHT_INTEGRATION_ID=" + agyIntegrationID,
+		"AHT_INTEGRATION_VERSION=" + strconv.Itoa(IntegrationVersionFor(registry.HarnessAgy)),
+		"AHT_SOURCE=" + agyHookSource,
 	}, "\n")
 }
 
@@ -279,8 +279,8 @@ func agyHookAttributes(defaultAttributes map[string]string, event string) map[st
 	if event != "" {
 		attributes["agy_hook_event"] = event
 	}
-	attributes["agent_sessions_integration"] = agyHookSource
-	attributes["agent_sessions_integration_version"] = strconv.Itoa(IntegrationVersionFor(registry.HarnessAgy))
+	attributes["aht_integration"] = agyHookSource
+	attributes["aht_integration_version"] = strconv.Itoa(IntegrationVersionFor(registry.HarnessAgy))
 	return attributes
 }
 

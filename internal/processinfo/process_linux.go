@@ -165,7 +165,7 @@ func readLinuxProcess(dir string, pid int, boot string) (Process, error) {
 		info.Args = splitLinuxArgs(args)
 	}
 	if environ, err := os.ReadFile(filepath.Join(dir, "environ")); err == nil {
-		info.AgentHint = linuxEnvironmentValue(environ, "AGENT_SESSIONS_AGENT")
+		info.AgentHint = linuxEnvironmentValue(environ, "AHT_AGENT")
 		switch {
 		case linuxEnvironmentValue(environ, "HERDR_PANE_ID") != "":
 			info.MultiplexerKind = "herdr"

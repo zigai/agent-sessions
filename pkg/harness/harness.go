@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/zigai/agent-sessions/v2/pkg/harnessmeta"
-	"github.com/zigai/agent-sessions/v2/pkg/registry"
+	"github.com/zigai/aht/v2/pkg/harnessmeta"
+	"github.com/zigai/aht/v2/pkg/registry"
 )
 
 type EnvField string
@@ -54,8 +54,8 @@ type Definition struct {
 }
 
 const (
-	IntegrationVersion    = 5
-	ompIntegrationVersion = 7
+	IntegrationVersion    = 7
+	ompIntegrationVersion = 9
 )
 
 // IntegrationVersionFor returns the managed artifact generation for a harness.
@@ -342,15 +342,15 @@ func cloneStrings(values []string) []string {
 func genericEnvNames(field EnvField) []string {
 	switch field {
 	case EnvSessionID:
-		return []string{"AGENT_SESSIONS_SESSION_ID", "AGENT_SESSION_ID"}
+		return []string{"AHT_SESSION_ID", "AGENT_SESSION_ID"}
 	case EnvSessionPath:
-		return []string{"AGENT_SESSIONS_SESSION_PATH", "AGENT_SESSION_PATH"}
+		return []string{"AHT_SESSION_PATH", "AGENT_SESSION_PATH"}
 	case EnvProjectRoot:
-		return []string{"AGENT_SESSIONS_PROJECT_ROOT", "PROJECT_ROOT"}
+		return []string{"AHT_PROJECT_ROOT", "PROJECT_ROOT"}
 	case EnvPID:
-		return []string{"AGENT_SESSIONS_PID", "AGENT_PID"}
+		return []string{"AHT_PID", "AGENT_PID"}
 	case EnvEvent:
-		return []string{"AGENT_SESSIONS_EVENT", "AGENT_EVENT"}
+		return []string{"AHT_EVENT", "AGENT_EVENT"}
 	default:
 		return nil
 	}

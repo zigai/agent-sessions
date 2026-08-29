@@ -15,7 +15,7 @@ func TestIdentityReconciliationPrefersSessionPath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := store.Observe(context.Background(), Observation{Source: ObservationSourceProcess, Evidence: ObservationEvidenceProcessPresence, Harness: HarnessClaude, Identity: ObservationIdentity{SessionPath: "/tmp/session.json"}, ProcessPresent: boolPtr(true), Process: &ProcessIdentity{PID: 41, StartIdentity: "boot:41"}, ObservedAt: at.Add(time.Second)})
+	second, err := store.Observe(context.Background(), Observation{Source: ObservationSourceProcess, Evidence: ObservationEvidenceProcessPresence, Harness: HarnessClaude, Identity: ObservationIdentity{SessionPath: "/tmp/session.json"}, ProcessPresent: new(true), Process: &ProcessIdentity{PID: 41, StartIdentity: "boot:41"}, ObservedAt: at.Add(time.Second)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,7 +43,7 @@ func TestNativeProcessIdentityReconcilesWithLiveTmuxSession(t *testing.T) {
 	}
 	live, err := store.Observe(ctx, Observation{
 		Source: ObservationSourceProcess, Evidence: ObservationEvidenceProcessPresence,
-		Harness: HarnessPi, ProcessPresent: boolPtr(true), Process: process, ObservedAt: at.Add(time.Second),
+		Harness: HarnessPi, ProcessPresent: new(true), Process: process, ObservedAt: at.Add(time.Second),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -327,7 +327,7 @@ func TestNativeProcessIdentitySeedsObserverReconciliation(t *testing.T) {
 	}
 	observed, err := store.Observe(ctx, Observation{
 		Source: ObservationSourceProcess, Evidence: ObservationEvidenceProcessPresence,
-		Harness: HarnessPi, ProcessPresent: boolPtr(true), Process: process, ObservedAt: at.Add(time.Second),
+		Harness: HarnessPi, ProcessPresent: new(true), Process: process, ObservedAt: at.Add(time.Second),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -348,14 +348,14 @@ func TestStaleNativeStartDoesNotReviveGoneSession(t *testing.T) {
 
 	if _, err := store.Observe(ctx, Observation{
 		Source: ObservationSourceProcess, Evidence: ObservationEvidenceProcessPresence,
-		Harness: HarnessPi, Identity: identity, ProcessPresent: boolPtr(true), Process: process,
+		Harness: HarnessPi, Identity: identity, ProcessPresent: new(true), Process: process,
 		ObservedAt: at,
 	}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.Observe(ctx, Observation{
 		Source: ObservationSourceProcess, Evidence: ObservationEvidenceProcessPresence,
-		Harness: HarnessPi, Identity: identity, ProcessPresent: boolPtr(false), Process: process,
+		Harness: HarnessPi, Identity: identity, ProcessPresent: new(false), Process: process,
 		ObservedAt: at.Add(10 * time.Second),
 	}); err != nil {
 		t.Fatal(err)
@@ -403,7 +403,7 @@ func TestDelayedGoneEvidenceDoesNotOverwriteNewerLivePresence(t *testing.T) {
 			delayed: func(process ProcessIdentity, identity ObservationIdentity, at time.Time) Observation {
 				return Observation{
 					Source: ObservationSourceProcess, Evidence: ObservationEvidenceProcessPresence,
-					Harness: HarnessPi, Identity: identity, ProcessPresent: boolPtr(false), Process: &process,
+					Harness: HarnessPi, Identity: identity, ProcessPresent: new(false), Process: &process,
 					ObservedAt: at,
 				}
 			},
@@ -414,7 +414,7 @@ func TestDelayedGoneEvidenceDoesNotOverwriteNewerLivePresence(t *testing.T) {
 			initial: func(process ProcessIdentity, identity ObservationIdentity, at time.Time) Observation {
 				return Observation{
 					Source: ObservationSourceProcess, Evidence: ObservationEvidenceProcessPresence,
-					Harness: HarnessPi, Identity: identity, ProcessPresent: boolPtr(true), Process: &process,
+					Harness: HarnessPi, Identity: identity, ProcessPresent: new(true), Process: &process,
 					ObservedAt: at,
 				}
 			},
@@ -477,7 +477,7 @@ func TestDelayedProcessPresenceDoesNotReviveNewerNativeGoneState(t *testing.T) {
 
 	session, err = store.Observe(ctx, Observation{
 		Source: ObservationSourceProcess, Evidence: ObservationEvidenceProcessPresence,
-		Harness: HarnessPi, Identity: identity, ProcessPresent: boolPtr(true), Process: &process,
+		Harness: HarnessPi, Identity: identity, ProcessPresent: new(true), Process: &process,
 		ObservedAt: at.Add(-time.Second),
 	})
 	if err != nil {
@@ -487,5 +487,3 @@ func TestDelayedProcessPresenceDoesNotReviveNewerNativeGoneState(t *testing.T) {
 		t.Fatalf("delayed process presence revived newer gone state: %#v", session)
 	}
 }
-
-func boolPtr(value bool) *bool { return &value }

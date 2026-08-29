@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/zigai/agent-sessions/v2/internal/processinfo"
-	"github.com/zigai/agent-sessions/v2/pkg/registry"
+	"github.com/zigai/aht/v2/internal/processinfo"
+	"github.com/zigai/aht/v2/pkg/registry"
 )
 
 const expectedSessionSchemaVersion = 2
@@ -287,9 +287,9 @@ func TestOpenClawLifecycleReportsDriveDocumentedStateTransitions(t *testing.T) {
 		wantPresence                        registry.Presence
 		wantActivity                        *registry.Activity
 	}{
-		{name: "session_start", lifecycle: "start", presence: "live", activity: "idle", wantPresence: registry.PresenceLive, wantActivity: activityPointer(registry.ActivityIdle)},
-		{name: "before_agent_run", lifecycle: "", presence: "live", activity: "running", wantPresence: registry.PresenceLive, wantActivity: activityPointer(registry.ActivityRunning)},
-		{name: "agent_end", lifecycle: "", presence: "live", activity: "idle", wantPresence: registry.PresenceLive, wantActivity: activityPointer(registry.ActivityIdle)},
+		{name: "session_start", lifecycle: "start", presence: "live", activity: "idle", wantPresence: registry.PresenceLive, wantActivity: new(registry.ActivityIdle)},
+		{name: "before_agent_run", lifecycle: "", presence: "live", activity: "running", wantPresence: registry.PresenceLive, wantActivity: new(registry.ActivityRunning)},
+		{name: "agent_end", lifecycle: "", presence: "live", activity: "idle", wantPresence: registry.PresenceLive, wantActivity: new(registry.ActivityIdle)},
 		{name: "session_end", lifecycle: "end", presence: "gone", activity: "", wantPresence: registry.PresenceGone, wantActivity: nil},
 	}
 	for index, test := range tests {
@@ -321,11 +321,11 @@ func TestHermesLifecycleReportsDriveDocumentedStateTransitions(t *testing.T) {
 		wantPresence                        registry.Presence
 		wantActivity                        *registry.Activity
 	}{
-		{name: "on_session_start", lifecycle: "start", presence: "live", activity: "idle", wantPresence: registry.PresenceLive, wantActivity: activityPointer(registry.ActivityIdle)},
-		{name: "pre_llm_call", lifecycle: "", presence: "live", activity: "running", wantPresence: registry.PresenceLive, wantActivity: activityPointer(registry.ActivityRunning)},
-		{name: "pre_approval_request", lifecycle: "", presence: "live", activity: "waiting", wantPresence: registry.PresenceLive, wantActivity: activityPointer(registry.ActivityWaiting)},
-		{name: "post_approval_response", lifecycle: "", presence: "live", activity: "running", wantPresence: registry.PresenceLive, wantActivity: activityPointer(registry.ActivityRunning)},
-		{name: "on_session_end", lifecycle: "", presence: "live", activity: "idle", wantPresence: registry.PresenceLive, wantActivity: activityPointer(registry.ActivityIdle)},
+		{name: "on_session_start", lifecycle: "start", presence: "live", activity: "idle", wantPresence: registry.PresenceLive, wantActivity: new(registry.ActivityIdle)},
+		{name: "pre_llm_call", lifecycle: "", presence: "live", activity: "running", wantPresence: registry.PresenceLive, wantActivity: new(registry.ActivityRunning)},
+		{name: "pre_approval_request", lifecycle: "", presence: "live", activity: "waiting", wantPresence: registry.PresenceLive, wantActivity: new(registry.ActivityWaiting)},
+		{name: "post_approval_response", lifecycle: "", presence: "live", activity: "running", wantPresence: registry.PresenceLive, wantActivity: new(registry.ActivityRunning)},
+		{name: "on_session_end", lifecycle: "", presence: "live", activity: "idle", wantPresence: registry.PresenceLive, wantActivity: new(registry.ActivityIdle)},
 		{name: "on_session_finalize", lifecycle: "end", presence: "gone", activity: "", wantPresence: registry.PresenceGone, wantActivity: nil},
 	}
 	for index, test := range tests {
@@ -345,8 +345,6 @@ func TestHermesLifecycleReportsDriveDocumentedStateTransitions(t *testing.T) {
 		}
 	}
 }
-
-func activityPointer(activity registry.Activity) *registry.Activity { return &activity }
 
 func equalActivity(left, right *registry.Activity) bool {
 	if left == nil || right == nil {
@@ -599,7 +597,7 @@ func TestReportJSONCoversIgnoredResult(t *testing.T) {
 	}
 }
 
-func TestShowCommandUsesHumanOutputUnlessJSONRequested(t *testing.T) {
+func TestInfoCommandUsesHumanOutputUnlessJSONRequested(t *testing.T) {
 	t.Parallel()
 	path := t.TempDir() + "/sessions.json"
 	store := registry.NewFileStore(path)
@@ -616,7 +614,7 @@ func TestShowCommandUsesHumanOutputUnlessJSONRequested(t *testing.T) {
 
 	var human bytes.Buffer
 	root := NewRootCommand(&human, &bytes.Buffer{})
-	root.SetArgs([]string{"--store", path, "show", session.ID})
+	root.SetArgs([]string{"--store", path, "info", session.ID})
 	if err := root.ExecuteContext(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -626,7 +624,7 @@ func TestShowCommandUsesHumanOutputUnlessJSONRequested(t *testing.T) {
 
 	var machine bytes.Buffer
 	root = NewRootCommand(&machine, &bytes.Buffer{})
-	root.SetArgs([]string{"--store", path, "--json", "show", session.ID})
+	root.SetArgs([]string{"--store", path, "--json", "info", session.ID})
 	if err := root.ExecuteContext(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -664,7 +662,7 @@ func TestVersionDefaultsToHumanOutput(t *testing.T) {
 	if err := root.ExecuteContext(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if strings.HasPrefix(strings.TrimSpace(stdout.String()), "{") || !strings.HasPrefix(stdout.String(), "agent-sessions ") {
+	if strings.HasPrefix(strings.TrimSpace(stdout.String()), "{") || !strings.HasPrefix(stdout.String(), "aht ") {
 		t.Fatalf("version default output = %q", stdout.String())
 	}
 }
@@ -672,7 +670,7 @@ func TestVersionDefaultsToHumanOutput(t *testing.T) {
 func TestListTableColumnsExpandsSessionAndCWDWhenWidthAllows(t *testing.T) {
 	t.Parallel()
 	rows := [][]string{
-		{"omp-5afa9c61", "omp", "Format watch command column alignment", "live", "running", "tmux:0:2:zsh:%1", "~/Projects/agent-sessions", "1s ago"},
+		{"omp-5afa9c61", "omp", "Format watch command column alignment", "live", "running", "tmux:0:2:zsh:%1", "~/Projects/sample-project", "1s ago"},
 		{"pi-ea2cacd9", "pi", "2026-08-27T20-22-44-492Z_01a044e3-a40c-77dc-8593-f0f6a3a7c42f", "live", "idle", "tmux:0:3:zsh:%2", "~/Projects/config", "1s ago"},
 	}
 
@@ -683,7 +681,7 @@ func TestListTableColumnsExpandsSessionAndCWDWhenWidthAllows(t *testing.T) {
 	if sessionCol.width < len("2026-08-27T20-22-44-492Z_01a044e3-a40c-77dc-8593-f0f6a3a7c42f") {
 		t.Fatalf("session width in wide terminal = %d, want >= 60", sessionCol.width)
 	}
-	if cwdCol.width < len("~/Projects/agent-sessions") {
+	if cwdCol.width < len("~/Projects/sample-project") {
 		t.Fatalf("CWD width in wide terminal = %d, want >= 25", cwdCol.width)
 	}
 

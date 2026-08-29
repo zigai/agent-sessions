@@ -1,5 +1,5 @@
 version: 2
-project_name: agent-sessions
+project_name: aht
 
 before:
   hooks:
@@ -7,7 +7,7 @@ before:
 
 builds:
   - main: ./main.go
-    binary: agent-sessions
+    binary: aht
     env:
       - CGO_ENABLED=0
     goos:
@@ -18,9 +18,9 @@ builds:
       - arm64
     ldflags:
       - -s -w
-      - -X github.com/zigai/agent-sessions/v2/internal/cli.version={{.Version}}
-      - -X github.com/zigai/agent-sessions/v2/internal/cli.commit={{.ShortCommit}}
-      - -X github.com/zigai/agent-sessions/v2/internal/cli.date={{.Date}}
+      - -X github.com/zigai/aht/v2/internal/cli.version={{.Version}}
+      - -X github.com/zigai/aht/v2/internal/cli.commit={{.ShortCommit}}
+      - -X github.com/zigai/aht/v2/internal/cli.date={{.Date}}
 
 archives:
   - name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
@@ -37,12 +37,12 @@ archives:
       - README.md
 
 nfpms:
-  - id: agent-sessions
-    package_name: agent-sessions
+  - id: aht
+    package_name: aht
     vendor: zigai
-    homepage: https://github.com/zigai/agent-sessions
+    homepage: https://github.com/zigai/aht
     maintainer: zigai
-    description: A Go CLI project
+    description: Track local coding-agent sessions across harnesses and terminal multiplexers
     license: MIT
     formats:
       - deb
@@ -56,7 +56,7 @@ checksum:
 changelog:
   sort: desc
   abbrev: 7
-  format: '[`{{ printf "%.7s" .SHA }}`](https://github.com/zigai/agent-sessions/commit/{{ .SHA }}) {{ .Message }}'
+  format: '[`{{ printf "%.7s" .SHA }}`](https://github.com/zigai/aht/commit/{{ .SHA }}) {{ .Message }}'
   groups:
     - title: Features
       regexp: '^.*?feat(\([^)]+\))?!?:.+$'
@@ -76,6 +76,6 @@ changelog:
 release:
   github:
     owner: zigai
-    name: agent-sessions
+    name: aht
   draft: false
   prerelease: auto

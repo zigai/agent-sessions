@@ -9,13 +9,13 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/zigai/agent-sessions/v2/pkg/registry"
+	"github.com/zigai/aht/v2/pkg/registry"
 )
 
 const (
 	clineCommand           = "cline"
-	clinePluginName        = "agent-sessions-state"
-	clineMarkerFileName    = ".agent-sessions-managed"
+	clinePluginName        = "aht-state"
+	clineMarkerFileName    = ".aht-managed"
 	clineIntegrationSource = "cline-plugin"
 )
 
@@ -92,7 +92,7 @@ func renderClinePlugin(binary string, version string) string {
 }
 
 func clineMarkerContent(version string) string {
-	return fmt.Sprintf("%s\nAGENT_SESSIONS_INTEGRATION_ID=cline\nAGENT_SESSIONS_INTEGRATION_VERSION=%s\nAGENT_SESSIONS_SOURCE=%s\n", ManagedMarker, version, clineIntegrationSource)
+	return fmt.Sprintf("%s\nAHT_INTEGRATION_ID=cline\nAHT_INTEGRATION_VERSION=%s\nAHT_SOURCE=%s\n", ManagedMarker, version, clineIntegrationSource)
 }
 
 func clinePayloadDefaults(payload map[string]any) PayloadDefaults {

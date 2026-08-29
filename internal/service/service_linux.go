@@ -12,7 +12,7 @@ import (
 	"strings"
 )
 
-const linuxUnitName = "agent-sessions-observer.service"
+const linuxUnitName = "aht-observer.service"
 
 type linuxBackend struct {
 	options  Options
@@ -46,10 +46,10 @@ func RenderSystemdUnit(options Options) (string, error) {
 		"# " + managedMarker,
 		"# version: " + strconv.Itoa(managedVersion),
 		"[Unit]",
-		"Description=Agent Sessions observer",
+		"Description=AHT observer",
 		"",
 		"[Service]",
-		"ExecStart=" + systemdArg(normalized.Binary) + " --store " + systemdArg(normalized.StorePath) + " monitor run --interval " + normalized.Interval.String() + " --grace-period " + normalized.GracePeriod.String() + " --quiet",
+		"ExecStart=" + systemdArg(normalized.Binary) + " --store " + systemdArg(normalized.StorePath) + " manage tracker run --interval " + normalized.Interval.String() + " --grace-period " + normalized.GracePeriod.String() + " --quiet",
 		"Restart=on-failure",
 		"",
 		"[Install]",

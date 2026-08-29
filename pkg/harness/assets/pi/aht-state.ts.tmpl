@@ -1,11 +1,11 @@
 "{{MANAGED_MARKER}}";
-"AGENT_SESSIONS_INTEGRATION_ID={{INTEGRATION_ID}}";
-"AGENT_SESSIONS_INTEGRATION_VERSION={{INTEGRATION_VERSION}}";
-"agent_sessions_integration_version={{INTEGRATION_VERSION}}";
+"AHT_INTEGRATION_ID={{INTEGRATION_ID}}";
+"AHT_INTEGRATION_VERSION={{INTEGRATION_VERSION}}";
+"aht_integration_version={{INTEGRATION_VERSION}}";
 
 import { spawn } from "node:child_process";
 
-const agentSessionsBin = {{BINARY}};
+const ahtBin = {{BINARY}};
 const currentSessionSource = {{SOURCE}};
 
 let currentSessionId: string | undefined;
@@ -50,8 +50,8 @@ function report(transition: string, ctx?: any, event?: any): void {
 
   const args = ["report", "pi", "--observed-at", observedAt, "--quiet"];
   args.push(transition === "gone" ? "--presence" : "--activity", transition);
-  args.push("--attribute", `agent_sessions_integration_version={{INTEGRATION_VERSION}}`);
-  args.push("--attribute", `agent_sessions_integration=${currentSessionSource}`);
+  args.push("--attribute", `aht_integration_version={{INTEGRATION_VERSION}}`);
+  args.push("--attribute", `aht_integration=${currentSessionSource}`);
   if (currentSessionPath) {
     args.push("--session-path", currentSessionPath);
   } else if (currentSessionId) {
@@ -65,7 +65,7 @@ function report(transition: string, ctx?: any, event?: any): void {
   addAttribute(args, "pi_reason", event?.reason);
 
   try {
-    const child = spawn(agentSessionsBin, args, {
+    const child = spawn(ahtBin, args, {
       detached: true,
       stdio: "ignore",
     });

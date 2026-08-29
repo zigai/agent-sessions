@@ -10,8 +10,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/zigai/agent-sessions/v2/pkg/brokerapi"
-	"github.com/zigai/agent-sessions/v2/pkg/registry"
+	"github.com/zigai/aht/v2/pkg/brokerapi"
+	"github.com/zigai/aht/v2/pkg/registry"
 )
 
 const (
@@ -25,8 +25,8 @@ const (
 )
 
 var (
-	ErrAlreadyRunning = errors.New("agent-sessions broker is already running")
-	ErrUnsupported    = errors.New("agent-sessions broker is unsupported on this platform")
+	ErrAlreadyRunning = errors.New("aht broker is already running")
+	ErrUnsupported    = errors.New("aht broker is unsupported on this platform")
 
 	errContextNil          = errors.New("broker context is nil")
 	errStoreNil            = errors.New("broker store is nil")

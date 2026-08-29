@@ -50,7 +50,7 @@ func TestStaleIntegrationDoesNotSuppressScreenFallback(t *testing.T) {
 	process := ProcessIdentity{PID: 150, StartIdentity: "boot:150", Executable: "pi"}
 	presence := PresenceLive
 	idle := ActivityIdle
-	_, err := store.Observe(context.Background(), Observation{Source: ObservationSourceNative, Evidence: ObservationEvidenceNativeEvent, Harness: HarnessPi, Identity: ObservationIdentity{SessionID: "pi-stale"}, Presence: &presence, Activity: &idle, NativeEvent: "agent_settled", Process: &process, Attributes: map[string]string{"agent_sessions_integration": "pi-extension"}, ObservedAt: at})
+	_, err := store.Observe(context.Background(), Observation{Source: ObservationSourceNative, Evidence: ObservationEvidenceNativeEvent, Harness: HarnessPi, Identity: ObservationIdentity{SessionID: "pi-stale"}, Presence: &presence, Activity: &idle, NativeEvent: "agent_settled", Process: &process, Attributes: map[string]string{"aht_integration": "pi-extension"}, ObservedAt: at})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +78,7 @@ func TestDelayedNativeActivityCannotOverwriteNewerScreenDecision(t *testing.T) {
 		Source: ObservationSourceNative, Evidence: ObservationEvidenceNativeEvent,
 		Harness: HarnessPi, Identity: ObservationIdentity{SessionID: "pi-delayed"},
 		Presence: &presence, Activity: &running, NativeEvent: "agent_start", Process: &process,
-		Attributes: map[string]string{"agent_sessions_integration": "pi-extension"}, ObservedAt: at,
+		Attributes: map[string]string{"aht_integration": "pi-extension"}, ObservedAt: at,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -105,7 +105,7 @@ func TestDelayedNativeActivityCannotOverwriteNewerScreenDecision(t *testing.T) {
 		Source: ObservationSourceNative, Evidence: ObservationEvidenceNativeEvent,
 		Harness: HarnessPi, Identity: ObservationIdentity{SessionID: "pi-delayed"},
 		Presence: &presence, Activity: &waiting, NativeEvent: "permission_prompt", Process: &process,
-		Attributes: map[string]string{"agent_sessions_integration": "pi-extension"}, ObservedAt: at.Add(10 * time.Second),
+		Attributes: map[string]string{"aht_integration": "pi-extension"}, ObservedAt: at.Add(10 * time.Second),
 	})
 	if err != nil {
 		t.Fatal(err)

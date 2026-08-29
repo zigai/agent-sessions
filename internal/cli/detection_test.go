@@ -5,73 +5,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/zigai/agent-sessions/v2/pkg/registry"
+	"github.com/zigai/aht/v2/pkg/registry"
 )
-
-func TestDetectCommandEvaluatesOfflineScreenWithoutEchoingInput(t *testing.T) {
-	t.Parallel()
-	var stdout bytes.Buffer
-	root := NewRootCommand(&stdout, &bytes.Buffer{})
-	root.SetIn(strings.NewReader("Would you like to run the following command? SECRET-COMMAND"))
-	root.SetArgs([]string{"--json", "detect", "--harness", "codex", "--file", "-", "--config-dir", t.TempDir()})
-	if err := root.Execute(); err != nil {
-		t.Fatal(err)
-	}
-	var decision map[string]any
-	if err := json.Unmarshal(stdout.Bytes(), &decision); err != nil {
-		t.Fatal(err)
-	}
-	if decision["activity"] != "waiting" || decision["rule_id"] != "permission_prompt" {
-		t.Fatalf("decision = %#v", decision)
-	}
-	if evidence, ok := decision["evidence"].([]any); !ok || len(evidence) == 0 {
-		t.Fatalf("detect output omitted rule evidence: %#v", decision)
-	}
-	if strings.Contains(stdout.String(), "SECRET-COMMAND") {
-		t.Fatalf("detect output leaked screen input: %s", stdout.String())
-	}
-}
-
-func TestDetectCommandUsesLocalOnlyOmpManifest(t *testing.T) {
-	t.Parallel()
-
-	configDir := t.TempDir()
-	manifest := []byte("version=1\nagent='omp'\n[[rules]]\nid='custom_working'\nstate='running'\nregex_any=['(?m)^\\s*\\S?\\s*Working\\.\\.\\.']\n")
-	if err := os.WriteFile(filepath.Join(configDir, "omp.toml"), manifest, 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	var stdout bytes.Buffer
-	root := NewRootCommand(&stdout, &bytes.Buffer{})
-	root.SetIn(strings.NewReader(" ⠋ Working... (40s)\n ~/Projects/sesh · Codex · GPT-5.6 Sol · medium"))
-	root.SetArgs([]string{"--json", "detect", "--harness", "omp", "--file", "-", "--config-dir", configDir})
-	if err := root.Execute(); err != nil {
-		t.Fatal(err)
-	}
-	var decision map[string]any
-	if err := json.Unmarshal(stdout.Bytes(), &decision); err != nil {
-		t.Fatal(err)
-	}
-	if decision["activity"] != "running" || decision["rule_id"] != "custom_working" {
-		t.Fatalf("decision = %#v", decision)
-	}
-}
-
-func TestDetectCommandRejectsOversizedInput(t *testing.T) {
-	t.Parallel()
-	root := NewRootCommand(&bytes.Buffer{}, &bytes.Buffer{})
-	root.SetIn(strings.NewReader(strings.Repeat("x", maxOfflineScreenBytes+1)))
-	root.SetArgs([]string{"detect", "--harness", "pi", "--file", "-", "--config-dir", t.TempDir()})
-	if err := root.Execute(); err == nil || !strings.Contains(err.Error(), errDetectFileTooLarge.Error()) {
-		t.Fatalf("detect error = %v, want size error", err)
-	}
-}
 
 func TestSameTmuxServerDoesNotTreatMissingIdentityAsWildcard(t *testing.T) {
 	t.Parallel()
@@ -80,7 +19,7 @@ func TestSameTmuxServerDoesNotTreatMissingIdentityAsWildcard(t *testing.T) {
 	}
 }
 
-func TestExplainReportsFallbackReasonForInactiveIntegration(t *testing.T) {
+func TestInfoExplainReportsFallbackReasonForInactiveIntegration(t *testing.T) {
 	t.Parallel()
 	path := t.TempDir() + "/state.json"
 	store := registry.NewFileStore(path)
@@ -89,26 +28,27 @@ func TestExplainReportsFallbackReasonForInactiveIntegration(t *testing.T) {
 	presence := registry.PresenceLive
 	idle := registry.ActivityIdle
 	tmux := registry.TmuxContext{Inside: true, ServerSocket: "-L:not-live", SessionID: "$9", SessionName: "agents", WindowID: "@9", WindowIndex: "0", PaneID: "%99", PaneIndex: "0", PanePID: 654, PaneTTY: process.TTY}
-	_, err := store.Observe(context.Background(), registry.Observation{Source: registry.ObservationSourceNative, Evidence: registry.ObservationEvidenceNativeEvent, Harness: registry.HarnessPi, Identity: registry.ObservationIdentity{SessionID: "pi-inactive"}, Presence: &presence, Activity: &idle, NativeEvent: "agent_settled", Process: &process, Tmux: &tmux, Attributes: map[string]string{"agent_sessions_integration": "old-extension"}, ObservedAt: at})
+	_, err := store.Observe(context.Background(), registry.Observation{Source: registry.ObservationSourceNative, Evidence: registry.ObservationEvidenceNativeEvent, Harness: registry.HarnessPi, Identity: registry.ObservationIdentity{SessionID: "pi-inactive"}, Presence: &presence, Activity: &idle, NativeEvent: "agent_settled", Process: &process, Tmux: &tmux, Attributes: map[string]string{"aht_integration": "old-extension"}, ObservedAt: at})
 	if err != nil {
 		t.Fatal(err)
 	}
 	var stdout bytes.Buffer
 	root := NewRootCommand(&stdout, &bytes.Buffer{})
-	root.SetArgs([]string{"--store", path, "--json", "explain", "--pane", "%99"})
+	root.SetArgs([]string{"--store", path, "--json", "info", "--pane", "%99", "--explain"})
 	if err := root.Execute(); !errors.Is(err, errTmuxPaneNotLive) {
-		t.Fatalf("explain missing pane error = %v", err)
+		t.Fatalf("info explanation missing pane error = %v", err)
 	}
-	var result map[string]any
+	var result explainedInfoResult
 	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
 		t.Fatal(err)
 	}
-	if result["selected_authority"] != "screen" || result["fallback_reason"] != "integration_identity_mismatch" || result["final_activity"] != "unknown" {
-		t.Fatalf("fallback explanation = %#v", result)
+	explanation := result.Explanation
+	if explanation.SelectedAuthority != "screen" || explanation.FallbackReason != "integration_identity_mismatch" || explanation.FinalActivity != "unknown" {
+		t.Fatalf("fallback explanation = %#v", explanation)
 	}
 }
 
-func TestExplainWithoutLivePaneReportsUnavailableState(t *testing.T) {
+func TestInfoExplainWithoutLivePaneReportsUnavailableState(t *testing.T) {
 	t.Parallel()
 	path := t.TempDir() + "/state.json"
 	store := registry.NewFileStore(path)
@@ -124,21 +64,22 @@ func TestExplainWithoutLivePaneReportsUnavailableState(t *testing.T) {
 	}
 	var stdout bytes.Buffer
 	root := NewRootCommand(&stdout, &bytes.Buffer{})
-	root.SetArgs([]string{"--store", path, "--json", "explain", session.ID})
+	root.SetArgs([]string{"--store", path, "--json", "info", session.ID, "--explain"})
 	if err := root.ExecuteContext(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	var result explainResult
+	var result explainedInfoResult
 	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
 		t.Fatal(err)
 	}
-	if result.Screen.Evaluated || result.Screen.UnavailableReason != "no_live_pane" || result.Screen.Error != "" {
-		t.Fatalf("screen explanation = %#v", result.Screen)
+	screen := result.Explanation.Screen
+	if screen.Evaluated || screen.UnavailableReason != "no_live_pane" || screen.Error != "" {
+		t.Fatalf("screen explanation = %#v", screen)
 	}
 }
 
-func TestExplainReportsActiveHookAuthorityByPane(t *testing.T) {
-	t.Parallel()
+func createActivePiInfoSession(t *testing.T) string {
+	t.Helper()
 	path := t.TempDir() + "/state.json"
 	store := registry.NewFileStore(path)
 	at := time.Now().UTC()
@@ -146,25 +87,50 @@ func TestExplainReportsActiveHookAuthorityByPane(t *testing.T) {
 	presence := registry.PresenceLive
 	idle := registry.ActivityIdle
 	tmux := registry.TmuxContext{Inside: true, ServerSocket: "default", SessionID: "$1", SessionName: "agents", WindowID: "@1", WindowIndex: "1", PaneID: "%3", PaneIndex: "1", PanePID: 10, PaneTTY: "/dev/pts/3"}
-	_, err := store.Observe(context.Background(), registry.Observation{Source: registry.ObservationSourceNative, Evidence: registry.ObservationEvidenceNativeEvent, Harness: registry.HarnessPi, Identity: registry.ObservationIdentity{SessionID: "pi-session"}, Presence: &presence, Activity: &idle, NativeEvent: "agent_end", Process: &process, Tmux: &tmux, Attributes: map[string]string{"agent_sessions_integration": "pi-extension"}, ObservedAt: at})
-	if err != nil {
+	if _, err := store.Observe(context.Background(), registry.Observation{Source: registry.ObservationSourceNative, Evidence: registry.ObservationEvidenceNativeEvent, Harness: registry.HarnessPi, Identity: registry.ObservationIdentity{SessionID: "pi-session"}, Presence: &presence, Activity: &idle, NativeEvent: "agent_end", Process: &process, Tmux: &tmux, Attributes: map[string]string{"aht_integration": "pi-extension"}, ObservedAt: at}); err != nil {
 		t.Fatal(err)
 	}
+	return path
+}
+
+func TestInfoExplainReportsActiveHookAuthorityByPane(t *testing.T) {
+	t.Parallel()
+	path := createActivePiInfoSession(t)
 	var stdout bytes.Buffer
 	root := NewRootCommand(&stdout, &bytes.Buffer{})
-	root.SetArgs([]string{"--store", path, "--json", "explain", "--pane", "%3"})
+	root.SetArgs([]string{"--store", path, "--json", "info", "--pane", "%3", "--explain"})
 	if err := root.Execute(); err != nil {
 		t.Fatal(err)
 	}
-	var result map[string]any
+	var result explainedInfoResult
 	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
 		t.Fatal(err)
 	}
-	if result["selected_authority"] != "hook" || result["process_match"] != "foreground_tty_process" || result["final_activity"] != "idle" {
-		t.Fatalf("explain result = %#v", result)
+	if result.Session.ID == "" || result.Session.SessionID != "pi-session" {
+		t.Fatalf("info session = %#v", result.Session)
 	}
-	hook, ok := result["hook"].(map[string]any)
-	if !ok || hook["active"] != true || hook["fresh"] != true || hook["freshness_reason"] != "matching_live_process_report" || hook["integration"] != "pi-extension" {
-		t.Fatalf("hook explanation = %#v", result["hook"])
+	explanation := result.Explanation
+	if explanation.SelectedAuthority != "hook" || explanation.ProcessMatch != "foreground_tty_process" || explanation.FinalActivity != "idle" {
+		t.Fatalf("info explanation = %#v", explanation)
+	}
+	hook := explanation.Hook
+	if !hook.Active || !hook.Fresh || hook.FreshnessReason != "matching_live_process_report" || hook.Integration != "pi-extension" {
+		t.Fatalf("hook explanation = %#v", hook)
+	}
+}
+
+func TestInfoExplainUsesHumanOutputByDefault(t *testing.T) {
+	t.Parallel()
+	path := createActivePiInfoSession(t)
+	var stdout bytes.Buffer
+	root := NewRootCommand(&stdout, &bytes.Buffer{})
+	root.SetArgs([]string{"--store", path, "info", "--pane", "%3", "--explain"})
+	if err := root.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{"Session ID:", "Activity diagnosis:", "Registry activity:", "Effective activity:"} {
+		if !strings.Contains(stdout.String(), expected) {
+			t.Fatalf("info explanation omitted %q: %s", expected, stdout.String())
+		}
 	}
 }

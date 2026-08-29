@@ -11,11 +11,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/zigai/agent-sessions/v2/internal/service"
-	"github.com/zigai/agent-sessions/v2/pkg/registry"
+	"github.com/zigai/aht/v2/internal/service"
+	"github.com/zigai/aht/v2/pkg/registry"
 )
 
-func TestRootHelpShowsCanonicalSurfaceAndHidesInternalCommands(t *testing.T) {
+func TestRootHelpShowsCompactCanonicalSurface(t *testing.T) {
 	var stdout bytes.Buffer
 	root := NewRootCommand(&stdout, &bytes.Buffer{})
 	root.SetArgs([]string{"--help"})
@@ -23,46 +23,86 @@ func TestRootHelpShowsCanonicalSurfaceAndHidesInternalCommands(t *testing.T) {
 		t.Fatal(err)
 	}
 	help := stdout.String()
-	assertRootHelpGroups(t, help)
-	for _, command := range []string{"setup", "list", "watch", "show", "stop", "doctor", "integrations", "monitor", "registry", "hook"} {
-		if !strings.Contains(help, "  "+command) {
+	previousPosition := -1
+	for _, command := range []string{"list", "watch", "info", "stop", "manage", "hook", "help"} {
+		position := strings.Index(help, "\n  "+command+" ")
+		if position < 0 {
 			t.Errorf("root help does not show %q:\n%s", command, help)
+			continue
+		}
+		if position <= previousPosition {
+			t.Errorf("root help shows %q out of order:\n%s", command, help)
+		}
+		previousPosition = position
+	}
+	for _, command := range []string{"admin", "setup", "integrations", "monitor", "registry", "doctor", "detection", "detect", "show", "explain", "install-hooks", "observe", "service", "report", "get", "gc", "queue", "drain", "path", "agy-hook"} {
+		if strings.Contains(help, "\n  "+command+" ") {
+			t.Errorf("root help exposes internal, nested, or removed command %q:\n%s", command, help)
 		}
 	}
-	for _, command := range []string{"install-hooks", "observe", "service", "report", "get", "manage", "gc", "queue", "drain", "path", "agy-hook"} {
-		if strings.Contains(help, "  "+command+" ") {
-			t.Errorf("root help exposes internal or removed command %q:\n%s", command, help)
+	for _, title := range []string{"Sessions:", "Setup:", "System:", "Everyday Commands:", "Configuration Commands:"} {
+		if strings.Contains(help, title) {
+			t.Errorf("root help still shows command group %q:\n%s", title, help)
 		}
 	}
 }
 
-func assertRootHelpGroups(t *testing.T, help string) {
-	t.Helper()
-	groups := map[string][]string{
-		"Sessions:": {"list", "watch", "show", "stop"},
-		"Setup:":    {"setup", "integrations", "hook"},
-		"System:":   {"monitor", "registry", "doctor"},
+func TestManageHelpShowsCanonicalSurface(t *testing.T) {
+	var stdout bytes.Buffer
+	root := NewRootCommand(&stdout, &bytes.Buffer{})
+	root.SetArgs([]string{"manage", "--help"})
+	if err := root.ExecuteContext(context.Background()); err != nil {
+		t.Fatal(err)
 	}
-	for title, commands := range groups {
-		start := strings.Index(help, title+"\n")
-		if start < 0 {
-			t.Errorf("root help does not show group %q:\n%s", title, help)
+	help := stdout.String()
+	previousPosition := -1
+	for _, command := range []string{"setup", "integrations", "tracker", "state", "doctor"} {
+		position := strings.Index(help, "\n  "+command+" ")
+		if position < 0 {
+			t.Errorf("manage help does not show %q:\n%s", command, help)
 			continue
 		}
-		section := help[start:]
-		if end := strings.Index(section, "\n\n"); end >= 0 {
-			section = section[:end]
+		if position <= previousPosition {
+			t.Errorf("manage help shows %q out of order:\n%s", command, help)
 		}
-		for _, command := range commands {
-			if !strings.Contains(section, "  "+command) {
-				t.Errorf("group %q does not contain %q:\n%s", title, command, help)
-			}
+		previousPosition = position
+	}
+	for _, command := range []string{"monitor", "registry", "detection"} {
+		if strings.Contains(help, "\n  "+command+" ") {
+			t.Errorf("manage help exposes removed command %q:\n%s", command, help)
 		}
 	}
-	for _, oldTitle := range []string{"Everyday Commands:", "Configuration Commands:"} {
-		if strings.Contains(help, oldTitle) {
-			t.Errorf("root help still shows old group %q:\n%s", oldTitle, help)
-		}
+}
+
+func TestMachineFacingCommandsAndDestructiveResetAreExplicit(t *testing.T) {
+	var stdout bytes.Buffer
+	root := NewRootCommand(&stdout, &bytes.Buffer{})
+	root.SetArgs([]string{"--help"})
+	if err := root.ExecuteContext(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout.String(), "hook        Integration protocol endpoint; not intended for manual use") {
+		t.Fatalf("root help does not identify the hook protocol endpoint:\n%s", stdout.String())
+	}
+
+	stdout.Reset()
+	root = NewRootCommand(&stdout, &bytes.Buffer{})
+	root.SetArgs([]string{"manage", "tracker", "--help"})
+	if err := root.ExecuteContext(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout.String(), "run         Service entry point; not intended for manual use") {
+		t.Fatalf("tracker help does not identify the service entry point:\n%s", stdout.String())
+	}
+
+	stdout.Reset()
+	root = NewRootCommand(&stdout, &bytes.Buffer{})
+	root.SetArgs([]string{"manage", "state", "reset", "--help"})
+	if err := root.ExecuteContext(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout.String(), "--force") || !strings.Contains(stdout.String(), "confirm destructive state reset") {
+		t.Fatalf("state reset help omits confirmation requirement:\n%s", stdout.String())
 	}
 }
 
@@ -72,6 +112,7 @@ func TestLegacyCommandsAndFlagsAreRemoved(t *testing.T) {
 		{"get", "missing"},
 		{"gc", "--all"},
 		{"manage", "reset"},
+		{"admin"},
 		{"install-hooks", "codex"},
 		{"agy-hook"},
 		{"observe", "--once"},
@@ -79,6 +120,17 @@ func TestLegacyCommandsAndFlagsAreRemoved(t *testing.T) {
 		{"list", "--watch"},
 		{"list", "--harness", "codex"},
 		{"doctor", "--all"},
+		{"show", "missing"},
+		{"explain", "missing"},
+		{"setup", "codex"},
+		{"integrations", "status", "codex"},
+		{"monitor", "status"},
+		{"registry", "path"},
+		{"detection", "test"},
+		{"manage", "monitor", "status"},
+		{"manage", "registry", "path"},
+		{"manage", "detection", "test"},
+		{"detect", "--harness", "pi", "--file", "-"},
 	} {
 		root := NewRootCommand(&bytes.Buffer{}, &bytes.Buffer{})
 		root.SetArgs(args)
@@ -107,7 +159,7 @@ func TestEveryHiddenInternalCommandHasCallableHelp(t *testing.T) {
 func TestRuntimeFailureDoesNotPrintUsage(t *testing.T) {
 	var stdout bytes.Buffer
 	root := NewRootCommand(&stdout, &bytes.Buffer{})
-	root.SetArgs([]string{"--store", filepath.Join(t.TempDir(), "sessions.json"), "show", "missing"})
+	root.SetArgs([]string{"--store", filepath.Join(t.TempDir(), "sessions.json"), "info", "missing"})
 	if err := root.ExecuteContext(context.Background()); err == nil {
 		t.Fatal("expected missing session error")
 	}
@@ -117,7 +169,7 @@ func TestRuntimeFailureDoesNotPrintUsage(t *testing.T) {
 
 	stdout.Reset()
 	root = NewRootCommand(&stdout, &bytes.Buffer{})
-	root.SetArgs([]string{"show"})
+	root.SetArgs([]string{"info"})
 	if err := root.ExecuteContext(context.Background()); err == nil {
 		t.Fatal("expected invocation error")
 	}
@@ -126,8 +178,26 @@ func TestRuntimeFailureDoesNotPrintUsage(t *testing.T) {
 	}
 }
 
+func TestInfoValidatesReferenceAndExplanationFlags(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		args []string
+		want error
+	}{
+		{args: []string{"info"}, want: errInfoReference},
+		{args: []string{"info", "session", "--pane", "%1"}, want: errInfoReference},
+		{args: []string{"info", "session", "--config-dir", t.TempDir()}, want: errInfoConfig},
+	} {
+		root := NewRootCommand(&bytes.Buffer{}, &bytes.Buffer{})
+		root.SetArgs(test.args)
+		if err := root.ExecuteContext(context.Background()); !errors.Is(err, test.want) {
+			t.Errorf("%v error = %v, want %v", test.args, err, test.want)
+		}
+	}
+}
+
 func TestJSONInvocationFailureLeavesStdoutEmpty(t *testing.T) {
-	for _, args := range [][]string{{"--json", "show"}, {"--json", "list", "--not-a-flag"}, {"--json", "unknown"}, {"--json", "report", "--harness", "codex", "--presence", "live"}} {
+	for _, args := range [][]string{{"--json", "info"}, {"--json", "list", "--not-a-flag"}, {"--json", "unknown"}, {"--json", "report", "--harness", "codex", "--presence", "live"}} {
 		var stdout bytes.Buffer
 		var stderr bytes.Buffer
 		if code := executeCLI(context.Background(), args, strings.NewReader(""), &stdout, &stderr); code == 0 {
@@ -177,10 +247,10 @@ func TestListRejectsModeSpecificFlags(t *testing.T) {
 
 func TestSubcommandFlagsAreScoped(t *testing.T) {
 	tests := [][]string{
-		{"integrations", "remove", "codex", "--force"},
-		{"integrations", "status", "codex", "--dry-run"},
-		{"monitor", "status", "--dry-run"},
-		{"monitor", "disable", "--grace-period", "1s"},
+		{"manage", "integrations", "remove", "codex", "--force"},
+		{"manage", "integrations", "status", "codex", "--dry-run"},
+		{"manage", "tracker", "status", "--dry-run"},
+		{"manage", "tracker", "disable", "--grace-period", "1s"},
 		{"watch", "--summary"},
 	}
 	for _, args := range tests {
@@ -194,14 +264,14 @@ func TestSubcommandFlagsAreScoped(t *testing.T) {
 
 func TestIntegrationsInstallRejectsTargetBinaryWithoutShim(t *testing.T) {
 	t.Parallel()
-	for _, args := range [][]string{{"integrations", "install", "codex", "--target-binary", "/bin/codex"}} {
+	for _, args := range [][]string{{"manage", "integrations", "install", "codex", "--target-binary", "/bin/codex"}} {
 		root := NewRootCommand(&bytes.Buffer{}, &bytes.Buffer{})
 		root.SetArgs(args)
 		if err := root.ExecuteContext(context.Background()); !errors.Is(err, errTargetBinaryNeedsShim) {
 			t.Errorf("%v target binary error = %v", args, err)
 		}
 	}
-	for _, args := range [][]string{{"integrations", "install", "all", "--shim", "--target-binary", "/bin/agent"}} {
+	for _, args := range [][]string{{"manage", "integrations", "install", "all", "--shim", "--target-binary", "/bin/agent"}} {
 		root := NewRootCommand(&bytes.Buffer{}, &bytes.Buffer{})
 		root.SetArgs(args)
 		if err := root.ExecuteContext(context.Background()); !errors.Is(err, errTargetBinaryWithAll) {
@@ -211,7 +281,7 @@ func TestIntegrationsInstallRejectsTargetBinaryWithoutShim(t *testing.T) {
 }
 
 //nolint:cyclop // one sequential scenario proves both safety and explicit cleanup modes
-func TestRegistryCleanRequiresExplicitPolicy(t *testing.T) {
+func TestStateCleanRequiresExplicitPolicy(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "sessions.json")
 	store := registry.NewFileStore(path)
 	presence := registry.PresenceGone
@@ -220,7 +290,7 @@ func TestRegistryCleanRequiresExplicitPolicy(t *testing.T) {
 	}
 
 	root := NewRootCommand(&bytes.Buffer{}, &bytes.Buffer{})
-	root.SetArgs([]string{"--store", path, "registry", "clean"})
+	root.SetArgs([]string{"--store", path, "manage", "state", "clean"})
 	if err := root.ExecuteContext(context.Background()); err == nil || !strings.Contains(err.Error(), "exactly one") {
 		t.Fatalf("unsafe clean error = %v", err)
 	}
@@ -236,13 +306,13 @@ func TestRegistryCleanRequiresExplicitPolicy(t *testing.T) {
 
 	var machine bytes.Buffer
 	root = NewRootCommand(&machine, &bytes.Buffer{})
-	root.SetArgs([]string{"--store", path, "--json", "registry", "clean", "--older-than", "0s"})
+	root.SetArgs([]string{"--store", path, "--json", "manage", "state", "clean", "--older-than", "0s"})
 	if err := root.ExecuteContext(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	var cleanResult registry.GCResult
 	if err := json.Unmarshal(machine.Bytes(), &cleanResult); err != nil || cleanResult.Deleted != 1 {
-		t.Fatalf("registry clean JSON = %q, %v", machine.String(), err)
+		t.Fatalf("state clean JSON = %q, %v", machine.String(), err)
 	}
 	if _, err := store.Observe(context.Background(), registry.Observation{Harness: registry.HarnessCodex, Source: registry.ObservationSourceNative, Evidence: registry.ObservationEvidenceNativeEvent, Identity: registry.ObservationIdentity{SessionID: "gone-again"}, Presence: &presence, ObservedAt: time.Now().Add(-time.Hour)}); err != nil {
 		t.Fatal(err)
@@ -250,7 +320,7 @@ func TestRegistryCleanRequiresExplicitPolicy(t *testing.T) {
 
 	var stdout bytes.Buffer
 	root = NewRootCommand(&stdout, &bytes.Buffer{})
-	root.SetArgs([]string{"--store", path, "registry", "clean", "--all"})
+	root.SetArgs([]string{"--store", path, "manage", "state", "clean", "--all"})
 	if err := root.ExecuteContext(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -259,33 +329,43 @@ func TestRegistryCleanRequiresExplicitPolicy(t *testing.T) {
 	}
 }
 
-func TestRegistryPathAndResetCommands(t *testing.T) {
+func TestStatePathAndResetCommands(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "sessions.json")
 	store := registry.NewFileStore(path)
 	observeTestSession(t, store, "reset-session", time.Now())
 
 	var stdout bytes.Buffer
 	root := NewRootCommand(&stdout, &bytes.Buffer{})
-	root.SetArgs([]string{"--store", path, "registry", "path"})
+	root.SetArgs([]string{"--store", path, "manage", "state", "path"})
 	if err := root.ExecuteContext(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if strings.TrimSpace(stdout.String()) != path {
-		t.Fatalf("registry path output = %q", stdout.String())
+		t.Fatalf("state path output = %q", stdout.String())
 	}
 
 	stdout.Reset()
 	root = NewRootCommand(&stdout, &bytes.Buffer{})
-	root.SetArgs([]string{"--store", path, "registry", "reset"})
+	root.SetArgs([]string{"--store", path, "manage", "state", "reset"})
+	if err := root.ExecuteContext(context.Background()); !errors.Is(err, errStateResetForce) {
+		t.Fatalf("state reset without force error = %v", err)
+	}
+	sessions, err := store.List(context.Background(), registry.Filter{})
+	if err != nil || len(sessions) != 1 {
+		t.Fatalf("state reset without force changed state: %v, %#v", err, sessions)
+	}
+
+	root = NewRootCommand(&stdout, &bytes.Buffer{})
+	root.SetArgs([]string{"--store", path, "manage", "state", "reset", "--force"})
 	if err := root.ExecuteContext(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(stdout.String(), "Cleared:    1") {
-		t.Fatalf("registry reset output = %q", stdout.String())
+		t.Fatalf("state reset output = %q", stdout.String())
 	}
 }
 
-func TestRegistryResetCommandRecoversMalformedState(t *testing.T) {
+func TestStateResetCommandRecoversMalformedState(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "sessions.json")
 	if err := os.WriteFile(path, []byte(`{"schema_version":2,"sessions":`), 0o600); err != nil {
 		t.Fatal(err)
@@ -293,12 +373,12 @@ func TestRegistryResetCommandRecoversMalformedState(t *testing.T) {
 
 	var stdout bytes.Buffer
 	root := NewRootCommand(&stdout, &bytes.Buffer{})
-	root.SetArgs([]string{"--store", path, "registry", "reset"})
+	root.SetArgs([]string{"--store", path, "manage", "state", "reset", "--force"})
 	if err := root.ExecuteContext(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(stdout.String(), "Cleared:    0") {
-		t.Fatalf("registry reset output = %q", stdout.String())
+		t.Fatalf("state reset output = %q", stdout.String())
 	}
 	if _, err := registry.NewFileStore(path).List(context.Background(), registry.Filter{}); err != nil {
 		t.Fatalf("registry remains unreadable after reset: %v", err)
@@ -377,31 +457,31 @@ func TestAbbreviatedRegistryIDsExpandCollidingPrefixes(t *testing.T) {
 	}
 }
 
-func TestShowResolvesShortIDAndRequiresJSONExplicitly(t *testing.T) {
+func TestInfoResolvesShortIDAndRequiresJSONExplicitly(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "sessions.json")
 	store := registry.NewFileStore(path)
-	session := observeTestSession(t, store, "show-session", time.Now())
+	session := observeTestSession(t, store, "info-session", time.Now())
 	reference := shortRegistryID(session.ID)
 
 	var human bytes.Buffer
 	root := NewRootCommand(&human, &bytes.Buffer{})
-	root.SetArgs([]string{"--store", path, "show", reference})
+	root.SetArgs([]string{"--store", path, "info", reference})
 	if err := root.ExecuteContext(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(human.String(), "Session ID:") || !strings.Contains(human.String(), "show-session") || strings.HasPrefix(strings.TrimSpace(human.String()), "{") {
-		t.Fatalf("show default output is not human-readable: %q", human.String())
+	if !strings.Contains(human.String(), "Session ID:") || !strings.Contains(human.String(), "info-session") || strings.HasPrefix(strings.TrimSpace(human.String()), "{") {
+		t.Fatalf("info default output is not human-readable: %q", human.String())
 	}
 
 	var machine bytes.Buffer
 	root = NewRootCommand(&machine, &bytes.Buffer{})
-	root.SetArgs([]string{"--store", path, "--json", "show", reference})
+	root.SetArgs([]string{"--store", path, "--json", "info", reference})
 	if err := root.ExecuteContext(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	var decoded registry.Session
 	if err := json.Unmarshal(machine.Bytes(), &decoded); err != nil || decoded.ID != session.ID {
-		t.Fatalf("show JSON = %q, %v", machine.String(), err)
+		t.Fatalf("info JSON = %q, %v", machine.String(), err)
 	}
 }
 
@@ -471,7 +551,7 @@ func TestIntegrationsInstallStatusRemoveRoundTrip(t *testing.T) {
 
 	var stdout bytes.Buffer
 	root := NewRootCommand(&stdout, &bytes.Buffer{})
-	root.SetArgs([]string{"integrations", "install", "claude", "--binary", "/bin/agent-sessions"})
+	root.SetArgs([]string{"manage", "integrations", "install", "claude", "--binary", "/bin/aht"})
 	if err := root.ExecuteContext(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -481,7 +561,7 @@ func TestIntegrationsInstallStatusRemoveRoundTrip(t *testing.T) {
 
 	stdout.Reset()
 	root = NewRootCommand(&stdout, &bytes.Buffer{})
-	root.SetArgs([]string{"integrations", "status", "claude", "--binary", "/bin/agent-sessions"})
+	root.SetArgs([]string{"manage", "integrations", "status", "claude", "--binary", "/bin/aht"})
 	if err := root.ExecuteContext(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -491,7 +571,7 @@ func TestIntegrationsInstallStatusRemoveRoundTrip(t *testing.T) {
 
 	stdout.Reset()
 	root = NewRootCommand(&stdout, &bytes.Buffer{})
-	root.SetArgs([]string{"--json", "integrations", "status", "claude", "--binary", "/bin/agent-sessions"})
+	root.SetArgs([]string{"--json", "manage", "integrations", "status", "claude", "--binary", "/bin/aht"})
 	if err := root.ExecuteContext(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -502,7 +582,7 @@ func TestIntegrationsInstallStatusRemoveRoundTrip(t *testing.T) {
 
 	stdout.Reset()
 	root = NewRootCommand(&stdout, &bytes.Buffer{})
-	root.SetArgs([]string{"integrations", "remove", "claude"})
+	root.SetArgs([]string{"manage", "integrations", "remove", "claude"})
 	if err := root.ExecuteContext(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -511,7 +591,7 @@ func TestIntegrationsInstallStatusRemoveRoundTrip(t *testing.T) {
 	}
 	stdout.Reset()
 	root = NewRootCommand(&stdout, &bytes.Buffer{})
-	root.SetArgs([]string{"integrations", "status", "claude"})
+	root.SetArgs([]string{"manage", "integrations", "status", "claude"})
 	if err := root.ExecuteContext(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -527,13 +607,13 @@ func TestCodexInstallAndStatusSurfaceHookTrustStep(t *testing.T) {
 	t.Setenv(registry.StateDirEnv, filepath.Join(home, "state"))
 
 	var stdout bytes.Buffer
-	executeSurfaceCommand(t, &stdout, "integrations", "install", "codex", "--binary", "/bin/agent-sessions-v1")
+	executeSurfaceCommand(t, &stdout, "manage", "integrations", "install", "codex", "--binary", "/bin/aht-v1")
 	requireSurfaceOutput(t, stdout.String(), "Codex install omitted trust activation", "next:", "/hooks")
 
-	executeSurfaceCommand(t, &stdout, "integrations", "status", "codex", "--binary", "/bin/agent-sessions-v1")
+	executeSurfaceCommand(t, &stdout, "manage", "integrations", "status", "codex", "--binary", "/bin/aht-v1")
 	requireSurfaceOutput(t, stdout.String(), "Codex status omitted trust verification", "current", "/hooks", "trust status")
 
-	executeSurfaceCommand(t, &stdout, "--json", "integrations", "install", "codex", "--binary", "/bin/agent-sessions-v2")
+	executeSurfaceCommand(t, &stdout, "--json", "manage", "integrations", "install", "codex", "--binary", "/bin/aht-v2")
 	requireCodexUpdateTrustJSON(t, stdout.Bytes())
 }
 
@@ -545,7 +625,7 @@ func TestIntegrationsInstallShowsGeneratedContentOnlyWhenRequested(t *testing.T)
 
 	var concise bytes.Buffer
 	root := NewRootCommand(&concise, &bytes.Buffer{})
-	root.SetArgs([]string{"integrations", "install", "codex", "--binary", "/bin/agent-sessions", "--dry-run"})
+	root.SetArgs([]string{"manage", "integrations", "install", "codex", "--binary", "/bin/aht", "--dry-run"})
 	if err := root.ExecuteContext(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -555,7 +635,7 @@ func TestIntegrationsInstallShowsGeneratedContentOnlyWhenRequested(t *testing.T)
 
 	var detailed bytes.Buffer
 	root = NewRootCommand(&detailed, &bytes.Buffer{})
-	root.SetArgs([]string{"integrations", "install", "codex", "--binary", "/bin/agent-sessions", "--dry-run", "--show-content"})
+	root.SetArgs([]string{"manage", "integrations", "install", "codex", "--binary", "/bin/aht", "--dry-run", "--show-content"})
 	if err := root.ExecuteContext(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -565,7 +645,7 @@ func TestIntegrationsInstallShowsGeneratedContentOnlyWhenRequested(t *testing.T)
 
 	var machine bytes.Buffer
 	root = NewRootCommand(&machine, &bytes.Buffer{})
-	root.SetArgs([]string{"--json", "integrations", "install", "codex", "--binary", "/bin/agent-sessions", "--dry-run", "--show-content"})
+	root.SetArgs([]string{"--json", "manage", "integrations", "install", "codex", "--binary", "/bin/aht", "--dry-run", "--show-content"})
 	if err := root.ExecuteContext(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -610,7 +690,7 @@ func requireCodexUpdateTrustJSON(t *testing.T, data []byte) {
 	}
 }
 
-func TestSetupDryRunCombinesIntegrationAndMonitor(t *testing.T) {
+func TestSetupDryRunCombinesIntegrationAndTracker(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
@@ -618,11 +698,11 @@ func TestSetupDryRunCombinesIntegrationAndMonitor(t *testing.T) {
 
 	var stdout bytes.Buffer
 	root := NewRootCommand(&stdout, &bytes.Buffer{})
-	root.SetArgs([]string{"--store", filepath.Join(home, "sessions.json"), "setup", "codex", "--binary", "/bin/agent-sessions", "--dry-run"})
+	root.SetArgs([]string{"--store", filepath.Join(home, "sessions.json"), "manage", "setup", "codex", "--binary", "/bin/aht", "--dry-run"})
 	if err := root.ExecuteContext(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(stdout.String(), "codex") || !strings.Contains(stdout.String(), "monitor:") || strings.HasPrefix(strings.TrimSpace(stdout.String()), "{") {
+	if !strings.Contains(stdout.String(), "codex") || !strings.Contains(stdout.String(), "tracker:") || strings.HasPrefix(strings.TrimSpace(stdout.String()), "{") {
 		t.Fatalf("setup output = %q", stdout.String())
 	}
 	if _, err := os.Stat(filepath.Join(home, ".codex", "hooks.json")); !os.IsNotExist(err) {
@@ -631,12 +711,12 @@ func TestSetupDryRunCombinesIntegrationAndMonitor(t *testing.T) {
 
 	stdout.Reset()
 	root = NewRootCommand(&stdout, &bytes.Buffer{})
-	root.SetArgs([]string{"--store", filepath.Join(home, "sessions.json"), "--json", "setup", "codex", "--binary", "/bin/agent-sessions", "--dry-run"})
+	root.SetArgs([]string{"--store", filepath.Join(home, "sessions.json"), "--json", "manage", "setup", "codex", "--binary", "/bin/aht", "--dry-run"})
 	if err := root.ExecuteContext(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	var result setupResult
-	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil || len(result.Integrations) != 1 || result.Monitor.Manager == "" {
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil || len(result.Integrations) != 1 || result.Tracker.Manager == "" {
 		t.Fatalf("setup JSON = %q, %v", stdout.String(), err)
 	}
 }
@@ -656,14 +736,14 @@ func TestAgentSelectionSupportsMultipleDeduplicatedAgentsAndAll(t *testing.T) {
 	}
 }
 
-func TestMonitorLifecycleCommandsUseHumanOutputUnlessJSONRequested(t *testing.T) {
+func TestTrackerLifecycleCommandsUseHumanOutputUnlessJSONRequested(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
 	t.Setenv(registry.StateDirEnv, filepath.Join(home, "state"))
 	storePath := filepath.Join(home, "sessions.json")
 
-	for _, args := range [][]string{{"monitor", "enable", "--dry-run"}, {"monitor", "status"}, {"monitor", "disable", "--dry-run"}} {
+	for _, args := range [][]string{{"manage", "tracker", "enable", "--dry-run"}, {"manage", "tracker", "status"}, {"manage", "tracker", "disable", "--dry-run"}} {
 		var stdout bytes.Buffer
 		root := NewRootCommand(&stdout, &bytes.Buffer{})
 		root.SetArgs(append([]string{"--store", storePath}, args...))
@@ -677,37 +757,37 @@ func TestMonitorLifecycleCommandsUseHumanOutputUnlessJSONRequested(t *testing.T)
 
 	var stdout bytes.Buffer
 	root := NewRootCommand(&stdout, &bytes.Buffer{})
-	root.SetArgs([]string{"--store", storePath, "--json", "monitor", "enable", "--dry-run"})
+	root.SetArgs([]string{"--store", storePath, "--json", "manage", "tracker", "enable", "--dry-run"})
 	if err := root.ExecuteContext(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	var result service.Result
 	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil || result.Manager == "" {
-		t.Fatalf("monitor JSON = %q, %v", stdout.String(), err)
+		t.Fatalf("tracker JSON = %q, %v", stdout.String(), err)
 	}
 }
 
-func TestMonitorRunOnceSupportsHumanAndJSONOutput(t *testing.T) {
+func TestTrackerRunOnceSupportsHumanAndJSONOutput(t *testing.T) {
 	storePath := filepath.Join(t.TempDir(), "sessions.json")
 	var human bytes.Buffer
 	root := NewRootCommand(&human, &bytes.Buffer{})
-	root.SetArgs([]string{"--store", storePath, "monitor", "run", "--once"})
+	root.SetArgs([]string{"--store", storePath, "manage", "tracker", "run", "--once"})
 	if err := root.ExecuteContext(context.Background()); err != nil && !errors.Is(err, errObserverRunDegraded) {
 		t.Fatal(err)
 	}
 	if strings.HasPrefix(strings.TrimSpace(human.String()), "{") || !strings.Contains(human.String(), "processes=") {
-		t.Fatalf("monitor run human output = %q", human.String())
+		t.Fatalf("tracker run human output = %q", human.String())
 	}
 
 	var machine bytes.Buffer
 	root = NewRootCommand(&machine, &bytes.Buffer{})
-	root.SetArgs([]string{"--store", storePath, "--json", "monitor", "run", "--once"})
+	root.SetArgs([]string{"--store", storePath, "--json", "manage", "tracker", "run", "--once"})
 	if err := root.ExecuteContext(context.Background()); err != nil && !errors.Is(err, errObserverRunDegraded) {
 		t.Fatal(err)
 	}
 	var result map[string]any
 	if err := json.Unmarshal(machine.Bytes(), &result); err != nil {
-		t.Fatalf("monitor run JSON = %q, %v", machine.String(), err)
+		t.Fatalf("tracker run JSON = %q, %v", machine.String(), err)
 	}
 }
 
@@ -720,19 +800,19 @@ func TestDoctorIsConciseUnlessVerbose(t *testing.T) {
 
 	var concise bytes.Buffer
 	root := NewRootCommand(&concise, &bytes.Buffer{})
-	root.SetArgs([]string{"--store", path, "doctor"})
+	root.SetArgs([]string{"--store", path, "manage", "doctor"})
 	_ = root.ExecuteContext(context.Background())
 	if strings.Contains(concise.String(), "RUN/IDLE") || strings.Contains(concise.String(), "integration.codex") {
 		t.Fatalf("concise doctor contains full matrix:\n%s", concise.String())
 	}
 	installRoot := NewRootCommand(&bytes.Buffer{}, &bytes.Buffer{})
-	installRoot.SetArgs([]string{"integrations", "install", "codex", "--binary", defaultInstallBinary()})
+	installRoot.SetArgs([]string{"manage", "integrations", "install", "codex", "--binary", defaultInstallBinary()})
 	if err := installRoot.ExecuteContext(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	concise.Reset()
 	root = NewRootCommand(&concise, &bytes.Buffer{})
-	root.SetArgs([]string{"--store", path, "doctor"})
+	root.SetArgs([]string{"--store", path, "manage", "doctor"})
 	_ = root.ExecuteContext(context.Background())
 	if !strings.Contains(concise.String(), "integration.codex") || strings.Contains(concise.String(), "RUN/IDLE") {
 		t.Fatalf("concise doctor omitted installed integration or added matrix:\n%s", concise.String())
@@ -740,7 +820,7 @@ func TestDoctorIsConciseUnlessVerbose(t *testing.T) {
 
 	var verbose bytes.Buffer
 	root = NewRootCommand(&verbose, &bytes.Buffer{})
-	root.SetArgs([]string{"--store", path, "doctor", "--verbose"})
+	root.SetArgs([]string{"--store", path, "manage", "doctor", "--verbose"})
 	_ = root.ExecuteContext(context.Background())
 	if !strings.Contains(verbose.String(), "START") || !strings.Contains(verbose.String(), "integration.codex") {
 		t.Fatalf("verbose doctor omitted details:\n%s", verbose.String())
@@ -748,7 +828,7 @@ func TestDoctorIsConciseUnlessVerbose(t *testing.T) {
 
 	var machine bytes.Buffer
 	root = NewRootCommand(&machine, &bytes.Buffer{})
-	root.SetArgs([]string{"--store", path, "--json", "doctor"})
+	root.SetArgs([]string{"--store", path, "--json", "manage", "doctor"})
 	if err := root.ExecuteContext(context.Background()); err != nil {
 		t.Fatal(err)
 	}

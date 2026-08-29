@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/zigai/agent-sessions/v2/pkg/registry"
+	"github.com/zigai/aht/v2/pkg/registry"
 )
 
 func TestDiffWatchEventsSeparatesPresenceAndActivity(t *testing.T) {
@@ -60,14 +60,14 @@ func TestDiffWatchEventsIgnoresTransientWindowNameAndPathChanges(t *testing.T) {
 			WindowIndex:     "2",
 			WindowName:      "zsh",
 			PaneID:          "%1",
-			PaneCurrentPath: "/home/zigai/Projects/agent-sessions",
+			PaneCurrentPath: "/home/zigai/Projects/aht",
 		},
 		UpdatedAt: at,
 	}
 	// Only WindowName (fleeting command name) and PaneCurrentPath change
 	next := old
 	next.Tmux.WindowName = "git"
-	next.Tmux.PaneCurrentPath = "/home/zigai/Projects/agent-sessions/internal"
+	next.Tmux.PaneCurrentPath = "/home/zigai/Projects/aht/internal"
 	next.UpdatedAt = at.Add(time.Second)
 
 	events := diffWatchEvents(map[string]registry.Session{"s": old}, map[string]registry.Session{"s": next}, at.Add(2*time.Second))

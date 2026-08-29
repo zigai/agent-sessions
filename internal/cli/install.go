@@ -8,7 +8,7 @@ import (
 func defaultInstallBinary() string {
 	executable, err := os.Executable()
 	if err != nil {
-		return "agent-sessions"
+		return "aht"
 	}
 
 	resolved, err := filepath.EvalSymlinks(executable)

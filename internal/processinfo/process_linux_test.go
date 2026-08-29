@@ -28,7 +28,7 @@ func TestParseLinuxStatHandlesParentheses(t *testing.T) {
 
 func TestLinuxEnvironmentValueFindsScopedAgentHint(t *testing.T) {
 	t.Parallel()
-	got := linuxEnvironmentValue([]byte("PATH=/usr/bin\x00AGENT_SESSIONS_AGENT=codex\x00OTHER=value\x00"), "AGENT_SESSIONS_AGENT")
+	got := linuxEnvironmentValue([]byte("PATH=/usr/bin\x00AHT_AGENT=codex\x00OTHER=value\x00"), "AHT_AGENT")
 	if got != "codex" {
 		t.Fatalf("linuxEnvironmentValue = %q, want codex", got)
 	}

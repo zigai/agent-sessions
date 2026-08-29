@@ -12,8 +12,8 @@ import (
 	"strings"
 	"time"
 
-	harnesspkg "github.com/zigai/agent-sessions/v2/pkg/harness"
-	"github.com/zigai/agent-sessions/v2/pkg/registry"
+	harnesspkg "github.com/zigai/aht/v2/pkg/harness"
+	"github.com/zigai/aht/v2/pkg/registry"
 )
 
 func installHarnessAdapter(ctx context.Context, options Options) (Result, error) {
@@ -875,7 +875,7 @@ func managedSource(source string, harness registry.Harness) string {
 
 func isManagedSourceHookCommand(source string) func(string) bool {
 	return func(command string) bool {
-		return strings.Contains(command, "agent_sessions_integration="+source) ||
+		return strings.Contains(command, "aht_integration="+source) ||
 			strings.Contains(command, "--source "+source)
 	}
 }

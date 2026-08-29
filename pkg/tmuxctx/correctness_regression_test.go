@@ -44,7 +44,7 @@ func TestTmuxFormatWithRealTmuxEscapedFields(t *testing.T) {
 	).CombinedOutput(); err != nil {
 		t.Fatalf("starting tmux session: %v: %s", err, output)
 	}
-	if output, err := exec.CommandContext(ctx, "tmux", "-S", socket, "set-option", "-gq", "@agent_sessions_weird", weirdValue).CombinedOutput(); err != nil {
+	if output, err := exec.CommandContext(ctx, "tmux", "-S", socket, "set-option", "-gq", "@aht_weird", weirdValue).CombinedOutput(); err != nil {
 		t.Fatalf("setting tmux option: %v: %s", err, output)
 	}
 
@@ -56,7 +56,7 @@ func TestTmuxFormatWithRealTmuxEscapedFields(t *testing.T) {
 		"display-message",
 		"-p",
 		"-F",
-		tmuxFormat([]string{"@agent_sessions_weird"}),
+		tmuxFormat([]string{"@aht_weird"}),
 	).CombinedOutput()
 	if err != nil {
 		t.Fatalf("displaying tmux option: %v: %s", err, output)

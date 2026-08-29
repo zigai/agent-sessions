@@ -4,11 +4,11 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/zigai/agent-sessions/v2/pkg/registry"
+	"github.com/zigai/aht/v2/pkg/registry"
 )
 
 const (
-	ManagedMarker                 = "agent-sessions managed integration"
+	ManagedMarker                 = "aht managed integration"
 	HookTimeoutSeconds            = 5
 	codexSessionEndTimeoutSeconds = 3
 	HookTypeCommand               = "command"
@@ -232,8 +232,8 @@ func reportHookCommand[T hookTransition](
 	}
 	parts = append(
 		parts,
-		"--attribute", ShellQuote("agent_sessions_integration_version="+strconv.Itoa(IntegrationVersionFor(harness))),
-		"--attribute", ShellQuote("agent_sessions_integration="+source),
+		"--attribute", ShellQuote("aht_integration_version="+strconv.Itoa(IntegrationVersionFor(harness))),
+		"--attribute", ShellQuote("aht_integration="+source),
 		stdinFlag,
 		"--quiet",
 	)

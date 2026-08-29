@@ -9,8 +9,8 @@ import (
 	"strconv"
 	"strings"
 
-	harnesspkg "github.com/zigai/agent-sessions/v2/pkg/harness"
-	"github.com/zigai/agent-sessions/v2/pkg/registry"
+	harnesspkg "github.com/zigai/aht/v2/pkg/harness"
+	"github.com/zigai/aht/v2/pkg/registry"
 )
 
 // ArtifactStatus describes whether a managed integration artifact is absent,
@@ -30,9 +30,9 @@ const (
 )
 
 var (
-	integrationVersionPattern = regexp.MustCompile(`(?i)(?:agent[_-]?sessions[_-]?integration[_-]?version|AGENT_SESSIONS_INTEGRATION_VERSION)\s*[=:]\s*["']?([0-9]+)`)
-	integrationSourcePattern  = regexp.MustCompile(`(?i)agent[_-]?sessions[_-]?integration\s*[=:]`)
-	integrationIDPattern      = regexp.MustCompile(`(?i)AGENT_SESSIONS_INTEGRATION_ID\s*=\s*["']?([a-z0-9_-]+)`)
+	integrationVersionPattern = regexp.MustCompile(`(?i)(?:aht[_-]?integration[_-]?version|AHT_INTEGRATION_VERSION)\s*[=:]\s*["']?([0-9]+)`)
+	integrationSourcePattern  = regexp.MustCompile(`(?i)aht[_-]?integration\s*[=:]`)
+	integrationIDPattern      = regexp.MustCompile(`(?i)AHT_INTEGRATION_ID\s*=\s*["']?([a-z0-9_-]+)`)
 )
 
 // ClassifyArtifact inspects a generated artifact without modifying it. It is
@@ -47,7 +47,7 @@ func ClassifyArtifact(path string) (ArtifactStatus, error) {
 		return "", fmt.Errorf("checking artifact %s: %w", path, err)
 	}
 	if info.IsDir() {
-		data, err := os.ReadFile(filepath.Join(path, ".agent-sessions-managed"))
+		data, err := os.ReadFile(filepath.Join(path, ".aht-managed"))
 		if err != nil {
 			if errors.Is(err, os.ErrNotExist) {
 				return ArtifactForeign, nil
@@ -118,7 +118,7 @@ func classifyArtifactForHarness(path string, harnessID registry.Harness) (Artifa
 	}
 	ownershipPath := path
 	if info.IsDir() {
-		ownershipPath = filepath.Join(path, ".agent-sessions-managed")
+		ownershipPath = filepath.Join(path, ".aht-managed")
 	}
 	data, err := os.ReadFile(ownershipPath)
 	if err != nil {

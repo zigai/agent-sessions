@@ -13,9 +13,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/zigai/agent-sessions/v2/internal/processinfo"
-	"github.com/zigai/agent-sessions/v2/pkg/registry"
-	"github.com/zigai/agent-sessions/v2/pkg/tmuxctx"
+	"github.com/zigai/aht/v2/internal/processinfo"
+	"github.com/zigai/aht/v2/pkg/registry"
+	"github.com/zigai/aht/v2/pkg/tmuxctx"
 )
 
 //nolint:cyclop,gocognit // end-to-end setup and assertions intentionally cover all four agents in one server
@@ -132,7 +132,7 @@ func TestRealTmuxBottomScreenDetectionForFourAgents(t *testing.T) {
 			}
 			running := registry.ActivityRunning
 			presence := registry.PresenceLive
-			if _, err := store.Observe(captureCtx, registry.Observation{Source: registry.ObservationSourceNative, Evidence: registry.ObservationEvidenceNativeEvent, Harness: harnessID, Identity: registry.ObservationIdentity{SessionID: "race-" + string(harnessID)}, Presence: &presence, Activity: &running, NativeEvent: "integration_race", Process: processIdentity(process), Attributes: map[string]string{"agent_sessions_integration": integration}, ObservedAt: time.Now().UTC()}); err != nil {
+			if _, err := store.Observe(captureCtx, registry.Observation{Source: registry.ObservationSourceNative, Evidence: registry.ObservationEvidenceNativeEvent, Harness: harnessID, Identity: registry.ObservationIdentity{SessionID: "race-" + string(harnessID)}, Presence: &presence, Activity: &running, NativeEvent: "integration_race", Process: processIdentity(process), Attributes: map[string]string{"aht_integration": integration}, ObservedAt: time.Now().UTC()}); err != nil {
 				return tmuxctx.ScreenSnapshot{}, fmt.Errorf("record integration race: %w", err)
 			}
 			break

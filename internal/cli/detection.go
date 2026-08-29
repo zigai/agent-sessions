@@ -4,38 +4,19 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
-	"os"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/spf13/cobra"
-
-	"github.com/zigai/agent-sessions/v2/internal/agentstate"
-	"github.com/zigai/agent-sessions/v2/pkg/herdrctx"
-	"github.com/zigai/agent-sessions/v2/pkg/muxctx"
-	"github.com/zigai/agent-sessions/v2/pkg/registry"
-	"github.com/zigai/agent-sessions/v2/pkg/tmuxctx"
-	"github.com/zigai/agent-sessions/v2/pkg/zellijctx"
+	"github.com/zigai/aht/v2/internal/agentstate"
+	"github.com/zigai/aht/v2/pkg/herdrctx"
+	"github.com/zigai/aht/v2/pkg/muxctx"
+	"github.com/zigai/aht/v2/pkg/registry"
+	"github.com/zigai/aht/v2/pkg/tmuxctx"
+	"github.com/zigai/aht/v2/pkg/zellijctx"
 )
 
-const maxOfflineScreenBytes = 1 << 20
-
-var (
-	errDetectFileRequired   = errors.New("--file is required")
-	errDetectFileTooLarge   = errors.New("screen input exceeds 1 MiB")
-	errExplainReference     = errors.New("provide one session reference or --pane")
-	errDetectionUnsupported = errors.New("screen detection is not supported")
-	errTmuxPaneNotLive      = errors.New("tmux pane is not live")
-)
-
-type detectOptions struct {
-	harness   string
-	file      string
-	title     string
-	configDir string
-}
+var errTmuxPaneNotLive = errors.New("tmux pane is not live")
 
 type hookExplanation struct {
 	Event           string    `json:"event,omitempty"`
@@ -70,101 +51,6 @@ type explainResult struct {
 	RegistryDecision  *registry.ActivityDecision `json:"registry_decision,omitempty"`
 }
 
-func (app *application) newDetectCommand() *cobra.Command {
-	options := detectOptions{}
-	command := &cobra.Command{Use: "detect", Short: "Evaluate an agent detection manifest against saved screen text", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
-		return app.runDetect(cmd, options)
-	}}
-	command.Flags().StringVar(&options.harness, "harness", "", "agent harness (bundled or locally overridden)")
-	command.Flags().StringVar(&options.file, "file", "", "screen text file, or - for stdin")
-	command.Flags().StringVar(&options.title, "title", "", "optional terminal title")
-	command.Flags().StringVar(&options.configDir, "config-dir", "", "detection manifest override directory")
-	_ = command.MarkFlagRequired("harness")
-	return command
-}
-
-func (app *application) runDetect(command *cobra.Command, options detectOptions) error {
-	if options.file == "" {
-		return errDetectFileRequired
-	}
-	harness, err := registry.NormalizeHarness(options.harness)
-	if err != nil {
-		return fmt.Errorf("normalize detection harness: %w", err)
-	}
-	loader := agentstate.Loader{ConfigDir: options.configDir}
-	if !loader.Supports(harness) {
-		return fmt.Errorf("%w: %q", errDetectionUnsupported, harness)
-	}
-	data, err := readScreenInput(command, options.file)
-	if err != nil {
-		return err
-	}
-	manifest, err := loader.Load(harness)
-	if err != nil {
-		return fmt.Errorf("load detection manifest: %w", err)
-	}
-	decision := agentstate.Evaluate(manifest, agentstate.NormalizeSnapshot(string(data), options.title))
-	if app.outputJSON {
-		return app.writeJSON(decision)
-	}
-	return app.writeHumanDetails([]humanDetail{
-		{label: "Activity", value: string(decision.Activity)},
-		{label: "Reason", value: decision.Reason},
-		{label: "Rule", value: decision.RuleID},
-		{label: "Manifest", value: decision.ManifestSource},
-		{label: "Manifest version", value: strconv.Itoa(decision.ManifestVersion)},
-		{label: "Warning", value: decision.Warning},
-	})
-}
-
-func readScreenInput(command *cobra.Command, path string) ([]byte, error) {
-	var reader io.Reader
-	var file *os.File
-	if path == "-" {
-		reader = command.InOrStdin()
-	} else {
-		opened, err := os.Open(path)
-		if err != nil {
-			return nil, fmt.Errorf("open screen input: %w", err)
-		}
-		file = opened
-		defer func() { _ = file.Close() }()
-		reader = file
-	}
-	data, err := io.ReadAll(io.LimitReader(reader, maxOfflineScreenBytes+1))
-	if err != nil {
-		return nil, fmt.Errorf("read screen input: %w", err)
-	}
-	if len(data) > maxOfflineScreenBytes {
-		return nil, errDetectFileTooLarge
-	}
-	return data, nil
-}
-
-func (app *application) newExplainCommand() *cobra.Command {
-	var paneID string
-	var configDir string
-	command := &cobra.Command{Use: "explain [session]", Short: "Explain how an agent activity state was selected", Args: cobra.MaximumNArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
-		if (len(args) == 0) == (paneID == "") {
-			return errExplainReference
-		}
-		var session registry.Session
-		var err error
-		if paneID != "" {
-			session, err = app.resolvePaneSession(cmd.Context(), paneID)
-		} else {
-			session, err = app.resolveSession(cmd.Context(), args[0])
-		}
-		if err != nil {
-			return err
-		}
-		return app.writeExplanation(cmd.Context(), session, configDir)
-	}}
-	command.Flags().StringVar(&paneID, "pane", "", "multiplexer pane id")
-	command.Flags().StringVar(&configDir, "config-dir", "", "detection manifest override directory")
-	return command
-}
-
 func (app *application) resolvePaneSession(ctx context.Context, paneID string) (registry.Session, error) {
 	sessions, err := app.registryStore().List(ctx, registry.Filter{})
 	if err != nil {
@@ -187,7 +73,7 @@ func (app *application) resolvePaneSession(ctx context.Context, paneID string) (
 	return match, nil
 }
 
-func (app *application) writeExplanation(ctx context.Context, session registry.Session, configDir string) error {
+func evaluateExplanation(ctx context.Context, session registry.Session, configDir string) (explainResult, error) {
 	now := time.Now().UTC()
 	policy := agentstate.PolicyFor(session.Harness)
 	hookEvaluation := agentstate.EvaluateHook(session, now)
@@ -201,20 +87,17 @@ func (app *application) writeExplanation(ctx context.Context, session registry.S
 	result.Hook = hookExplanation{Event: "", Integration: "", ObservedAt: time.Time{}, Age: "", ProcessMatches: hookEvaluation.ProcessMatches, Fresh: hookEvaluation.Fresh, FreshnessReason: hookEvaluation.Reason, Active: hookEvaluation.Active}
 	if native := session.Observations.Native; native != nil {
 		result.Hook.Event = native.Event
-		result.Hook.Integration = native.Attributes["agent_sessions_integration"]
+		result.Hook.Integration = native.Attributes["aht_integration"]
 		result.Hook.ObservedAt = native.ObservedAt
 		result.Hook.Age = now.Sub(native.ObservedAt).Round(time.Millisecond).String()
 	}
 	screen, finalActivity, screenErr := explanationScreen(ctx, session, configDir, authority, result.FinalActivity)
 	result.Screen = screen
 	result.FinalActivity = finalActivity
-	if err := app.writeExplanationResult(result); err != nil {
-		return err
-	}
 	if screenErr != nil {
-		return fmt.Errorf("evaluate live screen: %w", screenErr)
+		return result, fmt.Errorf("evaluate live screen: %w", screenErr)
 	}
-	return nil
+	return result, nil
 }
 
 func explanationScreen(ctx context.Context, session registry.Session, configDir string, authority agentstate.Authority, currentActivity string) (screenExplanation, string, error) {
@@ -236,19 +119,13 @@ func explanationScreen(ctx context.Context, session registry.Session, configDir 
 	return screen, currentActivity, nil
 }
 
-func (app *application) writeExplanationResult(result explainResult) error {
-	if app.outputJSON {
-		return app.writeJSON(result)
-	}
+func (app *application) writeExplanationDetails(result explainResult) error {
 	return app.writeHumanDetails([]humanDetail{
-		{label: "Session", value: result.SessionID},
-		{label: "Agent", value: string(result.Harness)},
-		{label: "Pane", value: result.PaneID},
-		{label: "Process match", value: result.ProcessMatch},
-		{label: "Authority", value: string(result.SelectedAuthority)},
-		{label: "Fallback", value: result.FallbackReason},
-		{label: "Final activity", value: result.FinalActivity},
 		{label: "Registry activity", value: activityString(result.RegistryActivity)},
+		{label: "Effective activity", value: result.FinalActivity},
+		{label: "Authority", value: string(result.SelectedAuthority)},
+		{label: "Process match", value: result.ProcessMatch},
+		{label: "Fallback", value: result.FallbackReason},
 		{label: "Hook event", value: result.Hook.Event},
 		{label: "Hook integration", value: result.Hook.Integration},
 		{label: "Hook age", value: result.Hook.Age},

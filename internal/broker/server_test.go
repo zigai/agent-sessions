@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/zigai/agent-sessions/v2/pkg/brokerapi"
-	"github.com/zigai/agent-sessions/v2/pkg/registry"
+	"github.com/zigai/aht/v2/pkg/brokerapi"
+	"github.com/zigai/aht/v2/pkg/registry"
 )
 
 //nolint:cyclop // One end-to-end scenario verifies transport, permissions, and streaming.
@@ -69,7 +69,7 @@ func TestServerStreamsEffectiveStateChanges(t *testing.T) {
 		Presence:    &presence,
 		Activity:    &running,
 		NativeEvent: "agent_start",
-		Attributes:  map[string]string{"agent_sessions_integration": "omp-extension"},
+		Attributes:  map[string]string{"aht_integration": "omp-extension"},
 		ObservedAt:  time.Now().UTC(),
 	}
 	if _, err := client.Observe(ctx, observation); err != nil {
@@ -139,7 +139,7 @@ func BenchmarkBrokerObserveRoundTrip(b *testing.B) {
 		Activity:    &running,
 		Sequence:    &sequence,
 		NativeEvent: "agent_start",
-		Attributes:  map[string]string{"agent_sessions_integration": "omp-extension"},
+		Attributes:  map[string]string{"aht_integration": "omp-extension"},
 		ObservedAt:  time.Now().UTC(),
 	}
 

@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/zigai/agent-sessions/v2/pkg/registry"
+	"github.com/zigai/aht/v2/pkg/registry"
 )
 
 const (
@@ -15,12 +15,12 @@ const (
 )
 
 const (
-	kiloPluginName        = "agent-sessions-state.ts"
+	kiloPluginName        = "aht-state.ts"
 	kiloIntegrationID     = "kilo"
 	kiloIntegrationSource = "kilo-plugin"
 )
 
-//go:embed assets/kilo/agent-sessions-state.ts.tmpl
+//go:embed assets/kilo/aht-state.ts.tmpl
 var kiloPluginTemplate string
 
 type kiloHarness struct {

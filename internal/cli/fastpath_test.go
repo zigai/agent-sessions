@@ -29,7 +29,7 @@ func TestParseFastReportOptionsSupportsLifecycle(t *testing.T) {
 }
 
 func TestParseFastReportOptionsRejectsConflictingHarnesses(t *testing.T) {
-	t.Setenv("AGENT_SESSIONS_HARNESS", "codex")
+	t.Setenv("AHT_HARNESS", "codex")
 
 	_, ok, err := parseFastReportOptions([]string{"claude", "--session-id", "session"})
 	if !ok || !errors.Is(err, errUnexpectedReportArg) {

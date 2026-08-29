@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/zigai/agent-sessions/v2/pkg/brokerapi"
-	"github.com/zigai/agent-sessions/v2/pkg/registry"
+	"github.com/zigai/aht/v2/pkg/brokerapi"
+	"github.com/zigai/aht/v2/pkg/registry"
 )
 
 const defaultWatchDebounce = 100 * time.Millisecond
@@ -159,7 +159,6 @@ func (app *application) runBrokerWatch(
 	return nil
 }
 
-//nolint:gocognit,cyclop // fallback orchestration keeps filesystem, registry, and timer transitions together
 func (app *application) runFilesystemWatch(ctx context.Context, o watchOptions) error {
 	s := app.store()
 	if _, _, e := watchTarget(s); e != nil {

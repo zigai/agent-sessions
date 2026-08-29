@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/zigai/agent-sessions/v2/pkg/registry"
+	"github.com/zigai/aht/v2/pkg/registry"
 )
 
 func TestGoldenScreenFixtures(t *testing.T) {
@@ -326,7 +326,7 @@ func TestHookAuthorityRequiresMatchingProcess(t *testing.T) {
 	now := time.Now().UTC()
 	process := registry.ProcessIdentity{PID: 12, StartIdentity: "boot:12"}
 	running := registry.ActivityRunning
-	session := registry.Session{Harness: registry.HarnessPi, Presence: registry.PresenceLive, Process: &process, Observations: registry.Observations{Native: &registry.NativeObservation{Activity: &running, Attributes: map[string]string{"agent_sessions_integration": "pi-extension"}, Process: process, ObservedAt: now}}}
+	session := registry.Session{Harness: registry.HarnessPi, Presence: registry.PresenceLive, Process: &process, Observations: registry.Observations{Native: &registry.NativeObservation{Activity: &running, Attributes: map[string]string{"aht_integration": "pi-extension"}, Process: process, ObservedAt: now}}}
 	if !HookIsActive(session, now) || ShouldDetectScreen(session, now) {
 		t.Fatal("matching Pi extension report was not authoritative")
 	}
@@ -395,7 +395,7 @@ func ompSession(observedAt time.Time) registry.Session {
 		Process:  &process,
 		Observations: registry.Observations{Native: &registry.NativeObservation{
 			Activity:   &running,
-			Attributes: map[string]string{"agent_sessions_integration": "omp-extension"},
+			Attributes: map[string]string{"aht_integration": "omp-extension"},
 			Process:    process,
 			ObservedAt: observedAt,
 		}},

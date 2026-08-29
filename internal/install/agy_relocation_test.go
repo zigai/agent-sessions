@@ -19,7 +19,7 @@ func TestCleanupLegacyAgyReportsManifestAndRestoreFailures(t *testing.T) {
 	pluginDir, legacyDir, _ := setupLegacyAgyRelocation(t, []byte("{"))
 	ops := agyRelocationOps{
 		rename: func(oldPath string, newPath string) error {
-			if newPath == legacyDir && strings.Contains(filepath.Base(oldPath), ".agent-sessions-state.legacy-") {
+			if newPath == legacyDir && strings.Contains(filepath.Base(oldPath), ".aht-state.legacy-") {
 				return errRestoreLegacyAgyTest
 			}
 
@@ -32,7 +32,7 @@ func TestCleanupLegacyAgyReportsManifestAndRestoreFailures(t *testing.T) {
 	if !errors.Is(err, errRestoreLegacyAgyTest) {
 		t.Fatalf("cleanup error = %v, want restore failure", err)
 	}
-	if !strings.Contains(err.Error(), ".agent-sessions-state.legacy-") {
+	if !strings.Contains(err.Error(), ".aht-state.legacy-") {
 		t.Fatalf("cleanup error omits retained backup path: %v", err)
 	}
 }
@@ -40,12 +40,12 @@ func TestCleanupLegacyAgyReportsManifestAndRestoreFailures(t *testing.T) {
 func TestCleanupLegacyAgyReportsBackupRemovalAfterManifestDisappears(t *testing.T) {
 	t.Parallel()
 
-	manifest := []byte(`{"imports":[{"name":"agent-sessions-state","source":"antigravity","imported_at":"","components":["hooks"]}]}`)
+	manifest := []byte(`{"imports":[{"name":"aht-state","source":"antigravity","imported_at":"","components":["hooks"]}]}`)
 	pluginDir, _, manifestPath := setupLegacyAgyRelocation(t, manifest)
 	ops := agyRelocationOps{
 		rename: os.Rename,
 		removeAll: func(path string) error {
-			if strings.Contains(filepath.Base(path), ".agent-sessions-state.legacy-") {
+			if strings.Contains(filepath.Base(path), ".aht-state.legacy-") {
 				return errRemoveLegacyAgyTest
 			}
 
@@ -63,7 +63,7 @@ func TestCleanupLegacyAgyReportsBackupRemovalAfterManifestDisappears(t *testing.
 	if !errors.Is(err, errRemoveLegacyAgyTest) {
 		t.Fatalf("cleanup error = %v, want backup removal failure", err)
 	}
-	if !strings.Contains(err.Error(), ".agent-sessions-state.legacy-") {
+	if !strings.Contains(err.Error(), ".aht-state.legacy-") {
 		t.Fatalf("cleanup error omits retained backup path: %v", err)
 	}
 }

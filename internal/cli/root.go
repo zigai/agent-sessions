@@ -14,25 +14,28 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 	"unicode/utf8"
+
 	"github.com/spf13/cobra"
 
-	"github.com/zigai/agent-sessions/v2/internal/agentstate"
-	"github.com/zigai/agent-sessions/v2/internal/processinfo"
-	"github.com/zigai/agent-sessions/v2/pkg/brokerapi"
-	harnesspkg "github.com/zigai/agent-sessions/v2/pkg/harness"
-	"github.com/zigai/agent-sessions/v2/pkg/herdrctx"
-	"github.com/zigai/agent-sessions/v2/pkg/registry"
-	"github.com/zigai/agent-sessions/v2/pkg/tmuxctx"
-	"github.com/zigai/agent-sessions/v2/pkg/zellijctx"
+	"github.com/zigai/aht/v2/internal/agentstate"
+	"github.com/zigai/aht/v2/internal/processinfo"
+	"github.com/zigai/aht/v2/pkg/brokerapi"
+	harnesspkg "github.com/zigai/aht/v2/pkg/harness"
+	"github.com/zigai/aht/v2/pkg/herdrctx"
+	"github.com/zigai/aht/v2/pkg/registry"
+	"github.com/zigai/aht/v2/pkg/tmuxctx"
+	"github.com/zigai/aht/v2/pkg/zellijctx"
 )
 
 var (
 	version                      = "dev"
 	commit                       = "none"
 	date                         = "unknown"
+	configureCobraOnce           sync.Once
 	errInvalidAttribute          = errors.New("invalid attribute")
 	errInvalidListSort           = errors.New("invalid list sort")
 	errUnexpectedReportArg       = errors.New("unexpected report argument")
@@ -60,15 +63,12 @@ const (
 	statusCommandName                = "status"
 	installCommandName               = "install"
 	integrationsCommand              = "integrations"
-	monitorCommand                   = "monitor"
-	registryCommandName              = "registry"
+	trackerCommand                   = "tracker"
+	stateCommandName                 = "state"
 	hookCommandName                  = "hook"
 	listSortUpdated                  = "updated"
 	hoursPerDay                      = 24
 	jsonIndent                       = "  "
-	sessionsGroupID                  = "sessions"
-	setupGroupID                     = "setup"
-	systemGroupID                    = "system"
 )
 
 type application struct {
@@ -79,18 +79,25 @@ type application struct {
 	queueDrainer func(context.Context, string) error
 }
 
+func configureCobra() {
+	configureCobraOnce.Do(func() {
+		cobra.EnableCommandSorting = false
+	})
+}
+
 func NewRootCommand(stdout io.Writer, stderr io.Writer) *cobra.Command {
+	configureCobra()
 	return newRootCommand(&application{stdout: stdout, stderr: stderr, queueDrainer: kickQueueDrainer})
 }
 
 func newRootCommand(app *application) *cobra.Command {
 	var showVersion bool
-	root := &cobra.Command{Use: "agent-sessions", Short: "Track local coding-agent sessions and where they are running", SilenceErrors: true, SilenceUsage: true, RunE: func(cmd *cobra.Command, _ []string) error {
+	root := &cobra.Command{Use: "aht", Short: "Track local coding-agent sessions and where they are running", SilenceErrors: true, SilenceUsage: true, RunE: func(cmd *cobra.Command, _ []string) error {
 		if showVersion {
 			if app.outputJSON {
 				return app.writeJSON(map[string]string{"version": version, "commit": commit, "built": date})
 			}
-			return app.writef("agent-sessions %s (commit: %s, built: %s)\n", version, commit, date)
+			return app.writef("aht %s (commit: %s, built: %s)\n", version, commit, date)
 		}
 		return cmd.Help()
 	}, CompletionOptions: cobra.CompletionOptions{HiddenDefaultCmd: true}}
@@ -99,31 +106,29 @@ func newRootCommand(app *application) *cobra.Command {
 	root.PersistentFlags().StringVar(&app.storePath, "store", "", "registry state file path")
 	root.PersistentFlags().BoolVar(&app.outputJSON, "json", false, "emit JSON (JSON Lines for streams)")
 	root.Flags().BoolVarP(&showVersion, "version", "v", false, "print version")
-	root.AddGroup(
-		&cobra.Group{ID: sessionsGroupID, Title: "Sessions:"},
-		&cobra.Group{ID: setupGroupID, Title: "Setup:"},
-		&cobra.Group{ID: systemGroupID, Title: "System:"},
-	)
 	root.AddCommand(
-		inCommandGroup(app.newListCommand(), sessionsGroupID),
-		inCommandGroup(app.newWatchCommand(), sessionsGroupID),
-		inCommandGroup(app.newShowCommand(), sessionsGroupID),
-		inCommandGroup(app.newExplainCommand(), sessionsGroupID),
-		inCommandGroup(app.newDetectCommand(), sessionsGroupID),
-		inCommandGroup(app.newStopCommand(), sessionsGroupID),
-		inCommandGroup(app.newSetupCommand(), setupGroupID),
-		inCommandGroup(app.newIntegrationsCommand(), setupGroupID),
-		inCommandGroup(app.newHookCommand(), setupGroupID),
-		inCommandGroup(app.newMonitorCommand(), systemGroupID),
-		inCommandGroup(app.newRegistryCommand(), systemGroupID),
-		inCommandGroup(app.newDoctorCommand(), systemGroupID),
+		app.newListCommand(),
+		app.newWatchCommand(),
+		app.newInfoCommand(),
+		app.newStopCommand(),
+		app.newManageCommand(),
+		app.newHookCommand(),
 		app.newReportCommand(),
 	)
 	return root
 }
 
-func inCommandGroup(command *cobra.Command, groupID string) *cobra.Command {
-	command.GroupID = groupID
+func (app *application) newManageCommand() *cobra.Command {
+	command := &cobra.Command{Use: "manage", Short: "Manage setup, integrations, tracking, and state", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
+		return cmd.Help()
+	}}
+	command.AddCommand(
+		app.newSetupCommand(),
+		app.newIntegrationsCommand(),
+		app.newTrackerCommand(),
+		app.newStateCommand(),
+		app.newDoctorCommand(),
+	)
 	return command
 }
 
@@ -295,7 +300,7 @@ func (app *application) newReportCommand() *cobra.Command {
 }
 
 func defaultReportOptionsFromEnv() reportOptions {
-	return reportOptions{harness: firstEnv("AGENT_SESSIONS_HARNESS", "AGENT_HARNESS"), sessionID: firstEnv(harnesspkg.EnvNames(harnesspkg.EnvSessionID)...), sessionPath: firstEnv(harnesspkg.EnvNames(harnesspkg.EnvSessionPath)...), cwdAuto: true, projectRoot: firstEnv(harnesspkg.EnvNames(harnesspkg.EnvProjectRoot)...), pid: firstEnvInt(harnesspkg.EnvNames(harnesspkg.EnvPID)...), ppid: firstEnvInt("AGENT_SESSIONS_PPID", "AGENT_PPID"), tty: firstEnv("AGENT_SESSIONS_TTY", "TTY"), event: firstEnv(harnesspkg.EnvNames(harnesspkg.EnvEvent)...), sequence: firstEnv("AGENT_SESSIONS_SEQUENCE")}
+	return reportOptions{harness: firstEnv("AHT_HARNESS", "AGENT_HARNESS"), sessionID: firstEnv(harnesspkg.EnvNames(harnesspkg.EnvSessionID)...), sessionPath: firstEnv(harnesspkg.EnvNames(harnesspkg.EnvSessionPath)...), cwdAuto: true, projectRoot: firstEnv(harnesspkg.EnvNames(harnesspkg.EnvProjectRoot)...), pid: firstEnvInt(harnesspkg.EnvNames(harnesspkg.EnvPID)...), ppid: firstEnvInt("AHT_PPID", "AGENT_PPID"), tty: firstEnv("AHT_TTY", "TTY"), event: firstEnv(harnesspkg.EnvNames(harnesspkg.EnvEvent)...), sequence: firstEnv("AHT_SEQUENCE")}
 }
 
 func parseObservedAt(value string) (time.Time, error) {
@@ -873,6 +878,13 @@ func (app *application) runListSessions(ctx context.Context, o listOptions) erro
 }
 
 func listTableColumns(rows [][]string, maxWidth int) []humanColumn {
+	const (
+		maxIDColumnWidth       = 16
+		maxAgentColumnWidth    = 10
+		maxPresenceColumnWidth = 8
+		maxActivityColumnWidth = 8
+		maxLocationColumnWidth = 24
+	)
 	if maxWidth <= 0 {
 		maxWidth = humanLineWidth
 	}
@@ -889,11 +901,11 @@ func listTableColumns(rows [][]string, maxWidth int) []humanColumn {
 		}
 	}
 
-	idWidth := max(len("ID"), min(maxLen[0], 16))
-	agentWidth := max(len("AGENT"), min(maxLen[1], 10))
-	presenceWidth := max(len("PRESENCE"), min(maxLen[3], 8))
-	activityWidth := max(len("ACTIVITY"), min(maxLen[4], 8))
-	locationWidth := max(len("LOCATION"), min(maxLen[5], 24))
+	idWidth := max(len("ID"), min(maxLen[0], maxIDColumnWidth))
+	agentWidth := max(len("AGENT"), min(maxLen[1], maxAgentColumnWidth))
+	presenceWidth := max(len("PRESENCE"), min(maxLen[3], maxPresenceColumnWidth))
+	activityWidth := max(len("ACTIVITY"), min(maxLen[4], maxActivityColumnWidth))
+	locationWidth := max(len("LOCATION"), min(maxLen[5], maxLocationColumnWidth))
 	updatedWidth := max(len("UPDATED"), maxLen[7])
 
 	gapsTotal := (len(headings) - 1) * humanColumnGap
@@ -904,10 +916,11 @@ func listTableColumns(rows [][]string, maxWidth int) []humanColumn {
 	available := maxWidth - fixedTotal
 
 	var sessionWidth, cwdWidth int
-	if available >= sessionNeeded+cwdNeeded {
+	switch {
+	case available >= sessionNeeded+cwdNeeded:
 		sessionWidth = sessionNeeded
 		cwdWidth = cwdNeeded
-	} else if available > 0 {
+	case available > 0:
 		totalNeeded := sessionNeeded + cwdNeeded
 		sessionWidth = max(len("SESSION"), (available*sessionNeeded)/totalNeeded)
 		cwdWidth = max(len("CWD"), available-sessionWidth)
@@ -915,7 +928,7 @@ func listTableColumns(rows [][]string, maxWidth int) []humanColumn {
 			sessionWidth += cwdWidth - cwdNeeded
 			cwdWidth = cwdNeeded
 		}
-	} else {
+	default:
 		sessionWidth = len("SESSION")
 		cwdWidth = len("CWD")
 	}

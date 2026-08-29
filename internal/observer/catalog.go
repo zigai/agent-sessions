@@ -10,12 +10,12 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/zigai/agent-sessions/v2/pkg/registry"
+	"github.com/zigai/aht/v2/pkg/registry"
 )
 
 const (
-	catalogJSONEnv  = "AGENT_SESSIONS_CATALOG_JSON"
-	catalogFileEnv  = "AGENT_SESSIONS_CATALOG_FILE"
+	catalogJSONEnv  = "AHT_CATALOG_JSON"
+	catalogFileEnv  = "AHT_CATALOG_FILE"
 	maxCatalogBytes = 1 << 20
 )
 
@@ -26,7 +26,7 @@ var (
 )
 
 // DefaultCatalogList reads the optional machine-readable catalog configured by
-// AGENT_SESSIONS_CATALOG_JSON or AGENT_SESSIONS_CATALOG_FILE. The payload is
+// AHT_CATALOG_JSON or AHT_CATALOG_FILE. The payload is
 // either an array of catalog entries or an object with a sessions array.
 func DefaultCatalogList(ctx context.Context) ([]CatalogEntry, error) {
 	if err := ctx.Err(); err != nil {

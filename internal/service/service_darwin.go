@@ -13,8 +13,8 @@ import (
 )
 
 const (
-	darwinLabel     = "dev.zigai.agent-sessions.observer"
-	darwinPlistName = "dev.zigai.agent-sessions.observer.plist"
+	darwinLabel     = "dev.zigai.aht.observer"
+	darwinPlistName = "dev.zigai.aht.observer.plist"
 )
 
 type darwinBackend struct {
@@ -46,7 +46,7 @@ func RenderLaunchAgent(options Options) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	args := []string{normalized.Binary, "--store", normalized.StorePath, "monitor", "run", "--interval", normalized.Interval.String(), "--grace-period", normalized.GracePeriod.String(), "--quiet"}
+	args := []string{normalized.Binary, "--store", normalized.StorePath, "manage", "tracker", "run", "--interval", normalized.Interval.String(), "--grace-period", normalized.GracePeriod.String(), "--quiet"}
 	var b strings.Builder
 	b.WriteString("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n")
 	b.WriteString("<!-- " + managedMarker + " -->\n<!-- version: " + strconv.Itoa(managedVersion) + " -->\n")

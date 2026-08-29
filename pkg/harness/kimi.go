@@ -10,7 +10,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/zigai/agent-sessions/v2/pkg/registry"
+	"github.com/zigai/aht/v2/pkg/registry"
 )
 
 const (
@@ -20,8 +20,8 @@ const (
 
 const (
 	kimiCodeIntegrationSource             = "kimi-code-hook"
-	kimiCodeManagedIntegrationStart       = "# BEGIN agent-sessions managed integration: kimi-code"
-	kimiCodeManagedIntegrationEnd         = "# END agent-sessions managed integration: kimi-code"
+	kimiCodeManagedIntegrationStart       = "# BEGIN aht managed integration: kimi-code"
+	kimiCodeManagedIntegrationEnd         = "# END aht managed integration: kimi-code"
 	kimiCodeSessionIndexInitialBufferSize = 64 * 1024
 	kimiCodeSessionIndexMaxBufferSize     = 1024 * 1024
 )

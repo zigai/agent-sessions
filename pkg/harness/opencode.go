@@ -6,17 +6,17 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/zigai/agent-sessions/v2/pkg/registry"
+	"github.com/zigai/aht/v2/pkg/registry"
 )
 
 const (
-	openCodePluginName        = "agent-sessions-state.ts"
+	openCodePluginName        = "aht-state.ts"
 	openCodeIntegrationID     = "opencode"
 	openCodeIntegrationSource = "opencode-plugin"
 	openCodeSessionFlag       = "--session"
 )
 
-//go:embed assets/opencode/agent-sessions-state.ts.tmpl
+//go:embed assets/opencode/aht-state.ts.tmpl
 var openCodePluginTemplate string
 
 type openCodeHarness struct {

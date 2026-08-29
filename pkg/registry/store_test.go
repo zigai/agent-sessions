@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -195,9 +196,12 @@ func TestStoreRejectsSchemaV1(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err := NewFileStore(path).List(context.Background(), Filter{})
-	var unsupported *UnsupportedSchemaError
-	if !errors.As(err, &unsupported) {
+	if _, ok := errors.AsType[*UnsupportedSchemaError](err); !ok {
 		t.Fatalf("expected unsupported schema, got %v", err)
+	}
+	wantCommand := "aht --store " + path + " manage state reset --force"
+	if !strings.Contains(err.Error(), wantCommand) {
+		t.Fatalf("unsupported schema error = %q, want command %q", err, wantCommand)
 	}
 }
 

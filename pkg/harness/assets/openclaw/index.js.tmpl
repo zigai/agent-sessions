@@ -1,4 +1,4 @@
-// agent-sessions managed integration
+// aht managed integration
 // This plugin intentionally ignores prompts, messages, responses, and errors.
 import { spawn } from "node:child_process";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
@@ -40,8 +40,8 @@ function report(eventName, event, ctx, transition) {
     "report", "openclaw", "--session-id", sessionId,
     "--event", eventName, "--observed-at", new Date().toISOString(),
     "--quiet", "--no-tmux",
-    "--attribute", "agent_sessions_integration=openclaw-plugin",
-    "--attribute", `agent_sessions_integration_version=${integrationVersion}`,
+    "--attribute", "aht_integration=openclaw-plugin",
+    "--attribute", `aht_integration_version=${integrationVersion}`,
   ];
   if (transition.lifecycle) args.push("--lifecycle", transition.lifecycle);
   if (transition.presence) args.push("--presence", transition.presence);
@@ -66,8 +66,8 @@ function report(eventName, event, ctx, transition) {
 }
 
 export default definePluginEntry({
-  id: "agent-sessions-state",
-  name: "Agent Sessions State",
+  id: "aht-state",
+  name: "AHT State",
   description: "Reports OpenClaw lifecycle metadata without conversation content.",
   register(api) {
     api.on("session_start", (event, ctx) => report("session_start", event, ctx, {

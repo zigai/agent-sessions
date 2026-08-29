@@ -9,13 +9,13 @@ import (
 	"path/filepath"
 	"strings"
 
-	harnesspkg "github.com/zigai/agent-sessions/v2/pkg/harness"
-	"github.com/zigai/agent-sessions/v2/pkg/registry"
+	harnesspkg "github.com/zigai/aht/v2/pkg/harness"
+	"github.com/zigai/aht/v2/pkg/registry"
 )
 
 var errRemoveFailed = errors.New("one or more integrations failed to remove")
 
-// Remove deletes only artifacts owned by agent-sessions for one harness.
+// Remove deletes only artifacts owned by aht for one harness.
 func Remove(options Options) (Result, error) {
 	return RemoveContext(context.Background(), options)
 }

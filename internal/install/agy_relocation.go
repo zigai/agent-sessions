@@ -8,8 +8,8 @@ import (
 )
 
 const (
-	legacyAgyPluginName   = "agent-sessions-state"
-	legacyAgyMarkerFile   = ".agent-sessions-managed"
+	legacyAgyPluginName   = "aht-state"
+	legacyAgyMarkerFile   = ".aht-managed"
 	legacyAgyManifestName = "import_manifest.json"
 	legacyAgySource       = "antigravity"
 )

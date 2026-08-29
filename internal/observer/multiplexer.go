@@ -8,13 +8,13 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/zigai/agent-sessions/v2/internal/processinfo"
-	"github.com/zigai/agent-sessions/v2/pkg/harness"
-	"github.com/zigai/agent-sessions/v2/pkg/herdrctx"
-	"github.com/zigai/agent-sessions/v2/pkg/muxctx"
-	"github.com/zigai/agent-sessions/v2/pkg/registry"
-	"github.com/zigai/agent-sessions/v2/pkg/tmuxctx"
-	"github.com/zigai/agent-sessions/v2/pkg/zellijctx"
+	"github.com/zigai/aht/v2/internal/processinfo"
+	"github.com/zigai/aht/v2/pkg/harness"
+	"github.com/zigai/aht/v2/pkg/herdrctx"
+	"github.com/zigai/aht/v2/pkg/muxctx"
+	"github.com/zigai/aht/v2/pkg/registry"
+	"github.com/zigai/aht/v2/pkg/tmuxctx"
+	"github.com/zigai/aht/v2/pkg/zellijctx"
 )
 
 var errUnsupportedMultiplexerPane = errors.New("unsupported multiplexer pane")

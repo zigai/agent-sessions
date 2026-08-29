@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/zigai/agent-sessions/v2/pkg/harnessmeta"
+	"github.com/zigai/aht/v2/pkg/harnessmeta"
 )
 
 type Harness string
@@ -500,8 +500,8 @@ func ValidateObservation(observation Observation) error {
 		if observation.Source != ObservationSourceNative {
 			return fmt.Errorf("%w: sequence is only accepted for native observations", ErrInvalidObservation)
 		}
-		if strings.TrimSpace(observation.Attributes["agent_sessions_integration"]) == "" {
-			return fmt.Errorf("%w: sequenced observation requires agent_sessions_integration", ErrInvalidObservation)
+		if strings.TrimSpace(observation.Attributes["aht_integration"]) == "" {
+			return fmt.Errorf("%w: sequenced observation requires aht_integration", ErrInvalidObservation)
 		}
 	}
 	pairOK := (observation.Source == ObservationSourceNative && observation.Evidence == ObservationEvidenceNativeEvent) ||

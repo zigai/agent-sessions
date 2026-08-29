@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	harnesspkg "github.com/zigai/agent-sessions/v2/pkg/harness"
+	harnesspkg "github.com/zigai/aht/v2/pkg/harness"
 )
 
 var (
@@ -166,7 +166,7 @@ func TestPluginDirectoryPostStageFailureRestoresManifestAndDirectory(t *testing.
 	err := writePluginDirectoryChanges(
 		plugin,
 		&harnesspkg.ImportManifestInstallPlan{Path: manifestPath},
-		importManifest{Imports: []importEntry{{Name: "agent-sessions", Source: "test"}}},
+		importManifest{Imports: []importEntry{{Name: "aht", Source: "test"}}},
 		true,
 		true,
 		func() error { return errPostStageTest },

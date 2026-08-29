@@ -1,4 +1,4 @@
-golangci_lint_version := "v2.12.2"
+golangci_lint_version := "v2.13.2"
 golangci_lint := "go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@" + golangci_lint_version
 
 _:
@@ -44,7 +44,7 @@ check: lint test race
 
 # Build the project
 build:
-    go build -o agent-sessions .
+    go build -o aht .
 
 # Install the project
 install:
@@ -52,11 +52,11 @@ install:
 
 # Remove build artifacts
 clean:
-    rm -rf agent-sessions agent-sessions.exe dist/
+    rm -rf aht aht.exe dist/
 
 # Build with local development version metadata
 build-dev:
-    go build -ldflags "-X github.com/zigai/agent-sessions/v2/internal/cli.version=dev -X github.com/zigai/agent-sessions/v2/internal/cli.commit=$(git rev-parse --short HEAD) -X github.com/zigai/agent-sessions/v2/internal/cli.date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" -o agent-sessions .
+    go build -ldflags "-X github.com/zigai/aht/v2/internal/cli.version=dev -X github.com/zigai/aht/v2/internal/cli.commit=$(git rev-parse --short HEAD) -X github.com/zigai/aht/v2/internal/cli.date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" -o aht .
 
 # Run a dry-run release
 release-dry-run:

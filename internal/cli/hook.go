@@ -3,7 +3,7 @@ package cli
 // Managed hook commands are integration entrypoints for harness-native
 // request/response hooks. These hooks must write protocol JSON such as
 // {"decision":"allow"} while recording session state, so they cannot use the
-// one-way `agent-sessions report` command directly. Keep this file as CLI
+// one-way `aht report` command directly. Keep this file as CLI
 // transport glue; harness protocol rules belong in pkg/harness.
 //
 import (
@@ -16,9 +16,9 @@ import (
 
 	"github.com/spf13/cobra"
 
-	harnesspkg "github.com/zigai/agent-sessions/v2/pkg/harness"
-	"github.com/zigai/agent-sessions/v2/pkg/registry"
-	"github.com/zigai/agent-sessions/v2/pkg/tmuxctx"
+	harnesspkg "github.com/zigai/aht/v2/pkg/harness"
+	"github.com/zigai/aht/v2/pkg/registry"
+	"github.com/zigai/aht/v2/pkg/tmuxctx"
 )
 
 var errUnsupportedManagedHook = errors.New("harness does not support managed hooks")
@@ -33,8 +33,8 @@ func (app *application) newHookCommand() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   hookCommandName + " <harness>",
-		Short: "Run a request/response hook for a harness",
-		Long:  "Run a request/response hook for a harness. Hook stdout is a JSON protocol response, so --json is required.",
+		Short: "Integration protocol endpoint; not intended for manual use",
+		Long:  "Integration protocol endpoint; not intended for manual use. Hook stdout is a JSON protocol response, so --json is required.",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return app.runManagedHook(cmd.Context(), cmd.InOrStdin(), args[0], options)

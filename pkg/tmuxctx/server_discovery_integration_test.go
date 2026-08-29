@@ -24,7 +24,7 @@ func TestListPanesDiscoversRealNamedServer(t *testing.T) {
 		t.Skip("tmux is not installed")
 	}
 
-	name := fmt.Sprintf("agent-sessions-discovery-%d-%d", os.Getpid(), time.Now().UnixNano())
+	name := fmt.Sprintf("aht-discovery-%d-%d", os.Getpid(), time.Now().UnixNano())
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	defer func() { _ = exec.CommandContext(context.Background(), "tmux", "-L", name, "kill-server").Run() }()

@@ -7,11 +7,11 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/zigai/agent-sessions/v2/pkg/registry"
+	"github.com/zigai/aht/v2/pkg/registry"
 )
 
 const (
-	copilotHookFileName      = "agent-sessions.json"
+	copilotHookFileName      = "aht.json"
 	copilotIntegrationSource = "copilot-hook"
 )
 
@@ -98,8 +98,8 @@ func copilotCommandHook(binary string, spec copilotHookSpec) map[string]any {
 		"command":    copilotHookCommand(binary, spec.transition, spec.event),
 		"timeoutSec": float64(HookTimeoutSeconds),
 		"env": map[string]any{
-			"AGENT_SESSIONS_MARKER":              ManagedMarker,
-			"AGENT_SESSIONS_INTEGRATION_VERSION": strconv.Itoa(IntegrationVersionFor(registry.HarnessCopilot)),
+			"AHT_MARKER":              ManagedMarker,
+			"AHT_INTEGRATION_VERSION": strconv.Itoa(IntegrationVersionFor(registry.HarnessCopilot)),
 		},
 	}
 	if spec.matcher != "" {

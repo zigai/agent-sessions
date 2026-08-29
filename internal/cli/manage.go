@@ -14,14 +14,15 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/zigai/agent-sessions/v2/internal/processinfo"
-	harnesspkg "github.com/zigai/agent-sessions/v2/pkg/harness"
-	"github.com/zigai/agent-sessions/v2/pkg/registry"
-	"github.com/zigai/agent-sessions/v2/pkg/tmuxctx"
+	"github.com/zigai/aht/v2/internal/processinfo"
+	harnesspkg "github.com/zigai/aht/v2/pkg/harness"
+	"github.com/zigai/aht/v2/pkg/registry"
+	"github.com/zigai/aht/v2/pkg/tmuxctx"
 )
 
 var (
 	errManageStopAllFailed = errors.New("one or more sessions failed to stop")
+	errStateResetForce     = errors.New("--force is required to reset stored session state")
 	errStopTargetSkipped   = errors.New("session was not stopped")
 	errUnknownStopMethod   = errors.New("unknown stop method")
 )
@@ -114,7 +115,11 @@ func (defaultSessionStopSignaler) SendProcessInterrupt(pid int) error {
 }
 
 func (app *application) newRegistryResetCommand() *cobra.Command {
-	return &cobra.Command{Use: "reset", Short: "Reset the registry state file", RunE: func(cmd *cobra.Command, _ []string) error {
+	force := false
+	command := &cobra.Command{Use: "reset", Short: "Reset stored session state", RunE: func(cmd *cobra.Command, _ []string) error {
+		if !force {
+			return errStateResetForce
+		}
 		s := app.store()
 		r, e := s.Reset(cmd.Context())
 		if e != nil {
@@ -130,6 +135,8 @@ func (app *application) newRegistryResetCommand() *cobra.Command {
 			{label: "Path", value: o.Path},
 		})
 	}}
+	command.Flags().BoolVar(&force, "force", false, "confirm destructive state reset")
+	return command
 }
 
 func (app *application) runStop(ctx context.Context, args []string, all bool, dryRun bool) error {

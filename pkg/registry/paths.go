@@ -8,9 +8,9 @@ import (
 
 const (
 	// StorePathEnv overrides the exact registry store path.
-	StorePathEnv = "AGENT_SESSIONS_STORE"
+	StorePathEnv = "AHT_STORE"
 	// StateDirEnv overrides the registry state directory.
-	StateDirEnv = "AGENT_SESSIONS_STATE_DIR"
+	StateDirEnv = "AHT_STATE_DIR"
 )
 
 func DefaultStateDir() string {
@@ -19,14 +19,14 @@ func DefaultStateDir() string {
 	}
 
 	if value := stringsTrimmedEnv("XDG_STATE_HOME"); value != "" {
-		return filepath.Join(value, "agent-sessions")
+		return filepath.Join(value, "aht")
 	}
 
 	if home := stringsTrimmedEnv("HOME"); home != "" {
-		return filepath.Join(home, ".local", "state", "agent-sessions")
+		return filepath.Join(home, ".local", "state", "aht")
 	}
 
-	return filepath.Join(os.TempDir(), "agent-sessions")
+	return filepath.Join(os.TempDir(), "aht")
 }
 
 func DefaultStorePath() string {

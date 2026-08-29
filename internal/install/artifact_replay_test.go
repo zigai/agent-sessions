@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/zigai/agent-sessions/v2/pkg/harness"
+	"github.com/zigai/aht/v2/pkg/harness"
 )
 
 func TestIntegrationManagedArtifactsUseV2Reports(t *testing.T) {
@@ -18,7 +18,7 @@ func TestIntegrationManagedArtifactsUseV2Reports(t *testing.T) {
 		if !ok {
 			continue
 		}
-		plan := installable.InstallPlan("/tmp/agent-sessions")
+		plan := installable.InstallPlan("/tmp/aht")
 		if len(plan.Actions) == 0 {
 			t.Fatalf("%s has no integration actions", definition.ID)
 		}
@@ -27,7 +27,7 @@ func TestIntegrationManagedArtifactsUseV2Reports(t *testing.T) {
 			if strings.Contains(content, "--state") || strings.Contains(content, "--source") || strings.Contains(content, "--confidence") {
 				t.Fatalf("%s generated a v1 report flag: %q", definition.ID, content)
 			}
-			if strings.Contains(content, "agent-sessions") && !strings.Contains(content, "--activity") && !strings.Contains(content, "--event") {
+			if strings.Contains(content, "aht") && !strings.Contains(content, "--activity") && !strings.Contains(content, "--event") {
 				t.Fatalf("%s generated hook without v2 activity/event dimension: %q", definition.ID, content)
 			}
 		}

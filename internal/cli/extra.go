@@ -8,11 +8,11 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/zigai/agent-sessions/v2/internal/broker"
-	"github.com/zigai/agent-sessions/v2/internal/observer"
-	"github.com/zigai/agent-sessions/v2/internal/service"
-	"github.com/zigai/agent-sessions/v2/pkg/brokerapi"
-	"github.com/zigai/agent-sessions/v2/pkg/registry"
+	"github.com/zigai/aht/v2/internal/broker"
+	"github.com/zigai/aht/v2/internal/observer"
+	"github.com/zigai/aht/v2/internal/service"
+	"github.com/zigai/aht/v2/pkg/brokerapi"
+	"github.com/zigai/aht/v2/pkg/registry"
 )
 
 type observeOptions struct {
@@ -29,7 +29,7 @@ const (
 
 var errObserverRunDegraded = errors.New("observer reconciliation degraded")
 
-func (app *application) newMonitorRunCommand() *cobra.Command {
+func (app *application) newTrackerRunCommand() *cobra.Command {
 	o := observeOptions{interval: observeDefaultInterval}
 	command := &cobra.Command{
 		Use:   "run",

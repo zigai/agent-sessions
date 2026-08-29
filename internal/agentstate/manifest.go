@@ -17,7 +17,7 @@ import (
 
 	"github.com/pelletier/go-toml/v2"
 
-	"github.com/zigai/agent-sessions/v2/pkg/registry"
+	"github.com/zigai/aht/v2/pkg/registry"
 )
 
 const (
@@ -74,13 +74,13 @@ var manifestCache sync.Map
 
 func DefaultConfigDir() string {
 	if value := strings.TrimSpace(os.Getenv("XDG_CONFIG_HOME")); value != "" {
-		return filepath.Join(value, "agent-sessions", "detection")
+		return filepath.Join(value, "aht", "detection")
 	}
 	home, err := os.UserHomeDir()
 	if err != nil || home == "" {
 		return ""
 	}
-	return filepath.Join(home, ".config", "agent-sessions", "detection")
+	return filepath.Join(home, ".config", "aht", "detection")
 }
 
 func (l Loader) Supports(harness registry.Harness) bool {

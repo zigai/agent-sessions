@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/zigai/agent-sessions/v2/pkg/registry"
+	"github.com/zigai/aht/v2/pkg/registry"
 )
 
 const testSessionID = "abc"
@@ -16,11 +16,11 @@ const testSessionID = "abc"
 func TestReportHookCommandRendersTypedTransitionDimension(t *testing.T) {
 	t.Parallel()
 
-	activity := ReportHookCommand("agent-sessions", registry.HarnessCodex, registry.ActivityRunning, "turn", "test")
+	activity := ReportHookCommand("aht", registry.HarnessCodex, registry.ActivityRunning, "turn", "test")
 	if !strings.Contains(activity, "--activity running") || strings.Contains(activity, "--presence") {
 		t.Fatalf("activity command = %q", activity)
 	}
-	presence := ReportHookCommand("agent-sessions", registry.HarnessCodex, registry.PresenceGone, "stop", "test")
+	presence := ReportHookCommand("aht", registry.HarnessCodex, registry.PresenceGone, "stop", "test")
 	if !strings.Contains(presence, "--presence gone") || strings.Contains(presence, "--activity") {
 		t.Fatalf("presence command = %q", presence)
 	}
@@ -34,7 +34,7 @@ func TestReportHookCommandRejectsInvalidTypedTransition(t *testing.T) {
 		defer func() {
 			deferredPanic = recover() != nil
 		}()
-		_ = ReportHookCommand("agent-sessions", registry.HarnessCodex, registry.Activity("bogus"), "turn", "test")
+		_ = ReportHookCommand("aht", registry.HarnessCodex, registry.Activity("bogus"), "turn", "test")
 	}()
 	if !deferredPanic {
 		t.Fatal("ReportHookCommand accepted an invalid activity")
@@ -268,7 +268,7 @@ func TestEnvNames(t *testing.T) {
 			name:  "session id",
 			field: EnvSessionID,
 			want: []string{
-				"AGENT_SESSIONS_SESSION_ID",
+				"AHT_SESSION_ID",
 				"AGENT_SESSION_ID",
 				"CLAUDE_SESSION_ID",
 				"CODEX_SESSION_ID",
@@ -283,7 +283,7 @@ func TestEnvNames(t *testing.T) {
 			name:  "event",
 			field: EnvEvent,
 			want: []string{
-				"AGENT_SESSIONS_EVENT",
+				"AHT_EVENT",
 				"AGENT_EVENT",
 				"GROK_HOOK_EVENT",
 				"KILO_EVENT",
@@ -294,7 +294,7 @@ func TestEnvNames(t *testing.T) {
 			name:  "session path",
 			field: EnvSessionPath,
 			want: []string{
-				"AGENT_SESSIONS_SESSION_PATH",
+				"AHT_SESSION_PATH",
 				"AGENT_SESSION_PATH",
 				"CLAUDE_SESSION_PATH",
 				"CODEX_SESSION_PATH",
@@ -309,7 +309,7 @@ func TestEnvNames(t *testing.T) {
 			name:  "project root",
 			field: EnvProjectRoot,
 			want: []string{
-				"AGENT_SESSIONS_PROJECT_ROOT",
+				"AHT_PROJECT_ROOT",
 				"PROJECT_ROOT",
 				"CURSOR_PROJECT_DIR",
 				"CLAUDE_PROJECT_DIR",
@@ -912,10 +912,10 @@ func TestOpenCodeAndKiloPluginTemplatesUseCurrentModuleShape(t *testing.T) {
 		"kilo":     kiloPluginTemplate,
 	} {
 		t.Run(name, func(t *testing.T) {
-			if !strings.Contains(template, "async function AgentSessionsPlugin(ctx: any)") {
+			if !strings.Contains(template, "async function AHTPlugin(ctx: any)") {
 				t.Fatal("expected per-context plugin factory")
 			}
-			if !strings.Contains(template, `export default { id: "agent-sessions-state", server: AgentSessionsPlugin }`) {
+			if !strings.Contains(template, `export default { id: "aht-state", server: AHTPlugin }`) {
 				t.Fatal("expected native default plugin export")
 			}
 			if !strings.Contains(template, `["properties", "status", "type"]`) {

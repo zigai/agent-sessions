@@ -36,7 +36,7 @@ func TestMemoryStorePublishesOnlyEffectiveStateChanges(t *testing.T) {
 		Identity:    ObservationIdentity{SessionID: "live"},
 		Activity:    &running,
 		NativeEvent: "agent_start",
-		Attributes:  map[string]string{"agent_sessions_integration": "omp-extension"},
+		Attributes:  map[string]string{"aht_integration": "omp-extension"},
 		ObservedAt:  base,
 	}
 	if _, err := store.Observe(t.Context(), observation); err != nil {
@@ -90,7 +90,7 @@ func TestSequencedNativeReportsRejectStaleAndUnsequencedUpdates(t *testing.T) {
 	}
 	base := time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC)
 	store.SetNowForTest(func() time.Time { return base.Add(time.Minute) })
-	reporter := map[string]string{"agent_sessions_integration": "omp-extension"}
+	reporter := map[string]string{"aht_integration": "omp-extension"}
 	running := ActivityRunning
 	sequence := uint64(20)
 	observation := Observation{
@@ -165,7 +165,7 @@ func benchmarkRegistryObserve(b *testing.B, store Store) {
 			Identity:    ObservationIdentity{SessionID: "session-" + strconv.Itoa(index)},
 			Activity:    &idle,
 			NativeEvent: "session_start",
-			Attributes:  map[string]string{"agent_sessions_integration": "omp-extension"},
+			Attributes:  map[string]string{"aht_integration": "omp-extension"},
 			ObservedAt:  base.Add(time.Duration(index) * time.Nanosecond),
 		}
 	}

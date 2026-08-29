@@ -10,10 +10,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/zigai/agent-sessions/v2/internal/observer"
-	"github.com/zigai/agent-sessions/v2/internal/processinfo"
-	"github.com/zigai/agent-sessions/v2/pkg/registry"
-	"github.com/zigai/agent-sessions/v2/pkg/tmuxctx"
+	"github.com/zigai/aht/v2/internal/observer"
+	"github.com/zigai/aht/v2/internal/processinfo"
+	"github.com/zigai/aht/v2/pkg/registry"
+	"github.com/zigai/aht/v2/pkg/tmuxctx"
 )
 
 var errTestPaneList = errors.New("pane inventory unavailable")

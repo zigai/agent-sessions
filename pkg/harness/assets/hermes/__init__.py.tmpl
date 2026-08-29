@@ -1,4 +1,4 @@
-"""agent-sessions managed integration.
+"""aht managed integration.
 
 This plugin intentionally ignores prompts, conversation history, commands,
 descriptions, responses, and tool payloads.
@@ -18,7 +18,7 @@ _BINARY = {{BINARY}}
 _INTEGRATION_VERSION = {{INTEGRATION_VERSION}}
 _SEEN_SESSIONS: set[str] = set()
 _SEEN_LOCK = Lock()
-_CURRENT_SESSION_ID: ContextVar[str] = ContextVar("agent_sessions_hermes_session_id", default="")
+_CURRENT_SESSION_ID: ContextVar[str] = ContextVar("aht_hermes_session_id", default="")
 
 
 def _text(value: Any) -> str:
@@ -63,8 +63,8 @@ def _report(event: str, transition: dict[str, str], values: dict[str, Any]) -> N
         "--observed-at", datetime.now(timezone.utc).isoformat(),
         "--cwd", cwd, "--project-root", cwd,
         "--quiet", "--no-tmux",
-        "--attribute", "agent_sessions_integration=hermes-plugin",
-        "--attribute", f"agent_sessions_integration_version={_INTEGRATION_VERSION}",
+        "--attribute", "aht_integration=hermes-plugin",
+        "--attribute", f"aht_integration_version={_INTEGRATION_VERSION}",
     ]
     for flag in ("lifecycle", "presence", "activity"):
         if transition.get(flag):

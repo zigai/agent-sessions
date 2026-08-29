@@ -7,13 +7,13 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/zigai/agent-sessions/v2/pkg/registry"
+	"github.com/zigai/aht/v2/pkg/registry"
 )
 
 const (
 	gooseCommand           = "goose"
-	goosePluginName        = "agent-sessions-state"
-	gooseMarkerFileName    = ".agent-sessions-managed"
+	goosePluginName        = "aht-state"
+	gooseMarkerFileName    = ".aht-managed"
 	gooseIntegrationID     = "goose"
 	gooseIntegrationSource = "goose-hook"
 )
@@ -165,18 +165,18 @@ func gooseReportScript(binary string) string {
 	return strings.Join([]string{
 		"#!/bin/sh",
 		"# " + ManagedMarker,
-		"# AGENT_SESSIONS_INTEGRATION_ID=" + gooseIntegrationID,
-		"# AGENT_SESSIONS_INTEGRATION_VERSION=" + strconv.Itoa(IntegrationVersionFor(registry.HarnessGoose)),
-		"# AGENT_SESSIONS_SOURCE=" + gooseIntegrationSource,
+		"# AHT_INTEGRATION_ID=" + gooseIntegrationID,
+		"# AHT_INTEGRATION_VERSION=" + strconv.Itoa(IntegrationVersionFor(registry.HarnessGoose)),
+		"# AHT_SOURCE=" + gooseIntegrationSource,
 		"transition=${1:-}",
 		"event=${2:-}",
 		`if [ -z "$transition" ] || [ -z "$event" ]; then`,
 		"  exit 0",
 		"fi",
 		"if [ \"$transition\" = gone ]; then",
-		"  " + ShellQuote(binary) + " report " + ShellQuote(string(registry.HarnessGoose)) + " --presence \"$transition\" --event \"$event\" --attribute " + ShellQuote("agent_sessions_integration_version="+strconv.Itoa(IntegrationVersionFor(registry.HarnessGoose))) + " --attribute " + ShellQuote("agent_sessions_integration="+gooseIntegrationSource) + " --raw-stdin-defaults-only --quiet >/dev/null 2>&1 || true",
+		"  " + ShellQuote(binary) + " report " + ShellQuote(string(registry.HarnessGoose)) + " --presence \"$transition\" --event \"$event\" --attribute " + ShellQuote("aht_integration_version="+strconv.Itoa(IntegrationVersionFor(registry.HarnessGoose))) + " --attribute " + ShellQuote("aht_integration="+gooseIntegrationSource) + " --raw-stdin-defaults-only --quiet >/dev/null 2>&1 || true",
 		"else",
-		"  " + ShellQuote(binary) + " report " + ShellQuote(string(registry.HarnessGoose)) + " --activity \"$transition\" --event \"$event\" --attribute " + ShellQuote("agent_sessions_integration_version="+strconv.Itoa(IntegrationVersionFor(registry.HarnessGoose))) + " --attribute " + ShellQuote("agent_sessions_integration="+gooseIntegrationSource) + " --raw-stdin-defaults-only --quiet >/dev/null 2>&1 || true",
+		"  " + ShellQuote(binary) + " report " + ShellQuote(string(registry.HarnessGoose)) + " --activity \"$transition\" --event \"$event\" --attribute " + ShellQuote("aht_integration_version="+strconv.Itoa(IntegrationVersionFor(registry.HarnessGoose))) + " --attribute " + ShellQuote("aht_integration="+gooseIntegrationSource) + " --raw-stdin-defaults-only --quiet >/dev/null 2>&1 || true",
 		"fi",
 		"",
 	}, "\n")
@@ -185,9 +185,9 @@ func gooseReportScript(binary string) string {
 func gooseMarkerContent() string {
 	return strings.Join([]string{
 		ManagedMarker,
-		"AGENT_SESSIONS_INTEGRATION_ID=" + gooseIntegrationID,
-		"AGENT_SESSIONS_INTEGRATION_VERSION=" + strconv.Itoa(IntegrationVersionFor(registry.HarnessGoose)),
-		"AGENT_SESSIONS_SOURCE=" + gooseIntegrationSource,
+		"AHT_INTEGRATION_ID=" + gooseIntegrationID,
+		"AHT_INTEGRATION_VERSION=" + strconv.Itoa(IntegrationVersionFor(registry.HarnessGoose)),
+		"AHT_SOURCE=" + gooseIntegrationSource,
 		"",
 	}, "\n")
 }

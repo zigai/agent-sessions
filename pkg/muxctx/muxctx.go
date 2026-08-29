@@ -3,7 +3,7 @@ package muxctx
 import (
 	"context"
 
-	"github.com/zigai/agent-sessions/v2/pkg/registry"
+	"github.com/zigai/aht/v2/pkg/registry"
 )
 
 // ProcessRef identifies a process reported by a multiplexer for one pane.

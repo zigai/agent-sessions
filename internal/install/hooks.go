@@ -4,7 +4,7 @@ import (
 	"maps"
 	"reflect"
 
-	harnesspkg "github.com/zigai/agent-sessions/v2/pkg/harness"
+	harnesspkg "github.com/zigai/aht/v2/pkg/harness"
 )
 
 const (

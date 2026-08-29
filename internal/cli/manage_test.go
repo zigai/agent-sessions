@@ -6,8 +6,8 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/zigai/agent-sessions/v2/pkg/registry"
-	"github.com/zigai/agent-sessions/v2/pkg/tmuxctx"
+	"github.com/zigai/aht/v2/pkg/registry"
+	"github.com/zigai/aht/v2/pkg/tmuxctx"
 )
 
 var errTestSignal = errors.New("signal failed")

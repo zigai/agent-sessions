@@ -12,8 +12,8 @@ import (
 )
 
 const (
-	ManagedVersion       = 4
-	ManagedMarker        = "agent-sessions managed observer service"
+	ManagedVersion       = 7
+	ManagedMarker        = "aht managed observer service"
 	managedVersion       = ManagedVersion
 	managedMarker        = ManagedMarker
 	defaultInterval      = 300 * time.Millisecond
@@ -301,7 +301,7 @@ func writeAtomic(path string, content []byte, mode os.FileMode) error {
 	if err := os.MkdirAll(filepath.Dir(path), serviceDirectoryMode); err != nil {
 		return fmt.Errorf("create service directory: %w", err)
 	}
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".agent-sessions-service-*")
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".aht-service-*")
 	if err != nil {
 		return fmt.Errorf("create temporary service: %w", err)
 	}
@@ -346,8 +346,8 @@ func isManaged(content string) bool {
 	}
 	for line := range strings.Lines(content) {
 		switch strings.TrimSpace(line) {
-		case "# version: 2", "# version: 3", "# version: 4",
-			"<!-- version: 2 -->", "<!-- version: 3 -->", "<!-- version: 4 -->":
+		case "# version: 2", "# version: 3", "# version: 4", "# version: 5", "# version: 6", "# version: 7",
+			"<!-- version: 2 -->", "<!-- version: 3 -->", "<!-- version: 4 -->", "<!-- version: 5 -->", "<!-- version: 6 -->", "<!-- version: 7 -->":
 			return true
 		}
 	}

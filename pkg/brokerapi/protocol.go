@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/zigai/agent-sessions/v2/pkg/registry"
+	"github.com/zigai/aht/v2/pkg/registry"
 )
 
 const (
@@ -25,13 +25,13 @@ const (
 )
 
 // SocketPathEnv overrides the broker socket used by clients and integrations.
-const SocketPathEnv = "AGENT_SESSIONS_SOCKET"
+const SocketPathEnv = "AHT_SOCKET"
 
 var (
 	// ErrUnavailable means no realtime broker accepted the local connection.
-	ErrUnavailable = errors.New("agent-sessions broker unavailable")
+	ErrUnavailable = errors.New("aht broker unavailable")
 	// ErrProtocol means the broker returned an invalid or incompatible frame.
-	ErrProtocol = errors.New("agent-sessions broker protocol error")
+	ErrProtocol = errors.New("aht broker protocol error")
 )
 
 // Request is one broker RPC. Subscribe keeps the connection open after the

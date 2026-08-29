@@ -1,4 +1,4 @@
-// agent-sessions managed integration
+// aht managed integration
 // Native Cline AgentPlugin. This plugin never reads prompt, message, tool input,
 // tool output, response, or error content.
 import { spawn } from "node:child_process";
@@ -28,8 +28,8 @@ function report(eventName, context, transition) {
     "--event", eventName,
     "--observed-at", new Date().toISOString(),
     "--quiet",
-    "--attribute", "agent_sessions_integration=cline-plugin",
-    "--attribute", `agent_sessions_integration_version=${integrationVersion}`,
+    "--attribute", "aht_integration=cline-plugin",
+    "--attribute", `aht_integration_version=${integrationVersion}`,
   ];
   if (transition.presence) args.push("--presence", transition.presence);
   if (transition.activity) args.push("--activity", transition.activity);
@@ -48,7 +48,7 @@ function report(eventName, context, transition) {
 }
 
 const plugin = {
-  name: "agent-sessions-state",
+  name: "aht-state",
   manifest: { capabilities: ["hooks"] },
   setup(_api, ctx) {
     sessionId = text(ctx?.session?.sessionId);

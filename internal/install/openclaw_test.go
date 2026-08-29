@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	harnesspkg "github.com/zigai/agent-sessions/v2/pkg/harness"
-	"github.com/zigai/agent-sessions/v2/pkg/registry"
+	harnesspkg "github.com/zigai/aht/v2/pkg/harness"
+	"github.com/zigai/aht/v2/pkg/registry"
 )
 
 func installFakeOpenClawCLI(t *testing.T) string {
@@ -34,7 +34,7 @@ if [ "$1 $2" = "plugins inspect" ]; then
   source=$(cat "$state/source")
   policy=false
   if [ -f "$state/policy" ]; then policy=true; fi
-  printf '[{"plugin":{"id":"agent-sessions-state","status":"loaded","source":"path","version":"0.0.5"},"policy":{"allowConversationAccess":%s},"install":{"source":"path","sourcePath":"%s","installPath":"%s","version":"0.0.5"}}]\n' "$policy" "$source" "$source"
+  printf '[{"plugin":{"id":"aht-state","status":"loaded","source":"path","version":"0.0.7"},"policy":{"allowConversationAccess":%s},"install":{"source":"path","sourcePath":"%s","installPath":"%s","version":"0.0.7"}}]\n' "$policy" "$source" "$source"
   exit 0
 fi
 if [ "$1 $2" = "plugins install" ]; then
@@ -76,7 +76,7 @@ func TestOpenClawInstallUsesNativePluginCLIAndIsIdempotent(t *testing.T) {
 	if !first.Changed {
 		t.Fatal("expected first OpenClaw install to change state")
 	}
-	for _, name := range []string{"package.json", "openclaw.plugin.json", "index.js", ".agent-sessions-managed"} {
+	for _, name := range []string{"package.json", "openclaw.plugin.json", "index.js", ".aht-managed"} {
 		if _, err := os.Stat(filepath.Join(first.Path, name)); err != nil {
 			t.Fatalf("expected installed OpenClaw file %s: %v", name, err)
 		}
@@ -85,7 +85,7 @@ func TestOpenClawInstallUsesNativePluginCLIAndIsIdempotent(t *testing.T) {
 	for _, call := range []string{
 		"plugins inspect --all --json",
 		"plugins install " + first.Path + " --link --force",
-		"config set plugins.entries.agent-sessions-state.hooks.allowConversationAccess true --strict-json",
+		"config set plugins.entries.aht-state.hooks.allowConversationAccess true --strict-json",
 	} {
 		if !strings.Contains(calls, call) {
 			t.Fatalf("expected native OpenClaw call %q in:\n%s", call, calls)
@@ -182,7 +182,7 @@ func TestOpenClawRefusesForeignRegistration(t *testing.T) {
 	state := installFakeOpenClawCLI(t)
 	stateDir := t.TempDir()
 	t.Setenv(registry.StateDirEnv, stateDir)
-	foreign := `[{"plugin":{"id":"agent-sessions-state","status":"loaded","version":"9.9.9"},"policy":{"allowConversationAccess":true},"install":{"source":"path","sourcePath":"/foreign/plugin","installPath":"/foreign/plugin","version":"9.9.9"}}]`
+	foreign := `[{"plugin":{"id":"aht-state","status":"loaded","version":"9.9.9"},"policy":{"allowConversationAccess":true},"install":{"source":"path","sourcePath":"/foreign/plugin","installPath":"/foreign/plugin","version":"9.9.9"}}]`
 	if err := os.WriteFile(filepath.Join(state, "inspect-json"), []byte(foreign), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -191,7 +191,7 @@ func TestOpenClawRefusesForeignRegistration(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "--force") {
 		t.Fatalf("expected foreign registration refusal, got %v", err)
 	}
-	managedPath := filepath.Join(stateDir, "integrations", "openclaw", "agent-sessions-state")
+	managedPath := filepath.Join(stateDir, "integrations", "openclaw", "aht-state")
 	if _, statErr := os.Stat(managedPath); !os.IsNotExist(statErr) {
 		t.Fatalf("foreign refusal wrote managed source: %v", statErr)
 	}
@@ -229,7 +229,7 @@ func TestOpenClawRemoveUsesNativeUninstall(t *testing.T) {
 		t.Fatalf("managed OpenClaw source still exists: %v", err)
 	}
 	calls := string(readTestFile(t, filepath.Join(state, "calls"), "reading fake OpenClaw calls"))
-	if !strings.Contains(calls, "plugins uninstall agent-sessions-state --force") {
+	if !strings.Contains(calls, "plugins uninstall aht-state --force") {
 		t.Fatalf("native OpenClaw uninstall was not called:\n%s", calls)
 	}
 }

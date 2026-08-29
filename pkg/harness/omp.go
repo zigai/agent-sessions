@@ -6,17 +6,17 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/zigai/agent-sessions/v2/pkg/registry"
+	"github.com/zigai/aht/v2/pkg/registry"
 )
 
 const (
-	ompExtensionName       = "agent-sessions-state.ts"
+	ompExtensionName       = "aht-state.ts"
 	ompIntegrationID       = "omp"
 	ompIntegrationSourceID = "omp-extension"
 	ompSessionFlag         = "--session"
 )
 
-//go:embed assets/omp/agent-sessions-state.ts.tmpl
+//go:embed assets/omp/aht-state.ts.tmpl
 var ompExtensionTemplate string
 
 type ompHarness struct {

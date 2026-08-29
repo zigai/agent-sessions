@@ -8,13 +8,13 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/zigai/agent-sessions/v2/pkg/registry"
+	"github.com/zigai/aht/v2/pkg/registry"
 )
 
 const (
 	hermesCommand           = "hermes"
-	hermesPluginName        = "agent-sessions-state"
-	hermesMarkerFileName    = ".agent-sessions-managed"
+	hermesPluginName        = "aht-state"
+	hermesMarkerFileName    = ".aht-managed"
 	hermesIntegrationSource = "hermes-plugin"
 )
 
@@ -74,9 +74,9 @@ func hermesHome() string {
 }
 
 func hermesPluginManifest(version string) string {
-	return fmt.Sprintf(`name: agent-sessions-state
+	return fmt.Sprintf(`name: aht-state
 version: "0.0.%s"
-description: Reports local Hermes session lifecycle and activity to agent-sessions.
+description: Reports local Hermes session lifecycle and activity to aht.
 provides_hooks:
   - on_session_start
   - pre_llm_call
@@ -98,5 +98,5 @@ func renderHermesPlugin(binary string, version string) string {
 }
 
 func hermesMarkerContent(version string) string {
-	return fmt.Sprintf("%s\nAGENT_SESSIONS_INTEGRATION_ID=hermes\nAGENT_SESSIONS_INTEGRATION_VERSION=%s\nAGENT_SESSIONS_SOURCE=%s\n", ManagedMarker, version, hermesIntegrationSource)
+	return fmt.Sprintf("%s\nAHT_INTEGRATION_ID=hermes\nAHT_INTEGRATION_VERSION=%s\nAHT_SOURCE=%s\n", ManagedMarker, version, hermesIntegrationSource)
 }

@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	harnesspkg "github.com/zigai/agent-sessions/v2/pkg/harness"
-	"github.com/zigai/agent-sessions/v2/pkg/registry"
+	harnesspkg "github.com/zigai/aht/v2/pkg/harness"
+	"github.com/zigai/aht/v2/pkg/registry"
 )
 
 var errTestManifestWrite = errors.New("manifest write failed")
@@ -74,6 +74,30 @@ func TestInstallRemoveRoundTripForEveryHarness(t *testing.T) {
 	}
 }
 
+func TestRemoveDeletesStaleManagedRenderedArtifact(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("PI_CODING_AGENT_DIR", dir)
+	path := filepath.Join(dir, "extensions", piExtensionName)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	stale := "aht managed integration\nAHT_INTEGRATION_ID=pi\nAHT_INTEGRATION_VERSION=5\n"
+	if err := os.WriteFile(path, []byte(stale), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := Remove(Options{Harness: registry.HarnessPi, Binary: testInstallBinary})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Changed {
+		t.Fatal("stale integration removal did not report a change")
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("stale managed artifact still exists: %v", err)
+	}
+}
+
 func TestRemovePreservesUserHooksInSharedConfig(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("CLAUDE_CONFIG_DIR", dir)
@@ -93,7 +117,7 @@ func TestRemovePreservesUserHooksInSharedConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(data), userCommand) || strings.Contains(string(data), "agent_sessions_integration=claude-hook") {
+	if !strings.Contains(string(data), userCommand) || strings.Contains(string(data), "aht_integration=claude-hook") {
 		t.Fatalf("user hook was not preserved cleanly: %s", data)
 	}
 }
@@ -104,7 +128,7 @@ func TestInspectReportsManagedCommandWithUnexpectedBinaryAsStale(t *testing.T) {
 	if _, err := Run(Options{Harness: registry.HarnessClaude, Binary: testInstallBinary}); err != nil {
 		t.Fatal(err)
 	}
-	status, err := Inspect(registry.HarnessClaude, "/different/agent-sessions")
+	status, err := Inspect(registry.HarnessClaude, "/different/aht")
 	if err != nil || status.Status != ArtifactStale {
 		t.Fatalf("unexpected binary status = %+v, %v", status, err)
 	}
@@ -148,7 +172,7 @@ func TestRemoveRefusesExtensionOwnedByAnotherHarness(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OMP extension was removed: %v", err)
 	}
-	if !strings.Contains(string(data), "AGENT_SESSIONS_INTEGRATION_ID=omp") {
+	if !strings.Contains(string(data), "AHT_INTEGRATION_ID=omp") {
 		t.Fatalf("unexpected shared extension contents: %s", data)
 	}
 }

@@ -1,6 +1,6 @@
-module github.com/zigai/agent-sessions/v2
+module github.com/zigai/aht/v2
 
-go 1.25.6
+go 1.27.0
 
 require (
 	github.com/fsnotify/fsnotify v1.10.1

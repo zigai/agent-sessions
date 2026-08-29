@@ -39,7 +39,7 @@ func (r *recordingExecutor) Run(_ context.Context, name string, args ...string) 
 func TestDefaultObserverServiceIntervalIsResponsive(t *testing.T) {
 	t.Parallel()
 
-	options, err := normalizeOptions(Options{Binary: "agent-sessions", StorePath: "state.json"})
+	options, err := normalizeOptions(Options{Binary: "aht", StorePath: "state.json"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,18 +53,18 @@ func TestRenderSystemdUnit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "# agent-sessions managed observer service\n# version: 4\n[Unit]\nDescription=Agent Sessions observer\n\n[Service]\nExecStart=\"/tmp/agent sessions\" --store /tmp/state.json monitor run --interval 3s --grace-period 0s --quiet\nRestart=on-failure\n\n[Install]\nWantedBy=default.target\n"
+	want := "# aht managed observer service\n# version: 7\n[Unit]\nDescription=AHT observer\n\n[Service]\nExecStart=\"/tmp/agent sessions\" --store /tmp/state.json manage tracker run --interval 3s --grace-period 0s --quiet\nRestart=on-failure\n\n[Install]\nWantedBy=default.target\n"
 	if got != want {
 		t.Fatalf("rendered unit = %q, want %q", got, want)
 	}
 }
 
 func TestRenderSystemdUnitEscapesLiteralPercentSigns(t *testing.T) {
-	got, err := RenderSystemdUnit(Options{Binary: "/tmp/%h/agent-sessions", StorePath: "/tmp/%u/state.json", Interval: 3 * time.Second})
+	got, err := RenderSystemdUnit(Options{Binary: "/tmp/%h/aht", StorePath: "/tmp/%u/state.json", Interval: 3 * time.Second})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(got, "ExecStart=/tmp/%%h/agent-sessions --store /tmp/%%u/state.json ") {
+	if !strings.Contains(got, "ExecStart=/tmp/%%h/aht --store /tmp/%%u/state.json ") {
 		t.Fatalf("systemd specifiers were not escaped: %s", got)
 	}
 }
@@ -73,7 +73,7 @@ func TestInstallUsesAtomicContentAndManagerArgv(t *testing.T) {
 	config := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", config)
 	executor := &recordingExecutor{}
-	options := Options{Binary: "agent-sessions", StorePath: filepath.Join(config, "store.json"), Interval: 3 * time.Second}
+	options := Options{Binary: "aht", StorePath: filepath.Join(config, "store.json"), Interval: 3 * time.Second}
 	result, err := New(executor).Install(context.Background(), options)
 	if err != nil {
 		t.Fatal(err)
@@ -107,7 +107,7 @@ func TestInstallDryRunAndForeignRefusal(t *testing.T) {
 	if err := os.WriteFile(path, []byte("foreign"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	_, err := New(&recordingExecutor{}).Update(context.Background(), Options{Binary: "/bin/agent-sessions", StorePath: "/tmp/store"})
+	_, err := New(&recordingExecutor{}).Update(context.Background(), Options{Binary: "/bin/aht", StorePath: "/tmp/store"})
 	if !errors.Is(err, ErrForeign) {
 		t.Fatalf("error = %v, want ErrForeign", err)
 	}
@@ -115,7 +115,7 @@ func TestInstallDryRunAndForeignRefusal(t *testing.T) {
 		t.Fatal(err)
 	}
 	executor := &recordingExecutor{}
-	result, err := New(executor).Install(context.Background(), Options{Binary: "/bin/agent-sessions", StorePath: "/tmp/store", DryRun: true})
+	result, err := New(executor).Install(context.Background(), Options{Binary: "/bin/aht", StorePath: "/tmp/store", DryRun: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,7 +134,7 @@ func TestStatusManagerStoppedIsRepresented(t *testing.T) {
 	config := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", config)
 	executor := &recordingExecutor{}
-	options := Options{Binary: "/bin/agent-sessions", StorePath: "/tmp/store"}
+	options := Options{Binary: "/bin/aht", StorePath: "/tmp/store"}
 	if _, err := New(executor).Install(context.Background(), options); err != nil {
 		t.Fatal(err)
 	}
@@ -154,7 +154,7 @@ func TestStatusManagerStoppedIsRepresented(t *testing.T) {
 func TestStatusPropagatesManagerCancellation(t *testing.T) {
 	config := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", config)
-	options := Options{Binary: "/bin/agent-sessions", StorePath: "/tmp/store"}
+	options := Options{Binary: "/bin/aht", StorePath: "/tmp/store"}
 	manager := New(&recordingExecutor{})
 	if _, err := manager.Install(context.Background(), options); err != nil {
 		t.Fatal(err)
@@ -169,7 +169,7 @@ func TestStatusPropagatesManagerCancellation(t *testing.T) {
 func TestStatusReportsRunningStaleService(t *testing.T) {
 	config := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", config)
-	options := Options{Binary: "/bin/agent-sessions", StorePath: "/tmp/store"}
+	options := Options{Binary: "/bin/aht", StorePath: "/tmp/store"}
 	path := filepath.Join(config, "systemd", "user", linuxUnitName)
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)
@@ -189,12 +189,12 @@ func TestStatusReportsRunningStaleService(t *testing.T) {
 func TestUpdateRestartsManagedService(t *testing.T) {
 	config := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", config)
-	options := Options{Binary: "/bin/agent-sessions", StorePath: "/tmp/store"}
+	options := Options{Binary: "/bin/aht", StorePath: "/tmp/store"}
 	if err := os.MkdirAll(filepath.Join(config, "systemd", "user"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	path := filepath.Join(config, "systemd", "user", linuxUnitName)
-	if err := os.WriteFile(path, []byte("# "+managedMarker+"\n# version: 2\nstale"), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte("# "+managedMarker+"\n# version: 5\nstale"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	executor := &recordingExecutor{}
@@ -212,7 +212,7 @@ func TestUpdateRestartsManagedService(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(content), "# version: 4") || !strings.Contains(string(content), " monitor run ") {
+	if !strings.Contains(string(content), "# "+managedMarker) || !strings.Contains(string(content), "# version: 7") || !strings.Contains(string(content), " manage tracker run ") {
 		t.Fatalf("updated service did not migrate command surface: %s", content)
 	}
 }
@@ -220,7 +220,7 @@ func TestUpdateRestartsManagedService(t *testing.T) {
 func TestUpdateCurrentRunningServiceIsIdempotent(t *testing.T) {
 	config := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", config)
-	options := Options{Binary: "/bin/agent-sessions", StorePath: "/tmp/store"}
+	options := Options{Binary: "/bin/aht", StorePath: "/tmp/store"}
 	executor := &recordingExecutor{}
 	manager := New(executor)
 	if _, err := manager.Install(context.Background(), options); err != nil {
@@ -265,7 +265,7 @@ func requireRetryableUpdateAfterManagerFailure(t *testing.T, failAt int) {
 	}
 	executor := &recordingExecutor{failAt: failAt}
 	manager := New(executor)
-	options := Options{Binary: "/bin/agent-sessions", StorePath: "/tmp/store"}
+	options := Options{Binary: "/bin/aht", StorePath: "/tmp/store"}
 	if _, err := manager.Update(context.Background(), options); !errors.Is(err, errManagerTestFailure) {
 		t.Fatalf("Update() error = %v, want manager failure", err)
 	}
@@ -304,7 +304,7 @@ func requireRetryableInstallAfterManagerFailure(t *testing.T, failAt int) {
 	t.Setenv("XDG_CONFIG_HOME", config)
 	executor := &recordingExecutor{failAt: failAt}
 	manager := New(executor)
-	options := Options{Binary: "/bin/agent-sessions", StorePath: "/tmp/store"}
+	options := Options{Binary: "/bin/aht", StorePath: "/tmp/store"}
 	result, err := manager.Install(context.Background(), options)
 	if !errors.Is(err, errManagerTestFailure) {
 		t.Fatalf("Install() error = %v, want manager failure", err)
@@ -322,7 +322,7 @@ func requireRetryableInstallAfterManagerFailure(t *testing.T, failAt int) {
 func TestUninstallRemovesManagedServiceAndIsIdempotent(t *testing.T) {
 	config := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", config)
-	options := Options{Binary: "/bin/agent-sessions", StorePath: "/tmp/store"}
+	options := Options{Binary: "/bin/aht", StorePath: "/tmp/store"}
 	executor := &recordingExecutor{}
 	manager := New(executor)
 	installed, err := manager.Install(context.Background(), options)
@@ -359,7 +359,7 @@ func TestUninstallReloadFailureRestoresRetryableDefinition(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", config)
 	executor := &recordingExecutor{}
 	manager := New(executor)
-	options := Options{Binary: "/bin/agent-sessions", StorePath: "/tmp/store"}
+	options := Options{Binary: "/bin/aht", StorePath: "/tmp/store"}
 	installed, err := manager.Install(context.Background(), options)
 	if err != nil {
 		t.Fatal(err)

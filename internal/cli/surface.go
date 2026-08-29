@@ -10,10 +10,10 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/zigai/agent-sessions/v2/internal/install"
-	"github.com/zigai/agent-sessions/v2/internal/service"
-	harnesspkg "github.com/zigai/agent-sessions/v2/pkg/harness"
-	"github.com/zigai/agent-sessions/v2/pkg/registry"
+	"github.com/zigai/aht/v2/internal/install"
+	"github.com/zigai/aht/v2/internal/service"
+	harnesspkg "github.com/zigai/aht/v2/pkg/harness"
+	"github.com/zigai/aht/v2/pkg/registry"
 )
 
 var (
@@ -22,6 +22,8 @@ var (
 	errCleanSelection        = errors.New("choose exactly one of --all or --older-than")
 	errNegativeCleanAge      = errors.New("older-than must be nonnegative")
 	errSessionReference      = errors.New("session reference is ambiguous")
+	errInfoReference         = errors.New("provide one session reference or --pane")
+	errInfoConfig            = errors.New("--config-dir requires --explain")
 	errStopSelection         = errors.New("provide one session or --all")
 	errIntegrationStatusFail = errors.New("one or more integrations could not be inspected")
 	errTargetBinaryNeedsShim = errors.New("--target-binary requires --shim")
@@ -36,7 +38,7 @@ type integrationCommandOptions struct {
 
 type setupResult struct {
 	Integrations []install.Result `json:"integrations"`
-	Monitor      service.Result   `json:"monitor"`
+	Tracker      service.Result   `json:"tracker"`
 }
 
 func (app *application) newSetupCommand() *cobra.Command {
@@ -57,22 +59,22 @@ func (app *application) newSetupCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			monitor, err := runServiceOperation(cmd.Context(), "update", serviceOptions)
+			tracker, err := runServiceOperation(cmd.Context(), "update", serviceOptions)
 			if err != nil {
-				return fmt.Errorf("enable monitor: %w", err)
+				return fmt.Errorf("enable tracker: %w", err)
 			}
-			result := setupResult{Integrations: integrations, Monitor: monitor}
+			result := setupResult{Integrations: integrations, Tracker: tracker}
 			if app.outputJSON {
 				return app.writeJSON(result)
 			}
 			if err := app.writeIntegrationResults(integrations, false); err != nil {
 				return err
 			}
-			return app.writef("monitor: %s\nnext: agent-sessions list\n", monitor.Message)
+			return app.writef("tracker: %s\nnext: aht list\n", tracker.Message)
 		},
 	}
 	flags := command.Flags()
-	flags.StringVar(&options.binary, "binary", options.binary, "agent-sessions binary used by integrations and monitor")
+	flags.StringVar(&options.binary, "binary", options.binary, "aht binary used by integrations and tracker")
 	flags.BoolVar(&options.dryRun, "dry-run", false, "show changes without writing")
 	flags.BoolVar(&options.force, "force", false, "replace foreign integration files")
 	return command
@@ -104,7 +106,7 @@ func (app *application) newIntegrationsInstallCommand() *cobra.Command {
 		return err
 	}}
 	flags := command.Flags()
-	flags.StringVar(&options.binary, "binary", options.binary, "agent-sessions binary used by installed integrations")
+	flags.StringVar(&options.binary, "binary", options.binary, "aht binary used by installed integrations")
 	flags.StringVar(&options.targetBinary, "target-binary", "", "real agent binary path for shim installs")
 	flags.BoolVar(&options.dryRun, "dry-run", false, "show changes without writing")
 	flags.BoolVar(&options.force, "force", false, "replace a foreign integration file")
@@ -115,7 +117,7 @@ func (app *application) newIntegrationsInstallCommand() *cobra.Command {
 
 func (app *application) newIntegrationsRemoveCommand() *cobra.Command {
 	options := integrationCommandOptions{}
-	command := &cobra.Command{Use: "remove <agent...|all>", Short: "Remove agent-sessions-owned integrations", Args: cobra.MinimumNArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+	command := &cobra.Command{Use: "remove <agent...|all>", Short: "Remove aht-owned integrations", Args: cobra.MinimumNArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
 		harnesses, err := selectedHarnesses(args, false)
 		if err != nil {
 			return err
@@ -148,7 +150,7 @@ func (app *application) newIntegrationsStatusCommand() *cobra.Command {
 	command := &cobra.Command{Use: "status [agent...]", Short: "Show integration installation state", Args: cobra.ArbitraryArgs, RunE: func(cmd *cobra.Command, args []string) error {
 		return app.runIntegrationsStatus(cmd.Context(), args, binary)
 	}}
-	command.Flags().StringVar(&binary, "binary", binary, "expected agent-sessions binary")
+	command.Flags().StringVar(&binary, "binary", binary, "expected aht binary")
 	return command
 }
 
@@ -313,15 +315,15 @@ func selectedHarnesses(args []string, emptyMeansAll bool) ([]registry.Harness, e
 	return result, nil
 }
 
-func (app *application) newMonitorCommand() *cobra.Command {
-	command := &cobra.Command{Use: monitorCommand, Short: "Manage background process tracking"}
-	run := app.newMonitorRunCommand()
-	run.Short = "Run process and multiplexer reconciliation"
-	command.AddCommand(run, app.newMonitorEnableCommand(), app.newMonitorDisableCommand(), app.newMonitorStatusCommand())
+func (app *application) newTrackerCommand() *cobra.Command {
+	command := &cobra.Command{Use: trackerCommand, Short: "Manage background session tracking"}
+	run := app.newTrackerRunCommand()
+	run.Short = "Service entry point; not intended for manual use"
+	command.AddCommand(run, app.newTrackerEnableCommand(), app.newTrackerDisableCommand(), app.newTrackerStatusCommand())
 	return command
 }
 
-func (app *application) newMonitorEnableCommand() *cobra.Command {
+func (app *application) newTrackerEnableCommand() *cobra.Command {
 	options := serviceOptions{binary: defaultInstallBinary(), interval: serviceDefaultInterval}
 	command := &cobra.Command{Use: "enable", Short: "Install, update, and start background tracking", RunE: func(cmd *cobra.Command, _ []string) error {
 		parsed, err := app.parseServiceOptions(options)
@@ -330,19 +332,19 @@ func (app *application) newMonitorEnableCommand() *cobra.Command {
 		}
 		result, err := runServiceOperation(cmd.Context(), "update", parsed)
 		if err != nil {
-			return fmt.Errorf("enable monitor: %w", err)
+			return fmt.Errorf("enable tracker: %w", err)
 		}
 		return app.writeServiceResult(result)
 	}}
 	flags := command.Flags()
-	flags.StringVar(&options.binary, "binary", options.binary, "agent-sessions binary run by the monitor")
+	flags.StringVar(&options.binary, "binary", options.binary, "aht binary run by the tracker")
 	flags.DurationVar(&options.interval, "interval", options.interval, "reconciliation interval")
 	flags.DurationVar(&options.grace, "grace-period", options.grace, "absence grace period")
 	flags.BoolVar(&options.dryRun, "dry-run", false, "show changes without writing")
 	return command
 }
 
-func (app *application) newMonitorDisableCommand() *cobra.Command {
+func (app *application) newTrackerDisableCommand() *cobra.Command {
 	dryRun := false
 	command := &cobra.Command{Use: "disable", Short: "Stop and remove background tracking", RunE: func(cmd *cobra.Command, _ []string) error {
 		options, err := app.parseServiceOptions(serviceOptions{binary: defaultInstallBinary(), interval: serviceDefaultInterval, dryRun: dryRun})
@@ -351,7 +353,7 @@ func (app *application) newMonitorDisableCommand() *cobra.Command {
 		}
 		result, err := runServiceOperation(cmd.Context(), "uninstall", options)
 		if err != nil {
-			return fmt.Errorf("disable monitor: %w", err)
+			return fmt.Errorf("disable tracker: %w", err)
 		}
 		return app.writeServiceResult(result)
 	}}
@@ -359,7 +361,7 @@ func (app *application) newMonitorDisableCommand() *cobra.Command {
 	return command
 }
 
-func (app *application) newMonitorStatusCommand() *cobra.Command {
+func (app *application) newTrackerStatusCommand() *cobra.Command {
 	serviceConfig := serviceOptions{binary: defaultInstallBinary(), interval: serviceDefaultInterval}
 	command := &cobra.Command{Use: statusCommandName, Short: "Show background tracking state", RunE: func(cmd *cobra.Command, _ []string) error {
 		options, err := app.parseServiceOptions(serviceConfig)
@@ -368,12 +370,12 @@ func (app *application) newMonitorStatusCommand() *cobra.Command {
 		}
 		result, err := runServiceOperation(cmd.Context(), statusCommandName, options)
 		if err != nil {
-			return fmt.Errorf("monitor status: %w", err)
+			return fmt.Errorf("tracker status: %w", err)
 		}
 		return app.writeServiceResult(result)
 	}}
 	flags := command.Flags()
-	flags.StringVar(&serviceConfig.binary, "binary", serviceConfig.binary, "expected agent-sessions binary")
+	flags.StringVar(&serviceConfig.binary, "binary", serviceConfig.binary, "expected aht binary")
 	flags.DurationVar(&serviceConfig.interval, "interval", serviceConfig.interval, "expected reconciliation interval")
 	flags.DurationVar(&serviceConfig.grace, "grace-period", serviceConfig.grace, "expected absence grace period")
 	return command
@@ -399,8 +401,8 @@ func (app *application) writeServiceResult(result service.Result) error {
 	})
 }
 
-func (app *application) newRegistryCommand() *cobra.Command {
-	command := &cobra.Command{Use: registryCommandName, Short: "Inspect or clean registry storage"}
+func (app *application) newStateCommand() *cobra.Command {
+	command := &cobra.Command{Use: stateCommandName, Short: "Inspect or clean stored session state"}
 	command.AddCommand(app.newRegistryPathCommand(), app.newRegistryResetCommand(), app.newRegistryCleanCommand())
 	return command
 }
@@ -435,7 +437,7 @@ func (app *application) runRegistryClean(ctx context.Context, options cleanOptio
 	}
 	result, err := app.registryStore().GC(ctx, age)
 	if err != nil {
-		return fmt.Errorf("clean registry: %w", err)
+		return fmt.Errorf("clean state: %w", err)
 	}
 	if app.outputJSON {
 		return app.writeJSON(result)
@@ -443,17 +445,68 @@ func (app *application) runRegistryClean(ctx context.Context, options cleanOptio
 	return app.writef("deleted=%d remaining=%d\n", result.Deleted, result.Remaining)
 }
 
-func (app *application) newShowCommand() *cobra.Command {
-	return &cobra.Command{Use: "show <session>", Short: "Show session details", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
-		session, err := app.resolveSession(cmd.Context(), args[0])
+type infoOptions struct {
+	explain   bool
+	paneID    string
+	configDir string
+}
+
+type explainedInfoResult struct {
+	Session     registry.Session `json:"session"`
+	Explanation explainResult    `json:"explanation"`
+}
+
+func (app *application) newInfoCommand() *cobra.Command {
+	options := infoOptions{}
+	command := &cobra.Command{Use: "info [session]", Short: "Show session details and optionally explain activity", Args: cobra.MaximumNArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		if (len(args) == 0) == (options.paneID == "") {
+			return errInfoReference
+		}
+		if options.configDir != "" && !options.explain {
+			return errInfoConfig
+		}
+		var session registry.Session
+		var err error
+		if options.paneID != "" {
+			session, err = app.resolvePaneSession(cmd.Context(), options.paneID)
+		} else {
+			session, err = app.resolveSession(cmd.Context(), args[0])
+		}
 		if err != nil {
 			return err
 		}
+		return app.writeInfo(cmd.Context(), session, options)
+	}}
+	command.Flags().BoolVar(&options.explain, "explain", false, "explain how the activity state was selected")
+	command.Flags().StringVar(&options.paneID, "pane", "", "multiplexer pane id")
+	command.Flags().StringVar(&options.configDir, "config-dir", "", "detection manifest override directory")
+	return command
+}
+
+func (app *application) writeInfo(ctx context.Context, session registry.Session, options infoOptions) error {
+	if !options.explain {
 		if app.outputJSON {
 			return app.writeJSON(session)
 		}
 		return app.writeSessionDetails(session)
-	}}
+	}
+	explanation, explanationErr := evaluateExplanation(ctx, session, options.configDir)
+	if app.outputJSON {
+		if err := app.writeJSON(explainedInfoResult{Session: session, Explanation: explanation}); err != nil {
+			return err
+		}
+		return explanationErr
+	}
+	if err := app.writeSessionDetails(session); err != nil {
+		return err
+	}
+	if err := app.writef("\nActivity diagnosis:\n"); err != nil {
+		return err
+	}
+	if err := app.writeExplanationDetails(explanation); err != nil {
+		return err
+	}
+	return explanationErr
 }
 
 func (app *application) resolveSession(ctx context.Context, reference string) (registry.Session, error) {

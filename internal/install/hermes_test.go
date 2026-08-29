@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	harnesspkg "github.com/zigai/agent-sessions/v2/pkg/harness"
-	"github.com/zigai/agent-sessions/v2/pkg/registry"
+	harnesspkg "github.com/zigai/aht/v2/pkg/harness"
+	"github.com/zigai/aht/v2/pkg/registry"
 )
 
 type fakeHermesCLI struct {
@@ -27,7 +27,7 @@ func installFakeHermesCLI(t *testing.T) fakeHermesCLI {
 	script := `#!/bin/sh
 set -eu
 state=${HERMES_TEST_STATE:?}
-plugin=${HERMES_HOME:?}/plugins/agent-sessions-state
+plugin=${HERMES_HOME:?}/plugins/aht-state
 printf '%s\n' "$*" >> "$state/calls"
 if [ "$1 $2" = "plugins list" ]; then
   if [ ! -f "$plugin/plugin.yaml" ]; then
@@ -36,7 +36,7 @@ if [ "$1 $2" = "plugins list" ]; then
   fi
   status="not enabled"
   if [ -f "$state/enabled" ]; then status=enabled; fi
-  printf '[{"name":"agent-sessions-state","status":"%s","version":"0.0.5","description":"test","source":"user"}]\n' "$status"
+  printf '[{"name":"aht-state","status":"%s","version":"0.0.7","description":"test","source":"user"}]\n' "$status"
   exit 0
 fi
 if [ "$1 $2" = "plugins enable" ]; then
@@ -80,7 +80,7 @@ func TestHermesInstallUsesNativePluginCLIAndIsIdempotent(t *testing.T) {
 	if !first.Changed {
 		t.Fatal("expected first Hermes install to change state")
 	}
-	for _, name := range []string{"plugin.yaml", "__init__.py", ".agent-sessions-managed"} {
+	for _, name := range []string{"plugin.yaml", "__init__.py", ".aht-managed"} {
 		if _, err := os.Stat(filepath.Join(first.Path, name)); err != nil {
 			t.Fatalf("expected installed Hermes file %s: %v", name, err)
 		}
@@ -88,7 +88,7 @@ func TestHermesInstallUsesNativePluginCLIAndIsIdempotent(t *testing.T) {
 	calls := string(readTestFile(t, filepath.Join(fake.state, "calls"), "reading fake Hermes calls"))
 	for _, call := range []string{
 		"plugins list --user --json",
-		"plugins enable agent-sessions-state --no-allow-tool-override",
+		"plugins enable aht-state --no-allow-tool-override",
 	} {
 		if !strings.Contains(calls, call) {
 			t.Fatalf("expected native Hermes call %q in:\n%s", call, calls)
@@ -121,7 +121,7 @@ func TestHermesPluginShapeUsesDocumentedHooksWithoutSensitiveContent(t *testing.
 		t.Fatalf("unexpected Hermes install action: %T", plan.Actions[0])
 	}
 	plugin := pluginAction.Plan
-	if plugin.Hermes == nil || plugin.Hermes.PluginID != "agent-sessions-state" {
+	if plugin.Hermes == nil || plugin.Hermes.PluginID != "aht-state" {
 		t.Fatalf("unexpected Hermes activation plan: %#v", plugin.Hermes)
 	}
 	var manifest, source string
@@ -184,7 +184,7 @@ func TestHermesRepairsDisabledPlugin(t *testing.T) {
 func TestHermesManagedModeFailsBeforeWriting(t *testing.T) {
 	fake := installFakeHermesCLI(t)
 	t.Setenv("HERMES_MANAGED", "nixos")
-	pluginPath := filepath.Join(fake.home, "plugins", "agent-sessions-state")
+	pluginPath := filepath.Join(fake.home, "plugins", "aht-state")
 
 	_, err := Run(Options{Harness: registry.HarnessHermes, Binary: testInstallBinary})
 	if err == nil || !strings.Contains(err.Error(), "package-manager-managed") {
@@ -197,7 +197,7 @@ func TestHermesManagedModeFailsBeforeWriting(t *testing.T) {
 
 func TestHermesRefusesForeignPluginDirectory(t *testing.T) {
 	fake := installFakeHermesCLI(t)
-	pluginPath := filepath.Join(fake.home, "plugins", "agent-sessions-state")
+	pluginPath := filepath.Join(fake.home, "plugins", "aht-state")
 	if err := os.MkdirAll(pluginPath, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -233,8 +233,8 @@ func TestHermesRemoveUsesNativePluginCLI(t *testing.T) {
 	}
 	calls := string(readTestFile(t, filepath.Join(fake.state, "calls"), "reading fake Hermes calls"))
 	for _, call := range []string{
-		"plugins disable agent-sessions-state",
-		"plugins remove agent-sessions-state",
+		"plugins disable aht-state",
+		"plugins remove aht-state",
 	} {
 		if !strings.Contains(calls, call) {
 			t.Fatalf("native Hermes removal call %q not found:\n%s", call, calls)

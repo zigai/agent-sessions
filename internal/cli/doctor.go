@@ -12,13 +12,13 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/zigai/agent-sessions/v2/internal/agentstate"
-	"github.com/zigai/agent-sessions/v2/internal/install"
-	"github.com/zigai/agent-sessions/v2/internal/processinfo"
-	"github.com/zigai/agent-sessions/v2/internal/reportqueue"
-	"github.com/zigai/agent-sessions/v2/internal/service"
-	"github.com/zigai/agent-sessions/v2/pkg/harness"
-	"github.com/zigai/agent-sessions/v2/pkg/registry"
+	"github.com/zigai/aht/v2/internal/agentstate"
+	"github.com/zigai/aht/v2/internal/install"
+	"github.com/zigai/aht/v2/internal/processinfo"
+	"github.com/zigai/aht/v2/internal/reportqueue"
+	"github.com/zigai/aht/v2/internal/service"
+	"github.com/zigai/aht/v2/pkg/harness"
+	"github.com/zigai/aht/v2/pkg/registry"
 )
 
 type doctorStatus string
@@ -61,7 +61,7 @@ func (app *application) newDoctorCommand() *cobra.Command {
 	var verbose bool
 	command := &cobra.Command{
 		Use:   "doctor",
-		Short: "Check whether agent-sessions is set up and working",
+		Short: "Check whether aht is set up and working",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			result := app.runDoctor(cmd.Context(), verbose)
 			if err := app.writeDoctorResult(result); err != nil {
@@ -129,8 +129,7 @@ func (app *application) runDoctor(ctx context.Context, includeAll bool) doctorRe
 
 	store := app.store()
 	if _, err := store.List(ctx, registry.Filter{}); err != nil {
-		var unsupported *registry.UnsupportedSchemaError
-		if errors.As(err, &unsupported) {
+		if unsupported, ok := errors.AsType[*registry.UnsupportedSchemaError](err); ok {
 			add("store.schema", doctorError, unsupported.Error())
 		} else {
 			add("store.schema", doctorError, err.Error())
@@ -144,8 +143,7 @@ func (app *application) runDoctor(ctx context.Context, includeAll bool) doctorRe
 		add("observer.platform", doctorOK, runtime.GOOS)
 	}
 	if _, err := processinfo.List(ctx); err != nil {
-		var unsupported *processinfo.UnsupportedError
-		if errors.As(err, &unsupported) {
+		if unsupported, ok := errors.AsType[*processinfo.UnsupportedError](err); ok {
 			add("observer.process-enumeration", doctorError, unsupported.Error())
 		} else {
 			add("observer.process-enumeration", doctorError, err.Error())
@@ -161,13 +159,13 @@ func (app *application) runDoctor(ctx context.Context, includeAll bool) doctorRe
 			add("observer.service", doctorError, serviceErr.Error())
 		}
 	} else if !serviceResult.Installed {
-		add("observer.service", doctorWarning, "managed observer service is not installed")
+		add("observer.service", doctorWarning, "managed tracker service is not installed")
 	} else if !serviceResult.Current {
-		add("observer.service", doctorWarning, "managed observer service is stale; run agent-sessions monitor enable")
+		add("observer.service", doctorWarning, "managed tracker service is stale; run aht manage tracker enable")
 	} else if !serviceResult.Running {
-		add("observer.service", doctorWarning, "managed observer service is stopped")
+		add("observer.service", doctorWarning, "managed tracker service is stopped")
 	} else {
-		add("observer.service", doctorOK, "managed observer service is running")
+		add("observer.service", doctorOK, "managed tracker service is running")
 	}
 	app.addObserverReconciliationCheck(&result, store.Path())
 	app.addDetectionManifestCheck(&result)
@@ -231,7 +229,7 @@ func (app *application) addObserverReconciliationCheck(result *doctorResult, sto
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			result.Checks = append(result.Checks, doctorCheck{Name: "observer.reconciliation", Status: doctorWarning, Message: "monitor health is missing; run agent-sessions monitor run --once or agent-sessions monitor enable"})
+			result.Checks = append(result.Checks, doctorCheck{Name: "observer.reconciliation", Status: doctorWarning, Message: "tracker health is missing; run aht manage tracker run --once or aht manage tracker enable"})
 			return
 		}
 		result.Checks = append(result.Checks, doctorCheck{Name: "observer.reconciliation", Status: doctorError, Message: err.Error()})

@@ -6,17 +6,17 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/zigai/agent-sessions/v2/pkg/registry"
+	"github.com/zigai/aht/v2/pkg/registry"
 )
 
 const (
-	piExtensionName       = "agent-sessions-state.ts"
+	piExtensionName       = "aht-state.ts"
 	piIntegrationID       = "pi"
 	piIntegrationSourceID = "pi-extension"
 	piSessionFlag         = "--session"
 )
 
-//go:embed assets/pi/agent-sessions-state.ts.tmpl
+//go:embed assets/pi/aht-state.ts.tmpl
 var piExtensionTemplate string
 
 type piHarness struct {

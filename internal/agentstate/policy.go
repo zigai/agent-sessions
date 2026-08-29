@@ -3,7 +3,7 @@ package agentstate
 import (
 	"time"
 
-	"github.com/zigai/agent-sessions/v2/pkg/registry"
+	"github.com/zigai/aht/v2/pkg/registry"
 )
 
 type Authority string
@@ -83,7 +83,7 @@ func matchingHookObservation(session registry.Session, policy Policy) (*registry
 	if native == nil {
 		return nil, HookEvaluation{Active: false, Fresh: false, ProcessMatches: false, Reason: "integration_report_missing"}, false
 	}
-	if native.Attributes["agent_sessions_integration"] != policy.IntegrationValue {
+	if native.Attributes["aht_integration"] != policy.IntegrationValue {
 		return nil, HookEvaluation{Active: false, Fresh: false, ProcessMatches: false, Reason: "integration_identity_mismatch"}, false
 	}
 	if native.Activity == nil || *native.Activity == registry.ActivityUnknown {

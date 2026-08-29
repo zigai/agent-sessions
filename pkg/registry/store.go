@@ -43,7 +43,7 @@ func (e *UnsupportedSchemaError) Error() string {
 	if e.Version != 0 {
 		version = strconv.Itoa(e.Version)
 	}
-	return fmt.Sprintf("unsupported store schema %s at %s; run agent-sessions --store %s registry reset or move/remove the file", version, e.Path, e.Path)
+	return fmt.Sprintf("unsupported store schema %s at %s; run aht --store %s manage state reset --force or move/remove the file", version, e.Path, e.Path)
 }
 
 type snapshot struct {
@@ -307,11 +307,11 @@ func sequencedObservationTime(
 		return at, nil
 	}
 
-	reporter := strings.TrimSpace(observation.Attributes["agent_sessions_integration"])
+	reporter := strings.TrimSpace(observation.Attributes["aht_integration"])
 	previous := session.Observations.Native
 	if reporter == "" ||
 		previous == nil ||
-		strings.TrimSpace(previous.Attributes["agent_sessions_integration"]) != reporter {
+		strings.TrimSpace(previous.Attributes["aht_integration"]) != reporter {
 		return at, nil
 	}
 	if previous.Sequence != nil && observation.Sequence == nil {
@@ -507,7 +507,7 @@ func applyMetadata(session *Session, observation Observation, at time.Time) {
 	if observation.Process != nil && observation.Process.Complete() {
 		process := *observation.Process
 		if session.Process != nil && !session.Process.Equal(process) {
-			session.Activity = activityPtr(ActivityUnknown)
+			session.Activity = new(ActivityUnknown)
 			session.ActivityDecision = &ActivityDecision{Authority: "process", Reason: "process_replaced", RuleID: "", ManifestSource: "", ManifestVersion: 0, FallbackReason: "", Process: process, ObservedAt: at}
 			session.Observations.Screen = nil
 		}
@@ -565,7 +565,7 @@ func applyPresenceAndActivity(session *Session, observation Observation, at time
 			case NativeLifecycleStart, NativeLifecycleResume:
 				if session.Presence == PresenceGone && at.After(session.PresenceChangedAt) {
 					session.Presence = PresenceUnknown
-					session.Activity = activityPtr(ActivityUnknown)
+					session.Activity = new(ActivityUnknown)
 				}
 			}
 		}
@@ -596,7 +596,7 @@ func applyPresenceAndActivity(session *Session, observation Observation, at time
 			if !nativeEndAfter(session, at) && !at.Before(session.PresenceChangedAt) {
 				session.Presence = PresenceLive
 				if session.Activity == nil {
-					session.Activity = activityPtr(ActivityUnknown)
+					session.Activity = new(ActivityUnknown)
 				}
 			}
 			return
@@ -610,7 +610,7 @@ func applyPresenceAndActivity(session *Session, observation Observation, at time
 		if screenFallbackSuperseded(*session, *screen) {
 			return
 		}
-		session.Activity = activityPtr(screen.Activity)
+		session.Activity = new(screen.Activity)
 		session.ActivityDecision = &ActivityDecision{Authority: screen.Authority, Reason: screen.Reason, RuleID: screen.RuleID, ManifestSource: screen.ManifestSource, ManifestVersion: screen.ManifestVersion, FallbackReason: screen.FallbackReason, Process: screen.Process, ObservedAt: at}
 	case ObservationSourceTmux, ObservationSourceMultiplexer, ObservationSourceCatalog:
 		return
@@ -626,7 +626,7 @@ func screenFallbackSuperseded(session Session, screen ScreenObservation) bool {
 		return false
 	}
 	native := session.Observations.Native
-	if native.Attributes["agent_sessions_integration"] != screen.FallbackForIntegration || !native.Process.Equal(screen.Process) || native.Activity == nil || *native.Activity == ActivityUnknown {
+	if native.Attributes["aht_integration"] != screen.FallbackForIntegration || !native.Process.Equal(screen.Process) || native.Activity == nil || *native.Activity == ActivityUnknown {
 		return false
 	}
 	if native.Presence != nil && *native.Presence == PresenceGone {
@@ -982,7 +982,7 @@ func cloneActivity(value *Activity) *Activity {
 	clone := *value
 	return &clone
 }
-func activityPtr(value Activity) *Activity { return &value }
+
 func cloneAttributes(value map[string]string) map[string]string {
 	if len(value) == 0 {
 		return nil

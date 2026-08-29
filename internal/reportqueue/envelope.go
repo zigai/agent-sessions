@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/zigai/agent-sessions/v2/pkg/registry"
+	"github.com/zigai/aht/v2/pkg/registry"
 )
 
 const (
@@ -79,7 +79,7 @@ func RootForStore(storePath string) string {
 	sum := sha256.Sum256([]byte(filepath.Clean(storePath)))
 	storeHash := hex.EncodeToString(sum[:8])
 
-	return filepath.Join(filepath.Dir(storePath), ".agent-sessions-queue", storeHash)
+	return filepath.Join(filepath.Dir(storePath), ".aht-queue", storeHash)
 }
 
 func (q Queue) Root() string {

@@ -7,13 +7,13 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/zigai/agent-sessions/v2/pkg/registry"
+	"github.com/zigai/aht/v2/pkg/registry"
 )
 
 const (
 	openClawCommand           = "openclaw"
-	openClawPluginName        = "agent-sessions-state"
-	openClawMarkerFileName    = ".agent-sessions-managed"
+	openClawPluginName        = "aht-state"
+	openClawMarkerFileName    = ".aht-managed"
 	openClawIntegrationSource = "openclaw-plugin"
 )
 
@@ -43,8 +43,8 @@ func (openClawHarness) InstallPlan(binary string) InstallPlan {
 				"openclaw": map[string]any{"extensions": []string{"./index.js"}},
 			}},
 			{Name: "openclaw.plugin.json", Content: "", JSONContent: map[string]any{
-				"id": openClawPluginName, "name": "Agent Sessions State", "version": "0.0." + version,
-				"description":  "Reports local OpenClaw session lifecycle and activity to agent-sessions.",
+				"id": openClawPluginName, "name": "AHT State", "version": "0.0." + version,
+				"description":  "Reports local OpenClaw session lifecycle and activity to aht.",
 				"activation":   map[string]any{"onStartup": true},
 				"configSchema": map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{}},
 			}},
@@ -73,5 +73,5 @@ func renderOpenClawPlugin(binary string, version string) string {
 }
 
 func openClawMarkerContent(version string) string {
-	return fmt.Sprintf("%s\nAGENT_SESSIONS_INTEGRATION_ID=openclaw\nAGENT_SESSIONS_INTEGRATION_VERSION=%s\nAGENT_SESSIONS_SOURCE=%s\n", ManagedMarker, version, openClawIntegrationSource)
+	return fmt.Sprintf("%s\nAHT_INTEGRATION_ID=openclaw\nAHT_INTEGRATION_VERSION=%s\nAHT_SOURCE=%s\n", ManagedMarker, version, openClawIntegrationSource)
 }

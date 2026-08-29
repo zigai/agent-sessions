@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/zigai/agent-sessions/v2/internal/processinfo"
-	"github.com/zigai/agent-sessions/v2/pkg/registry"
-	"github.com/zigai/agent-sessions/v2/pkg/tmuxctx"
+	"github.com/zigai/aht/v2/internal/processinfo"
+	"github.com/zigai/aht/v2/pkg/registry"
+	"github.com/zigai/aht/v2/pkg/tmuxctx"
 )
 
 func TestObserverDetectsScreenStateForTargetAgents(t *testing.T) {
@@ -134,7 +134,7 @@ func TestObserverRecordsUnknownWhenStaleIntegrationHasNoTmuxPane(t *testing.T) {
 	presence := registry.PresenceLive
 	idle := registry.ActivityIdle
 	now := time.Now().UTC()
-	_, err := store.Observe(context.Background(), registry.Observation{Source: registry.ObservationSourceNative, Evidence: registry.ObservationEvidenceNativeEvent, Harness: registry.HarnessPi, Identity: registry.ObservationIdentity{SessionID: "stale-pi"}, Presence: &presence, Activity: &idle, NativeEvent: "agent_settled", Process: identity, Attributes: map[string]string{"agent_sessions_integration": "pi-extension"}, ObservedAt: now.Add(-registry.IntegrationActivityLease - time.Second)})
+	_, err := store.Observe(context.Background(), registry.Observation{Source: registry.ObservationSourceNative, Evidence: registry.ObservationEvidenceNativeEvent, Harness: registry.HarnessPi, Identity: registry.ObservationIdentity{SessionID: "stale-pi"}, Presence: &presence, Activity: &idle, NativeEvent: "agent_settled", Process: identity, Attributes: map[string]string{"aht_integration": "pi-extension"}, ObservedAt: now.Add(-registry.IntegrationActivityLease - time.Second)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -377,7 +377,7 @@ func TestScreenFallbackCannotOverrideConcurrentCompleteIntegration(t *testing.T)
 					integration = "opencode-plugin"
 				}
 				identity := observerProcessIdentity(process)
-				_, err := store.Observe(ctx, registry.Observation{Source: registry.ObservationSourceNative, Evidence: registry.ObservationEvidenceNativeEvent, Harness: harness, Identity: registry.ObservationIdentity{SessionID: "active"}, Presence: &presence, Activity: &running, NativeEvent: "agent_start", Process: identity, Attributes: map[string]string{"agent_sessions_integration": integration}, ObservedAt: time.Now().UTC()})
+				_, err := store.Observe(ctx, registry.Observation{Source: registry.ObservationSourceNative, Evidence: registry.ObservationEvidenceNativeEvent, Harness: harness, Identity: registry.ObservationIdentity{SessionID: "active"}, Presence: &presence, Activity: &running, NativeEvent: "agent_start", Process: identity, Attributes: map[string]string{"aht_integration": integration}, ObservedAt: time.Now().UTC()})
 				if err != nil {
 					return tmuxctx.ScreenSnapshot{}, fmt.Errorf("record concurrent integration report: %w", err)
 				}

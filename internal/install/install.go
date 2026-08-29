@@ -8,18 +8,18 @@ import (
 	"slices"
 	"strings"
 
-	harnesspkg "github.com/zigai/agent-sessions/v2/pkg/harness"
-	"github.com/zigai/agent-sessions/v2/pkg/registry"
+	harnesspkg "github.com/zigai/aht/v2/pkg/harness"
+	"github.com/zigai/aht/v2/pkg/registry"
 )
 
 const (
-	defaultBinary = "agent-sessions"
+	defaultBinary = "aht"
 	managedMarker = harnesspkg.ManagedMarker
 )
 
 var (
 	errUnsupportedHarness = errors.New("unsupported harness")
-	errForeignFile        = errors.New("file exists and is not managed by agent-sessions")
+	errForeignFile        = errors.New("file exists and is not managed by aht")
 	errInstallFailed      = errors.New("one or more integrations failed to install")
 )
 
