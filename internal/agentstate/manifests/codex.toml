@@ -21,7 +21,7 @@ state = "idle"
 priority = 100
 region = "bottom:12"
 all = ["›"]
-regex_any = ["context left", "context [0-9]{1,3}% used", "[?] for shortcuts", "type your message"]
+regex_any = ["context left", "context [0-9]{1,3}% used", "[?] for shortcuts", "type your message", "[0-9]+(?:\\.[0-9]+)?%/[0-9]+[kKmM]"]
 none = ["esc to interrupt"]
 
 [[rules]]
