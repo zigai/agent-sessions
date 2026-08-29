@@ -830,23 +830,22 @@ func TestInstallPiWritesExtension(t *testing.T) {
 	if result.Path != path {
 		t.Fatalf("unexpected path %q", result.Path)
 	}
-	if !strings.Contains(result.Snippet, `pi.on("agent_start"`) {
-		t.Fatalf("expected agent_start hook in snippet: %q", result.Snippet)
-	}
-	if !strings.Contains(result.Snippet, `pi.on("before_agent_start"`) {
-		t.Fatalf("expected before_agent_start hook in snippet: %q", result.Snippet)
-	}
-	if !strings.Contains(result.Snippet, "AHT_INTEGRATION_ID=pi") {
-		t.Fatalf("expected integration id in snippet: %q", result.Snippet)
-	}
-	if !strings.Contains(result.Snippet, `"report", "pi"`) {
-		t.Fatalf("expected pi report command in snippet: %q", result.Snippet)
-	}
-	if !strings.Contains(result.Snippet, `"--observed-at", observedAt`) {
-		t.Fatalf("expected pi observed timestamp in snippet: %q", result.Snippet)
-	}
-	if !strings.Contains(result.Snippet, "addEvent(args, event?.type)") {
-		t.Fatalf("expected Pi native event propagation in snippet: %q", result.Snippet)
+	requireTextContainsAll(t, result.Snippet, []string{
+		`pi.on("agent_start"`,
+		`pi.on("before_agent_start"`,
+		`pi.on("ui_prompt_start"`,
+		`report("waiting", ctx, event)`,
+		`pi.on("ui_prompt_end"`,
+		`report(ctx.isIdle() ? "idle" : "running", ctx, event)`,
+		"AHT_INTEGRATION_ID=pi",
+		"AHT_INTEGRATION_VERSION=8",
+		`"report", "pi"`,
+		`"--observed-at", observedAt`,
+		"addEvent(args, event?.type)",
+		`addAttribute(args, "pi_prompt_kind", event?.kind)`,
+	}, "pi extension")
+	if strings.Contains(result.Snippet, `pi.on("tool_approval_`) {
+		t.Fatalf("Pi extension must use documented UI prompt events: %q", result.Snippet)
 	}
 }
 

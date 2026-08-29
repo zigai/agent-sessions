@@ -41,6 +41,21 @@ func TestReportHookCommandRejectsInvalidTypedTransition(t *testing.T) {
 	}
 }
 
+func TestPiIntegrationAdvertisesPromptWaiting(t *testing.T) {
+	t.Parallel()
+
+	adapter, ok := Find(registry.HarnessPi)
+	if !ok {
+		t.Fatal("Pi adapter not found")
+	}
+	if !adapter.Definition().Capabilities.WaitingPermission {
+		t.Fatal("Pi adapter does not advertise user prompt waiting")
+	}
+	if got := IntegrationVersionFor(registry.HarnessPi); got != piIntegrationVersion {
+		t.Fatalf("Pi integration version = %d, want %d", got, piIntegrationVersion)
+	}
+}
+
 func TestResumeCommandFor(t *testing.T) {
 	t.Parallel()
 
