@@ -1098,7 +1098,7 @@ func sessionDisplayLabel(session registry.Session) string {
 		return session.SessionID
 	}
 	if session.SessionPath != "" {
-		return filepath.Base(session.SessionPath)
+		return formatSessionPathLabel(session.SessionPath)
 	}
 	if session.Multiplexer.PaneID != "" {
 		return session.Multiplexer.PaneID
@@ -1107,6 +1107,24 @@ func sessionDisplayLabel(session registry.Session) string {
 		return filepath.Base(session.CWD)
 	}
 	return shortRegistryID(session.ID)
+}
+
+func formatSessionPathLabel(path string) string {
+	base := filepath.Base(path)
+	trimmed := base
+	for _, ext := range []string{".jsonl", ".json"} {
+		if cut, ok := strings.CutSuffix(trimmed, ext); ok {
+			trimmed = cut
+			break
+		}
+	}
+	if separator := strings.LastIndexByte(trimmed, '_'); separator >= 0 && separator+1 < len(trimmed) {
+		suffix := trimmed[separator+1:]
+		if len(suffix) >= 8 || strings.Contains(suffix, "-") {
+			return suffix
+		}
+	}
+	return base
 }
 
 func (app *application) runListSummary(ctx context.Context, o listOptions) error {

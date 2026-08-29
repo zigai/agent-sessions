@@ -52,10 +52,11 @@ function report(transition: string, ctx?: any, event?: any): void {
   args.push(transition === "gone" ? "--presence" : "--activity", transition);
   args.push("--attribute", `aht_integration_version={{INTEGRATION_VERSION}}`);
   args.push("--attribute", `aht_integration=${currentSessionSource}`);
+  if (currentSessionId) {
+    args.push("--session-id", currentSessionId);
+  }
   if (currentSessionPath) {
     args.push("--session-path", currentSessionPath);
-  } else if (currentSessionId) {
-    args.push("--session-id", currentSessionId);
   }
   if (currentCwd) {
     args.push("--cwd", currentCwd);

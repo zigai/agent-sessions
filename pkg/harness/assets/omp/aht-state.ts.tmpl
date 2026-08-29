@@ -144,10 +144,11 @@ function report(
   if (typeof event?.approved === "boolean") {
     addAttribute(args, "omp_approved", String(event.approved));
   }
+  if (ref.id) {
+    args.push("--session-id", ref.id);
+  }
   if (ref.path) {
     args.push("--session-path", ref.path);
-  } else if (ref.id) {
-    args.push("--session-id", ref.id);
   }
   if (ref.cwd) args.push("--cwd", ref.cwd);
   addResumeCommand(args, ref);

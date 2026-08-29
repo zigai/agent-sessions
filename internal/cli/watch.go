@@ -372,16 +372,7 @@ func sortWatchEvents(e []watchEvent) {
 }
 
 func watchSessionLabel(s registry.Session) string {
-	if s.SessionID != "" {
-		return s.SessionID
-	}
-	if s.SessionPath != "" {
-		return s.SessionPath
-	}
-	if s.Multiplexer.PaneID != "" {
-		return s.Multiplexer.PaneID
-	}
-	return s.ID
+	return sessionDisplayLabel(s)
 }
 
 func watchTmuxLabel(c registry.TmuxContext) string {

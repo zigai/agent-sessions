@@ -771,3 +771,53 @@ func TestListFullLayoutUsesTableOnlyWhenUsefulColumnsFit(t *testing.T) {
 		t.Fatalf("semantic session wrapping lost data: got %q", got)
 	}
 }
+
+func TestSessionDisplayLabel(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		session registry.Session
+		want    string
+	}{
+		{
+			name:    "explicit session id",
+			session: registry.Session{ID: "omp-12345678", SessionID: "custom-thread-name", SessionPath: "/tmp/path.jsonl"},
+			want:    "custom-thread-name",
+		},
+		{
+			name:    "omp timestamped jsonl path extracts uuid",
+			session: registry.Session{ID: "omp-12345678", SessionPath: "/home/zigai/.omp/agent/sessions/-Projects-aht/2026-08-29T10-11-12-300Z_01a04d00-7b2c-7000-8cff-61086b324bf2.jsonl"},
+			want:    "01a04d00-7b2c-7000-8cff-61086b324bf2",
+		},
+		{
+			name:    "plain filename fallback",
+			session: registry.Session{ID: "omp-12345678", SessionPath: "/tmp/my-transcript.jsonl"},
+			want:    "my-transcript.jsonl",
+		},
+		{
+			name:    "pane id fallback",
+			session: registry.Session{ID: "omp-12345678", Multiplexer: registry.MultiplexerContext{PaneID: "%12"}},
+			want:    "%12",
+		},
+		{
+			name:    "cwd fallback",
+			session: registry.Session{ID: "omp-12345678", CWD: "/home/zigai/Projects/aht"},
+			want:    "aht",
+		},
+		{
+			name:    "short id fallback",
+			session: registry.Session{ID: "omp-1234567890abcdef"},
+			want:    "omp-12345678",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := sessionDisplayLabel(tt.session); got != tt.want {
+				t.Fatalf("sessionDisplayLabel() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}

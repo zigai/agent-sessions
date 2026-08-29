@@ -838,11 +838,13 @@ func TestInstallPiWritesExtension(t *testing.T) {
 		`pi.on("ui_prompt_end"`,
 		`report(ctx.isIdle() ? "idle" : "running", ctx, event)`,
 		"AHT_INTEGRATION_ID=pi",
-		"AHT_INTEGRATION_VERSION=8",
+		"AHT_INTEGRATION_VERSION=9",
 		`"report", "pi"`,
 		`"--observed-at", observedAt`,
 		"addEvent(args, event?.type)",
 		`addAttribute(args, "pi_prompt_kind", event?.kind)`,
+		`args.push("--session-id", currentSessionId)`,
+		`args.push("--session-path", currentSessionPath)`,
 	}, "pi extension")
 	if strings.Contains(result.Snippet, `pi.on("tool_approval_`) {
 		t.Fatalf("Pi extension must use documented UI prompt events: %q", result.Snippet)
@@ -886,6 +888,7 @@ func TestInstallOmpWritesExtension(t *testing.T) {
 		`queueState("interrupted"`,
 		`report(undefined, "gone"`,
 		`args.push("--resume-command", item)`,
+		`args.push("--session-id", ref.id)`,
 		`args.push("--session-path", ref.path)`,
 		`args.push("--cwd", ref.cwd)`,
 		`"report",`,
@@ -895,7 +898,7 @@ func TestInstallOmpWritesExtension(t *testing.T) {
 		`retryableErrorPattern`,
 		`entry?.type === "session_init"`,
 		"if (isSubagentSession(ctx)) return Promise.resolve()",
-		"AHT_INTEGRATION_VERSION=9",
+		"AHT_INTEGRATION_VERSION=10",
 	}, "oh-my-pi extension")
 	if strings.Contains(result.Snippet, `pi.on("input"`) {
 		t.Fatalf("OMP extension must not treat local interactive input as agent activity: %q", result.Snippet)
