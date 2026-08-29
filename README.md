@@ -3,9 +3,17 @@
 AHT (Agent Harness Tracker) tracks coding-agent sessions, activity, processes,
 and terminal-multiplexer locations through a local realtime broker.
 
-Supported harnesses: `claude`, `codex`, `cursor`, `copilot`, `cline`,
-`kimi-code`, `grok`, `goose`, `pi`, `omp`, `opencode`, `agy`,
-`kilo`, `droid`, `openclaw`, and `hermes`.
+Supported harnesses: [`claude`](https://docs.anthropic.com/en/docs/agents-and-tools/claude-code/overview),
+[`codex`](https://github.com/openai/codex), [`pi`](https://github.com/earendil-works/pi),
+[`opencode`](https://github.com/anomalyco/opencode), [`omp`](https://github.com/can1357/oh-my-pi),
+[`hermes`](https://github.com/NousResearch/hermes-agent),
+[`openclaw`](https://github.com/openclaw/openclaw), [`grok`](https://x.ai),
+[`cursor`](https://cursor.com), [`copilot`](https://github.com/features/copilot),
+[`cline`](https://github.com/cline/cline), [`kimi-code`](https://kimi.moonshot.cn),
+[`goose`](https://github.com/block/goose),
+[`agy`](https://github.com/google-antigravity/antigravity-cli),
+[`kilo`](https://github.com/kilo-org/kilocode), and
+[`droid`](https://factory.ai).
 
 ## Installation
 
@@ -18,7 +26,7 @@ Prebuilt archives and Linux packages are available from
 
 ## Quick start
 
-Connect one or more agents and start background tracking:
+Set up harness integrations and start background tracking:
 
 ```sh
 aht manage setup claude codex
@@ -32,16 +40,6 @@ aht watch
 aht info <session>
 aht info <session> --explain
 ```
-
-`manage setup` installs the agent integrations and starts the broker. `list`, `info`,
-and `watch` are standalone clients of that broker; `info --explain` adds the
-live activity decision diagnostics, while `watch --json` provides a
-machine-readable transition stream for other tools. The broker keeps effective
-state in memory and atomically checkpoints it to the registry file for recovery.
-The registry represents current local state. Ended sessions are retained only
-as five-minute tombstones to reject late lifecycle reports, then removed
-automatically on the next registry update. Use `aht manage state
-clean --all` to compact existing state immediately.
 
 Check the installation:
 
@@ -61,8 +59,6 @@ aht manage integrations install codex --dry-run --show-content
 ```
 
 `<harness>` is a supported harness name from the list above.
-Use `--show-content` to print generated hook or plugin content; otherwise the
-install command prints a concise summary.
 
 ## Full Usage
 
