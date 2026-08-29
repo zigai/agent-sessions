@@ -46,7 +46,7 @@ func (app *application) newSetupCommand() *cobra.Command {
 	serviceConfig := serviceOptions{binary: defaultInstallBinary(), interval: serviceDefaultInterval}
 	command := &cobra.Command{
 		Use:   "setup <agent...|all>",
-		Short: "Connect agents and start background tracking",
+		Short: "Set up harness integrations and start background tracking",
 		Args:  cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			integrations, err := app.installIntegrations(cmd.Context(), args, options)
