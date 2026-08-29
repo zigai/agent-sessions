@@ -805,14 +805,18 @@ func writeFileAtomic(path string, data []byte, createDirError string, writeError
 }
 
 func writeFileAtomicMode(path string, data []byte, mode os.FileMode, createDirError string, writeError string) error {
-	dir := filepath.Dir(path)
+	targetPath := path
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		targetPath = resolved
+	}
+	dir := filepath.Dir(targetPath)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("%s: %w", createDirError, err)
 	}
 
-	temp, err := os.CreateTemp(dir, filepath.Base(path)+".tmp-*")
+	temp, err := os.CreateTemp(dir, filepath.Base(targetPath)+".tmp-*")
 	if err != nil {
-		return fmt.Errorf("creating temp file for %s: %w", path, err)
+		return fmt.Errorf("creating temp file for %s: %w", targetPath, err)
 	}
 	tempPath := temp.Name()
 	keep := false
@@ -836,7 +840,7 @@ func writeFileAtomicMode(path string, data []byte, mode os.FileMode, createDirEr
 	if err := temp.Close(); err != nil {
 		return fmt.Errorf("closing temp file: %w", err)
 	}
-	if err := os.Rename(tempPath, path); err != nil {
+	if err := os.Rename(tempPath, targetPath); err != nil {
 		return fmt.Errorf("%s: %w", writeError, err)
 	}
 	keep = true
@@ -876,6 +880,7 @@ func managedSource(source string, harness registry.Harness) string {
 func isManagedSourceHookCommand(source string) func(string) bool {
 	return func(command string) bool {
 		return strings.Contains(command, "aht_integration="+source) ||
+			strings.Contains(command, "agent_sessions_integration="+source) ||
 			strings.Contains(command, "--source "+source)
 	}
 }

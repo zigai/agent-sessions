@@ -14,6 +14,10 @@ func TestClassifyArtifactContentAcceptsSourceMetadata(t *testing.T) {
 	if status := classifyArtifactContent(stale); status != ArtifactStale {
 		t.Fatalf("stale source metadata classified as %q", status)
 	}
+	legacyStale := `{"command":"agent-sessions report codex --attribute agent_sessions_integration_version=4 --attribute agent_sessions_integration=codex-hook"}`
+	if status := classifyArtifactContent(legacyStale); status != ArtifactStale {
+		t.Fatalf("legacy agent-sessions source metadata classified as %q, want %q", status, ArtifactStale)
+	}
 
 	foreign := `{"hooks":{"Stop":[{"command":"custom-tool"}]}}`
 	if status := classifyArtifactContent(foreign); status != ArtifactForeign {

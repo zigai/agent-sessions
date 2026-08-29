@@ -30,9 +30,9 @@ const (
 )
 
 var (
-	integrationVersionPattern = regexp.MustCompile(`(?i)(?:aht[_-]?integration[_-]?version|AHT_INTEGRATION_VERSION)\s*[=:]\s*["']?([0-9]+)`)
-	integrationSourcePattern  = regexp.MustCompile(`(?i)aht[_-]?integration\s*[=:]`)
-	integrationIDPattern      = regexp.MustCompile(`(?i)AHT_INTEGRATION_ID\s*=\s*["']?([a-z0-9_-]+)`)
+	integrationVersionPattern = regexp.MustCompile(`(?i)(?:(?:aht|agent[_-]?sessions)[_-]?integration[_-]?version|AHT_INTEGRATION_VERSION)\s*[=:]\s*["']?([0-9]+)`)
+	integrationSourcePattern  = regexp.MustCompile(`(?i)(?:aht|agent[_-]?sessions)[_-]?integration\s*[=:]`)
+	integrationIDPattern      = regexp.MustCompile(`(?i)(?:AHT|AGENT_SESSIONS)_INTEGRATION_ID\s*=\s*["']?([a-z0-9_-]+)`)
 )
 
 // ClassifyArtifact inspects a generated artifact without modifying it. It is

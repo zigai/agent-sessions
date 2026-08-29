@@ -141,6 +141,57 @@ func TestInstallCodexReplacesManagedHooks(t *testing.T) {
 	})
 }
 
+func TestInstallCodexReplacesLegacyAgentSessionsHooksAndPreservesSymlinks(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("CODEX_HOME", dir)
+	targetDir := t.TempDir()
+	targetPath := filepath.Join(targetDir, "hooks.json")
+	oldConfig := `{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"plannotator","timeout":345600}]},{"hooks":[{"type":"command","command":"agent-sessions report codex --activity idle --event Stop --attribute agent_sessions_integration_version=4 --attribute agent_sessions_integration=codex-hook --queue --raw-stdin --quiet"}]}]}}`
+	if err := os.WriteFile(targetPath, []byte(oldConfig), 0o600); err != nil {
+		t.Fatalf("writing target hooks: %v", err)
+	}
+	symlinkPath := filepath.Join(dir, "hooks.json")
+	if err := os.Symlink(targetPath, symlinkPath); err != nil {
+		t.Fatalf("creating symlink: %v", err)
+	}
+
+	result, err := Run(Options{
+		Harness: registry.HarnessCodex,
+		Binary:  "/bin/aht-test",
+	})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("expected codex install to report changed")
+	}
+
+	// Verify symlink was preserved
+	fi, err := os.Lstat(symlinkPath)
+	if err != nil {
+		t.Fatalf("lstat symlink: %v", err)
+	}
+	if fi.Mode()&os.ModeSymlink == 0 {
+		t.Fatal("expected hooks.json to remain a symlink")
+	}
+
+	// Verify content in target file
+	data, err := os.ReadFile(targetPath)
+	if err != nil {
+		t.Fatalf("reading target file: %v", err)
+	}
+	content := string(data)
+	if !strings.Contains(content, "plannotator") {
+		t.Fatalf("expected user plannotator hook to be preserved: %s", content)
+	}
+	if strings.Contains(content, "agent-sessions") {
+		t.Fatalf("expected legacy agent-sessions hook to be removed: %s", content)
+	}
+	if !strings.Contains(content, "/bin/aht-test report codex") || !strings.Contains(content, "aht_integration=codex-hook") {
+		t.Fatalf("expected new aht hook in target: %s", content)
+	}
+}
+
 func TestInstallClaudeWritesHooks(t *testing.T) {
 	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
 
