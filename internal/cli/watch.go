@@ -451,7 +451,7 @@ func (w *watchEventWriter) write(e []watchEvent) error {
 }
 
 func formatWatchTableHeader() string {
-	return fmt.Sprintf("%-20s  %-18s  %-10s  %-8s  %-8s  %s", "TIME", "EVENT", "AGENT", "PRESENCE", "ACTIVITY", "SESSION")
+	return fmt.Sprintf("%-20s  %-18s  %-10s  %-8s  %-8s  %s", "Time", "Event", "Agent", "Presence", "Activity", "Session")
 }
 
 func formatWatchPlainEvent(e watchEvent) string {

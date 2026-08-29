@@ -128,7 +128,7 @@ func TestWatchDefaultsToHumanTable(t *testing.T) {
 	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(stdout.String(), "TIME") || !strings.Contains(stdout.String(), "EVENT") || !strings.Contains(stdout.String(), "snapshot") || !strings.Contains(stdout.String(), "watch-human") || strings.HasPrefix(strings.TrimSpace(stdout.String()), "{") {
+	if !strings.Contains(stdout.String(), "Time") || !strings.Contains(stdout.String(), "Event") || !strings.Contains(stdout.String(), "snapshot") || !strings.Contains(stdout.String(), "watch-human") || strings.HasPrefix(strings.TrimSpace(stdout.String()), "{") {
 		t.Fatalf("watch default output = %q", stdout.String())
 	}
 }
@@ -277,7 +277,7 @@ func TestFormatWatchTableAlignsColumns(t *testing.T) {
 		activity string
 		label    string
 	}{
-		"header":           {output: header, action: "EVENT", harness: "AGENT", presence: "PRESENCE", activity: "ACTIVITY", label: "SESSION"},
+		"header":           {output: header, action: "Event", harness: "Agent", presence: "Presence", activity: "Activity", label: "Session"},
 		"omp snapshot":     {output: ompOutput, action: "snapshot", harness: "omp", presence: "live", activity: "idle", label: "Format watch command column alignment"},
 		"pi snapshot":      {output: piOutput, action: "snapshot", harness: "pi", presence: "live", activity: "idle", label: "/home/zigai/.pi/agent/sessions/--home-zigai-Projects-config--/2026-08-27T20-…"},
 		"location changed": {output: locOutput, action: "location_changed", harness: "omp", presence: "live", activity: "unknown", label: "01a044e3-a40c-77dc-8593-f0f6a3a7c42f"},

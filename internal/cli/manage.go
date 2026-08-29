@@ -1,9 +1,11 @@
 package cli
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -139,20 +141,33 @@ func (app *application) newRegistryResetCommand() *cobra.Command {
 	return command
 }
 
-func (app *application) runStop(ctx context.Context, args []string, all bool, dryRun bool) error {
-	var sessions []registry.Session
+func (app *application) resolveStopSessions(ctx context.Context, args []string, all bool) ([]registry.Session, error) {
 	if all {
 		listed, err := app.store().List(ctx, registry.Filter{Presence: registry.PresenceLive})
 		if err != nil {
-			return fmt.Errorf("list live sessions: %w", err)
+			return nil, fmt.Errorf("list live sessions: %w", err)
 		}
-		sessions = listed
-	} else {
-		session, err := app.resolveSession(ctx, args[0])
+		return listed, nil
+	}
+	seen := make(map[string]bool, len(args))
+	sessions := make([]registry.Session, 0, len(args))
+	for _, arg := range args {
+		session, err := app.resolveSession(ctx, arg)
 		if err != nil {
-			return err
+			return nil, err
 		}
-		sessions = []registry.Session{session}
+		if !seen[session.ID] {
+			seen[session.ID] = true
+			sessions = append(sessions, session)
+		}
+	}
+	return sessions, nil
+}
+
+func (app *application) runStop(ctx context.Context, args []string, all bool, dryRun bool) error {
+	sessions, err := app.resolveStopSessions(ctx, args, all)
+	if err != nil {
+		return err
 	}
 	result, err := app.runManageStopSessions(ctx, sessions, manageStopAllOptions{dryRun: dryRun})
 	if writeErr := app.writeManageStopAllResult(result); writeErr != nil {
@@ -166,6 +181,26 @@ func (app *application) runStop(ctx context.Context, args []string, all bool, dr
 		return fmt.Errorf("%w: %s", errStopTargetSkipped, reason)
 	}
 	return err
+}
+
+func (app *application) confirmStopAll(in io.Reader) (bool, error) {
+	if in == nil {
+		in = os.Stdin
+	}
+	out := app.stderr
+	if out == nil {
+		out = io.Discard
+	}
+	if _, err := fmt.Fprint(out, "Stop all live sessions? [y/N]: "); err != nil {
+		return false, fmt.Errorf("writing confirmation prompt: %w", err)
+	}
+	reader := bufio.NewReader(in)
+	line, err := reader.ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		return false, fmt.Errorf("reading confirmation: %w", err)
+	}
+	ans := strings.ToLower(strings.TrimSpace(line))
+	return ans == "y" || ans == "yes", nil
 }
 
 func (app *application) runManageStopSessions(ctx context.Context, ss []registry.Session, o manageStopAllOptions) (manageStopAllResult, error) {
@@ -353,7 +388,7 @@ func (app *application) writeManageStopAllResult(r manageStopAllResult) error {
 		rows = append(rows, []string{result.ID, string(result.Harness), string(result.Presence), activityString(result.Activity), result.Status, result.Method, result.Target, detail})
 	}
 	if err := app.writeHumanTable(
-		[]humanColumn{{heading: "ID", width: stopIDWidth}, {heading: "AGENT", width: stopAgentWidth}, {heading: "PRESENCE", width: stopPresenceWidth}, {heading: "ACTIVITY", width: stopActivityWidth}, {heading: "STATUS", width: stopStatusWidth}, {heading: "METHOD", width: stopMethodWidth}, {heading: "TARGET", width: stopTargetWidth}, {heading: "DETAIL", width: stopDetailWidth}},
+		[]humanColumn{{heading: "ID", width: stopIDWidth}, {heading: "Agent", width: stopAgentWidth}, {heading: "Presence", width: stopPresenceWidth}, {heading: "Activity", width: stopActivityWidth}, {heading: "Status", width: stopStatusWidth}, {heading: "Method", width: stopMethodWidth}, {heading: "Target", width: stopTargetWidth}, {heading: "Detail", width: stopDetailWidth}},
 		rows,
 	); err != nil {
 		return err

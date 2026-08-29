@@ -91,7 +91,7 @@ func (app *application) writeDoctorResult(result doctorResult) error {
 		rows = append(rows, []string{check.Name, string(check.Status), check.Message})
 	}
 	if err := app.writeWrappedHumanTable(
-		[]humanColumn{{heading: "CHECK", width: doctorCheckNameWidth}, {heading: "STATUS", width: doctorCheckStatusWidth}, {heading: "MESSAGE", width: doctorCheckMessageWidth}},
+		[]humanColumn{{heading: "Check", width: doctorCheckNameWidth}, {heading: "Status", width: doctorCheckStatusWidth}, {heading: "Message", width: doctorCheckMessageWidth}},
 		rows,
 	); err != nil {
 		return err
@@ -115,7 +115,7 @@ func (app *application) writeDoctorCapabilities(capabilities []doctorCapability)
 		rows = append(rows, []string{capability.Harness, yesNo(capability.SessionStart), yesNo(capability.SessionEnd), yesNo(capability.RunningIdle), yesNo(capability.Waiting), yesNo(capability.ProcessIdentity), yesNo(capability.NativeCatalog), yesNo(capability.TTYTmuxContext)})
 	}
 	return app.writeHumanTable(
-		[]humanColumn{{heading: "AGENT", width: doctorCapabilityAgentWidth}, {heading: "START", width: doctorCapabilityEventWidth}, {heading: "END", width: doctorCapabilityEventWidth}, {heading: "RUN/IDLE", width: doctorCapabilityRunningWidth}, {heading: "WAIT", width: doctorCapabilityWaitingWidth}, {heading: "PROCESS", width: doctorCapabilitySignalWidth}, {heading: "CATALOG", width: doctorCapabilitySignalWidth}, {heading: "TTY/MUX", width: doctorCapabilitySignalWidth}},
+		[]humanColumn{{heading: "Agent", width: doctorCapabilityAgentWidth}, {heading: "Start", width: doctorCapabilityEventWidth}, {heading: "End", width: doctorCapabilityEventWidth}, {heading: "Run/Idle", width: doctorCapabilityRunningWidth}, {heading: "Wait", width: doctorCapabilityWaitingWidth}, {heading: "Process", width: doctorCapabilitySignalWidth}, {heading: "Catalog", width: doctorCapabilitySignalWidth}, {heading: "TTY/MUX", width: doctorCapabilitySignalWidth}},
 		rows,
 	)
 }

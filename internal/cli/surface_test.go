@@ -401,7 +401,7 @@ func TestListDefaultsToLatestUpdateLastWithUsefulLabelsAndShortIDs(t *testing.T)
 	if strings.Index(output, "older-session") > strings.Index(output, "newer-session") {
 		t.Fatalf("list does not put the latest update last:\n%s", output)
 	}
-	if !strings.Contains(output, "SESSION") || strings.Contains(output, old.ID) || strings.Contains(output, newer.ID) {
+	if !strings.Contains(output, "Session") || strings.Contains(output, old.ID) || strings.Contains(output, newer.ID) {
 		t.Fatalf("list did not use a label and abbreviated IDs:\n%s", output)
 	}
 
@@ -438,7 +438,7 @@ func TestListDisplaysAndFiltersZellijLocation(t *testing.T) {
 		t.Fatal(err)
 	}
 	output := stdout.String()
-	for _, expected := range []string{"LOCATION", "zellij", "work"} {
+	for _, expected := range []string{"Location", "zellij", "work"} {
 		if !strings.Contains(output, expected) {
 			t.Fatalf("list output missing %q:\n%s", expected, output)
 		}
@@ -542,6 +542,80 @@ func TestStopRejectsInvalidSelection(t *testing.T) {
 	}
 }
 
+func TestStopMultipleSessions(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "sessions.json")
+	store := registry.NewFileStore(path)
+	now := time.Now().UTC()
+	live := registry.PresenceLive
+	s1, err := store.Observe(context.Background(), registry.Observation{
+		Source: registry.ObservationSourceNative, Evidence: registry.ObservationEvidenceNativeEvent,
+		Harness: registry.HarnessCodex, Identity: registry.ObservationIdentity{SessionID: "session-1"},
+		Presence: &live, NativeEvent: "start", ObservedAt: now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s2, err := store.Observe(context.Background(), registry.Observation{
+		Source: registry.ObservationSourceNative, Evidence: registry.ObservationEvidenceNativeEvent,
+		Harness: registry.HarnessClaude, Identity: registry.ObservationIdentity{SessionID: "session-2"},
+		Presence: &live, NativeEvent: "start", ObservedAt: now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stdout bytes.Buffer
+	root := NewRootCommand(&stdout, &bytes.Buffer{})
+	root.SetArgs([]string{"--store", path, "stop", shortRegistryID(s1.ID), shortRegistryID(s2.ID), "--dry-run"})
+	if err := root.ExecuteContext(context.Background()); !errors.Is(err, errStopTargetSkipped) {
+		t.Fatalf("expected skipped error, got %v", err)
+	}
+	output := stdout.String()
+	if !strings.Contains(output, "skipped=2") || !strings.Contains(output, "no stop target") {
+		t.Fatalf("stop output missing both session results:\n%s", output)
+	}
+}
+
+func TestStopAllConfirmationHandling(t *testing.T) {
+	path, _ := createSkippedStopSession(t)
+
+	// Refused confirmation via stdin
+	var stdout, stderr bytes.Buffer
+	root := NewRootCommand(&stdout, &stderr)
+	root.SetIn(strings.NewReader("n\n"))
+	root.SetArgs([]string{"--store", path, "stop", "--all"})
+	if err := root.ExecuteContext(context.Background()); !errors.Is(err, errStopAllConfirmation) {
+		t.Fatalf("expected confirmation cancellation error, got %v", err)
+	}
+	if !strings.Contains(stderr.String(), "Stop all live sessions? [y/N]: ") || strings.Contains(stdout.String(), "Stop all live sessions?") {
+		t.Fatalf("confirmation prompt channel mismatch: stdout=%q stderr=%q", stdout.String(), stderr.String())
+	}
+
+	// Accepted confirmation via stdin
+	stdout.Reset()
+	root = NewRootCommand(&stdout, &bytes.Buffer{})
+	root.SetIn(strings.NewReader("y\n"))
+	root.SetArgs([]string{"--store", path, "stop", "--all"})
+	if err := root.ExecuteContext(context.Background()); err != nil {
+		t.Fatalf("expected successful confirmation, got %v", err)
+	}
+
+	// Accepted via -y flag
+	stdout.Reset()
+	root = NewRootCommand(&stdout, &bytes.Buffer{})
+	root.SetArgs([]string{"--store", path, "stop", "--all", "-y"})
+	if err := root.ExecuteContext(context.Background()); err != nil {
+		t.Fatalf("expected successful stop with -y, got %v", err)
+	}
+
+	// Accepted via --yes flag
+	stdout.Reset()
+	root = NewRootCommand(&stdout, &bytes.Buffer{})
+	root.SetArgs([]string{"--store", path, "stop", "--all", "--yes"})
+	if err := root.ExecuteContext(context.Background()); err != nil {
+		t.Fatalf("expected successful stop with --yes, got %v", err)
+	}
+}
+
 //nolint:cyclop // the round trip intentionally verifies each observable state in order
 func TestIntegrationsInstallStatusRemoveRoundTrip(t *testing.T) {
 	home := t.TempDir()
@@ -555,7 +629,7 @@ func TestIntegrationsInstallStatusRemoveRoundTrip(t *testing.T) {
 	if err := root.ExecuteContext(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if strings.HasPrefix(strings.TrimSpace(stdout.String()), "{") || !strings.Contains(stdout.String(), "AGENT") || !strings.Contains(stdout.String(), "claude") {
+	if strings.HasPrefix(strings.TrimSpace(stdout.String()), "{") || !strings.Contains(stdout.String(), "Agent") || !strings.Contains(stdout.String(), "claude") {
 		t.Fatalf("install output = %q", stdout.String())
 	}
 
@@ -822,7 +896,7 @@ func TestDoctorIsConciseUnlessVerbose(t *testing.T) {
 	root = NewRootCommand(&verbose, &bytes.Buffer{})
 	root.SetArgs([]string{"--store", path, "manage", "doctor", "--verbose"})
 	_ = root.ExecuteContext(context.Background())
-	if !strings.Contains(verbose.String(), "START") || !strings.Contains(verbose.String(), "integration.codex") {
+	if !strings.Contains(verbose.String(), "Start") || !strings.Contains(verbose.String(), "integration.codex") {
 		t.Fatalf("verbose doctor omitted details:\n%s", verbose.String())
 	}
 

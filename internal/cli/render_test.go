@@ -33,6 +33,29 @@ func TestHumanRenderersBoundEveryLine(t *testing.T) {
 	}
 }
 
+func TestGoPrettyStyleRendering(t *testing.T) {
+	t.Parallel()
+	app := &application{}
+	var out bytes.Buffer
+	app.stdout = &out
+	cols := []humanColumn{
+		{heading: "ID", width: 10},
+		{heading: "Agent", width: 10},
+		{heading: "Status", width: 10},
+	}
+	rows := [][]string{
+		{"omp-1234", "omp", "running"},
+		{"pi-5678", "pi", "idle"},
+	}
+	if err := app.writeHumanTable(cols, rows); err != nil {
+		t.Fatal(err)
+	}
+	output := out.String()
+	if strings.Contains(output, "─") || strings.Contains(output, "---") {
+		t.Fatalf("borderless table contains border characters: %q", output)
+	}
+}
+
 func assertHumanLinesBounded(t *testing.T, output string) {
 	t.Helper()
 	for number, line := range strings.Split(strings.TrimSuffix(output, "\n"), "\n") {

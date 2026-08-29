@@ -24,7 +24,8 @@ var (
 	errSessionReference      = errors.New("session reference is ambiguous")
 	errInfoReference         = errors.New("provide one session reference or --pane")
 	errInfoConfig            = errors.New("--config-dir requires --explain")
-	errStopSelection         = errors.New("provide one session or --all")
+	errStopSelection         = errors.New("provide one or more sessions, or --all")
+	errStopAllConfirmation   = errors.New("stopping all sessions was not confirmed (pass -y to confirm)")
 	errIntegrationStatusFail = errors.New("one or more integrations could not be inspected")
 	errTargetBinaryNeedsShim = errors.New("--target-binary requires --shim")
 	errTargetBinaryWithAll   = errors.New("--target-binary cannot be used with all")
@@ -206,7 +207,7 @@ func (app *application) writeIntegrationStatuses(results []install.IntegrationSt
 		rows = append(rows, []string{string(result.Harness), string(result.Status), result.Message, result.NextStep})
 	}
 	return app.writeWrappedHumanTable(
-		[]humanColumn{{heading: "AGENT", width: integrationStatusAgentWidth}, {heading: "STATUS", width: integrationStatusStateWidth}, {heading: "MESSAGE", width: integrationStatusMessageWidth}, {heading: "NEXT", width: integrationStatusNextWidth}},
+		[]humanColumn{{heading: "Agent", width: integrationStatusAgentWidth}, {heading: "Status", width: integrationStatusStateWidth}, {heading: "Message", width: integrationStatusMessageWidth}, {heading: "Next", width: integrationStatusNextWidth}},
 		rows,
 	)
 }
@@ -260,7 +261,7 @@ func (app *application) writeIntegrationResults(results []install.Result, showCo
 		rows = append(rows, []string{result.Harness, strconv.FormatBool(result.Changed), result.Path, message})
 	}
 	if err := app.writeWrappedHumanTable(
-		[]humanColumn{{heading: "AGENT", width: integrationResultAgentWidth}, {heading: "CHANGED", width: integrationResultChangedWidth}, {heading: "PATH", width: integrationResultPathWidth}, {heading: "RESULT", width: integrationResultMessageWidth}},
+		[]humanColumn{{heading: "Agent", width: integrationResultAgentWidth}, {heading: "Changed", width: integrationResultChangedWidth}, {heading: "Path", width: integrationResultPathWidth}, {heading: "Result", width: integrationResultMessageWidth}},
 		rows,
 	); err != nil {
 		return err
@@ -557,13 +558,32 @@ func (app *application) newWatchCommand() *cobra.Command {
 func (app *application) newStopCommand() *cobra.Command {
 	all := false
 	dryRun := false
-	command := &cobra.Command{Use: "stop [session]", Short: "Gracefully stop sessions", Args: cobra.MaximumNArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
-		if all == (len(args) == 1) {
-			return errStopSelection
-		}
-		return app.runStop(cmd.Context(), args, all, dryRun)
-	}}
+	yes := false
+	command := &cobra.Command{
+		Use:   "stop [session...]",
+		Short: "Gracefully stop sessions",
+		Args:  cobra.ArbitraryArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if all && len(args) > 0 {
+				return errStopSelection
+			}
+			if !all && len(args) == 0 {
+				return errStopSelection
+			}
+			if all && !yes && !dryRun {
+				confirmed, err := app.confirmStopAll(cmd.InOrStdin())
+				if err != nil {
+					return err
+				}
+				if !confirmed {
+					return errStopAllConfirmation
+				}
+			}
+			return app.runStop(cmd.Context(), args, all, dryRun)
+		},
+	}
 	command.Flags().BoolVar(&all, "all", false, "stop every live session")
 	command.Flags().BoolVar(&dryRun, "dry-run", false, "show targets without sending signals")
+	command.Flags().BoolVarP(&yes, "yes", "y", false, "confirm stopping all sessions without prompting")
 	return command
 }

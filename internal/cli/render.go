@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"strings"
 	"unicode/utf8"
+
+	prettytable "github.com/jedib0t/go-pretty/v6/table"
+	"github.com/jedib0t/go-pretty/v6/text"
 )
 
 const (
@@ -18,14 +21,18 @@ var (
 	errHumanTableWidth     = errors.New("human table exceeds output width")
 )
 
+type humanWrapFunc func(string, int) []string
+
 type humanColumn struct {
 	heading string
 	width   int
+	wrap    humanWrapFunc
 }
 
 type humanDetail struct {
 	label string
 	value string
+	wrap  humanWrapFunc
 }
 
 func (app *application) writeHumanTable(columns []humanColumn, rows [][]string) error {
@@ -40,46 +47,83 @@ func (app *application) writeHumanTableRows(columns []humanColumn, rows [][]stri
 	if err := validateHumanColumns(columns, app.maxLineWidth()); err != nil {
 		return err
 	}
-	headings := make([]string, len(columns))
-	for index, column := range columns {
-		headings[index] = column.heading
+	writer := prettytable.NewWriter()
+	style := prettytable.StyleDefault
+	style.Box.PaddingLeft = ""
+	style.Box.PaddingRight = "  "
+	style.Format.Header = text.FormatDefault
+	style.Options = prettytable.OptionsNoBordersAndSeparators
+	writer.SetStyle(style)
+
+	header := make(prettytable.Row, len(columns))
+	colConfigs := make([]prettytable.ColumnConfig, len(columns))
+	for i, col := range columns {
+		header[i] = col.heading
+		colConfigs[i] = prettytable.ColumnConfig{
+			Number:   i + 1,
+			WidthMax: col.width,
+		}
+		if wrap {
+			wrapCell := col.wrap
+			if wrapCell == nil {
+				wrapCell = wrapHumanText
+			}
+			colConfigs[i].WidthMaxEnforcer = func(value string, maxLen int) string {
+				return strings.Join(wrapCell(value, maxLen), "\n")
+			}
+		} else {
+			colConfigs[i].WidthMaxEnforcer = truncateHumanText
+		}
 	}
-	if err := app.writeHumanTableLine(columns, headings); err != nil {
-		return err
-	}
+	writer.SetColumnConfigs(colConfigs)
+	writer.AppendHeader(header)
+
 	for _, row := range rows {
 		if len(row) != len(columns) {
 			return fmt.Errorf("%w: got %d cells for %d columns", errHumanTableCellCount, len(row), len(columns))
 		}
-		if !wrap {
-			if err := app.writeHumanTableLine(columns, row); err != nil {
-				return err
-			}
-			continue
+		tableRow := make(prettytable.Row, len(row))
+		for i, cell := range row {
+			tableRow[i] = sanitizeHumanText(cell)
 		}
-		if err := app.writeWrappedHumanTableRow(columns, row); err != nil {
-			return err
-		}
+		writer.AppendRow(tableRow)
+	}
+
+	writer.SuppressTrailingSpaces()
+	rendered := writer.Render()
+	if rendered == "" {
+		return nil
+	}
+	lines := strings.Split(rendered, "\n")
+	for i, line := range lines {
+		lines[i] = strings.TrimRight(line, " ")
+	}
+	if _, err := fmt.Fprintln(app.stdout, strings.Join(lines, "\n")); err != nil {
+		return fmt.Errorf("write human table: %w", err)
 	}
 	return nil
 }
 
-func (app *application) writeWrappedHumanTableRow(columns []humanColumn, row []string) error {
-	wrapped := make([][]string, len(columns))
-	lineCount := 1
-	for index, cell := range row {
-		wrapped[index] = wrapHumanText(cell, columns[index].width)
-		lineCount = max(lineCount, len(wrapped[index]))
-	}
-	for lineIndex := range lineCount {
-		line := make([]string, len(columns))
-		for columnIndex := range columns {
-			if lineIndex < len(wrapped[columnIndex]) {
-				line[columnIndex] = wrapped[columnIndex][lineIndex]
+func (app *application) writeStackedHumanRows(columns []humanColumn, rows [][]string) error {
+	for rowIndex, row := range rows {
+		if len(row) != len(columns) {
+			return fmt.Errorf("%w: got %d cells for %d columns", errHumanTableCellCount, len(row), len(columns))
+		}
+		details := make([]humanDetail, len(columns))
+		for columnIndex, column := range columns {
+			details[columnIndex] = humanDetail{
+				label: column.heading,
+				value: row[columnIndex],
+				wrap:  column.wrap,
 			}
 		}
-		if err := app.writeHumanTableLine(columns, line); err != nil {
+		if err := app.writeHumanDetails(details); err != nil {
 			return err
+		}
+		if rowIndex+1 < len(rows) {
+			if err := app.writeln(); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -111,34 +155,21 @@ func validateHumanColumns(columns []humanColumn, maxLineWidth int) error {
 	return nil
 }
 
-func (app *application) writeHumanTableLine(columns []humanColumn, cells []string) error {
-	var line strings.Builder
-	for index, column := range columns {
-		if index > 0 {
-			line.WriteString(strings.Repeat(" ", humanColumnGap))
-		}
-		cell := truncateHumanText(sanitizeHumanText(cells[index]), column.width)
-		line.WriteString(cell)
-		if index+1 < len(columns) {
-			line.WriteString(strings.Repeat(" ", column.width-utf8.RuneCountInString(cell)))
-		}
-	}
-	if _, err := fmt.Fprintln(app.stdout, strings.TrimRight(line.String(), " ")); err != nil {
-		return fmt.Errorf("write human table: %w", err)
-	}
-	return nil
-}
-
 func (app *application) writeHumanDetails(details []humanDetail) error {
 	labelWidth := 0
 	for _, detail := range details {
 		labelWidth = max(labelWidth, utf8.RuneCountInString(detail.label)+1)
 	}
-	labelWidth = min(labelWidth, humanDetailLabelMax)
-	valueWidth := humanLineWidth - labelWidth - humanColumnGap
+	maxWidth := app.maxLineWidth()
+	labelWidth = min(labelWidth, humanDetailLabelMax, max(1, maxWidth-humanColumnGap-1))
+	valueWidth := max(1, maxWidth-labelWidth-humanColumnGap)
 	for _, detail := range details {
 		label := truncateHumanText(detail.label+":", labelWidth)
-		lines := wrapHumanText(detail.value, valueWidth)
+		wrapValue := detail.wrap
+		if wrapValue == nil {
+			wrapValue = wrapHumanText
+		}
+		lines := wrapValue(detail.value, valueWidth)
 		for index, line := range lines {
 			if index == 0 {
 				if _, err := fmt.Fprintf(app.stdout, "%-*s  %s\n", labelWidth, label, line); err != nil {
@@ -171,6 +202,25 @@ func truncateHumanText(value string, width int) string {
 }
 
 func wrapHumanText(value string, width int) []string {
+	return wrapDelimitedHumanText(value, width, "")
+}
+
+func wrapHumanPath(value string, width int) []string {
+	return wrapDelimitedHumanText(value, width, `/\`)
+}
+
+func wrapHumanSession(value string, width int) []string {
+	if strings.Contains(value, " ") {
+		return wrapHumanText(value, width)
+	}
+	return wrapHumanIdentifier(value, width)
+}
+
+func wrapHumanIdentifier(value string, width int) []string {
+	return wrapDelimitedHumanText(value, width, "-_./")
+}
+
+func wrapDelimitedHumanText(value string, width int, delimiters string) []string {
 	value = sanitizeHumanText(value)
 	if value == "" {
 		return []string{"-"}
@@ -180,10 +230,15 @@ func wrapHumanText(value string, width int) []string {
 		runes := []rune(value)
 		cut := width
 		for index := width; index > 0; index-- {
-			if runes[index-1] == ' ' {
+			switch {
+			case runes[index-1] == ' ':
 				cut = index - 1
-				break
+			case strings.ContainsRune(delimiters, runes[index-1]):
+				cut = index
+			default:
+				continue
 			}
+			break
 		}
 		if cut == 0 {
 			cut = width

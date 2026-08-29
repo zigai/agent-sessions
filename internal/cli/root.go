@@ -660,7 +660,7 @@ func (app *application) writeReportResult(session registry.Session, quiet bool) 
 		}
 	}
 	return app.writeHumanTable(
-		[]humanColumn{{heading: "ID", width: reportIDWidth}, {heading: "AGENT", width: reportAgentWidth}, {heading: "PRESENCE", width: reportPresenceWidth}, {heading: "REPORTED", width: reportActivityWidth}, {heading: "EFFECTIVE", width: reportActivityWidth}, {heading: "AUTHORITATIVE", width: reportAuthoritativeWidth}},
+		[]humanColumn{{heading: "ID", width: reportIDWidth}, {heading: "Agent", width: reportAgentWidth}, {heading: "Presence", width: reportPresenceWidth}, {heading: "Reported", width: reportActivityWidth}, {heading: "Effective", width: reportActivityWidth}, {heading: "Authoritative", width: reportAuthoritativeWidth}},
 		[][]string{{session.ID, string(session.Harness), string(session.Presence), reportedActivity, appReportActivity(session), authoritative}},
 	)
 }
@@ -773,7 +773,7 @@ func psProcessArgs(ctx context.Context, pid int) []string {
 // list.
 type listOptions struct {
 	harness, presence, activity, tmuxSession, multiplexerSession, sortBy string
-	summary, absoluteTime, absoluteSet, sortSet, desc, descSet           bool
+	summary, absoluteTime, absoluteSet, sortSet, desc, descSet, full     bool
 }
 
 func (app *application) newListCommand() *cobra.Command {
@@ -795,6 +795,7 @@ func (app *application) newListCommand() *cobra.Command {
 	f.BoolVar(&o.summary, "summary", false, "summarize agent counts by multiplexer session")
 	f.BoolVar(&o.absoluteTime, "absolute-time", false, "show full timestamps")
 	f.BoolVar(&o.desc, "desc", false, "sort descending")
+	f.BoolVar(&o.full, "full", false, "show complete values using an adaptive layout")
 	return cmd
 }
 
@@ -868,13 +869,24 @@ func (app *application) runListSessions(ctx context.Context, o listOptions) erro
 	displayIDs := abbreviatedRegistryIDs(ss)
 	rows := make([][]string, 0, len(ss))
 	for _, s := range ss {
+		id := displayIDs[s.ID]
+		if o.full {
+			id = s.ID
+		}
 		rows = append(rows, []string{
-			displayIDs[s.ID], string(s.Harness), sessionDisplayLabel(s), string(s.Presence), listActivity(s),
+			id, string(s.Harness), sessionDisplayLabel(s), string(s.Presence), listActivity(s),
 			watchMultiplexerLabel(s.Multiplexer), formatHumanPath(s.CWD), formatUpdatedAt(s.UpdatedAt, now, o.absoluteTime),
 		})
 	}
-	columns := listTableColumns(rows, app.maxLineWidth())
-	return app.writeHumanTable(columns, rows)
+	maxWidth := app.maxLineWidth()
+	if o.full {
+		columns, fits := listFullTableColumns(rows, maxWidth)
+		if !fits {
+			return app.writeStackedHumanRows(columns, rows)
+		}
+		return app.writeWrappedHumanTable(columns, rows)
+	}
+	return app.writeHumanTable(listTableColumns(rows, maxWidth), rows)
 }
 
 func listTableColumns(rows [][]string, maxWidth int) []humanColumn {
@@ -888,7 +900,7 @@ func listTableColumns(rows [][]string, maxWidth int) []humanColumn {
 	if maxWidth <= 0 {
 		maxWidth = humanLineWidth
 	}
-	headings := []string{"ID", "AGENT", "SESSION", "PRESENCE", "ACTIVITY", "LOCATION", "CWD", "UPDATED"}
+	headings := []string{"ID", "Agent", "Session", "Presence", "Activity", "Location", "CWD", "Updated"}
 	maxLen := make([]int, len(headings))
 	for i, h := range headings {
 		maxLen[i] = utf8.RuneCountInString(h)
@@ -902,16 +914,16 @@ func listTableColumns(rows [][]string, maxWidth int) []humanColumn {
 	}
 
 	idWidth := max(len("ID"), min(maxLen[0], maxIDColumnWidth))
-	agentWidth := max(len("AGENT"), min(maxLen[1], maxAgentColumnWidth))
-	presenceWidth := max(len("PRESENCE"), min(maxLen[3], maxPresenceColumnWidth))
-	activityWidth := max(len("ACTIVITY"), min(maxLen[4], maxActivityColumnWidth))
-	locationWidth := max(len("LOCATION"), min(maxLen[5], maxLocationColumnWidth))
-	updatedWidth := max(len("UPDATED"), maxLen[7])
+	agentWidth := max(len("Agent"), min(maxLen[1], maxAgentColumnWidth))
+	presenceWidth := max(len("Presence"), min(maxLen[3], maxPresenceColumnWidth))
+	activityWidth := max(len("Activity"), min(maxLen[4], maxActivityColumnWidth))
+	locationWidth := max(len("Location"), min(maxLen[5], maxLocationColumnWidth))
+	updatedWidth := max(len("Updated"), maxLen[7])
 
 	gapsTotal := (len(headings) - 1) * humanColumnGap
 	fixedTotal := idWidth + agentWidth + presenceWidth + activityWidth + locationWidth + updatedWidth + gapsTotal
 
-	sessionNeeded := max(len("SESSION"), maxLen[2])
+	sessionNeeded := max(len("Session"), maxLen[2])
 	cwdNeeded := max(len("CWD"), maxLen[6])
 	available := maxWidth - fixedTotal
 
@@ -922,27 +934,99 @@ func listTableColumns(rows [][]string, maxWidth int) []humanColumn {
 		cwdWidth = cwdNeeded
 	case available > 0:
 		totalNeeded := sessionNeeded + cwdNeeded
-		sessionWidth = max(len("SESSION"), (available*sessionNeeded)/totalNeeded)
+		sessionWidth = max(len("Session"), (available*sessionNeeded)/totalNeeded)
 		cwdWidth = max(len("CWD"), available-sessionWidth)
 		if cwdWidth > cwdNeeded {
 			sessionWidth += cwdWidth - cwdNeeded
 			cwdWidth = cwdNeeded
 		}
 	default:
-		sessionWidth = len("SESSION")
+		sessionWidth = len("Session")
 		cwdWidth = len("CWD")
 	}
 
 	return []humanColumn{
 		{heading: "ID", width: idWidth},
-		{heading: "AGENT", width: agentWidth},
-		{heading: "SESSION", width: sessionWidth},
-		{heading: "PRESENCE", width: presenceWidth},
-		{heading: "ACTIVITY", width: activityWidth},
-		{heading: "LOCATION", width: locationWidth},
+		{heading: "Agent", width: agentWidth},
+		{heading: "Session", width: sessionWidth},
+		{heading: "Presence", width: presenceWidth},
+		{heading: "Activity", width: activityWidth},
+		{heading: "Location", width: locationWidth},
 		{heading: "CWD", width: cwdWidth},
-		{heading: "UPDATED", width: updatedWidth},
+		{heading: "Updated", width: updatedWidth},
 	}
+}
+
+func listFullTableColumns(rows [][]string, maxWidth int) ([]humanColumn, bool) {
+	const (
+		sessionMinWidth = 24
+		cwdMinWidth     = 20
+	)
+	headings := []string{"ID", "Agent", "Session", "Presence", "Activity", "Location", "CWD", "Updated"}
+	maxLen := make([]int, len(headings))
+	for index, heading := range headings {
+		maxLen[index] = utf8.RuneCountInString(heading)
+	}
+	for _, row := range rows {
+		for index, cell := range row {
+			if index < len(maxLen) {
+				maxLen[index] = max(maxLen[index], utf8.RuneCountInString(cell))
+			}
+		}
+	}
+	sessionNeeded := maxLen[2]
+	cwdNeeded := maxLen[6]
+	sessionWidth := min(sessionNeeded, max(len("Session"), sessionMinWidth))
+	cwdWidth := min(cwdNeeded, max(len("CWD"), cwdMinWidth))
+	fixedWidth := maxLen[0] + maxLen[1] + maxLen[3] + maxLen[4] + maxLen[5] + maxLen[7]
+	available := maxWidth - fixedWidth - (len(headings)-1)*humanColumnGap
+	fits := available >= sessionWidth+cwdWidth
+	if fits {
+		sessionWidth, cwdWidth = allocateFullListWidths(
+			sessionWidth,
+			cwdWidth,
+			sessionNeeded,
+			cwdNeeded,
+			available,
+		)
+	}
+	return []humanColumn{
+		{heading: "ID", width: maxLen[0], wrap: wrapHumanIdentifier},
+		{heading: "Agent", width: maxLen[1]},
+		{heading: "Session", width: sessionWidth, wrap: wrapHumanSession},
+		{heading: "Presence", width: maxLen[3]},
+		{heading: "Activity", width: maxLen[4]},
+		{heading: "Location", width: maxLen[5], wrap: wrapHumanIdentifier},
+		{heading: "CWD", width: cwdWidth, wrap: wrapHumanPath},
+		{heading: "Updated", width: maxLen[7]},
+	}, fits
+}
+
+func allocateFullListWidths(
+	sessionWidth int,
+	cwdWidth int,
+	sessionNeeded int,
+	cwdNeeded int,
+	available int,
+) (int, int) {
+	if available >= sessionNeeded+cwdNeeded {
+		return sessionNeeded, cwdNeeded
+	}
+	extra := available - sessionWidth - cwdWidth
+	sessionUnmet := sessionNeeded - sessionWidth
+	cwdUnmet := cwdNeeded - cwdWidth
+	totalUnmet := sessionUnmet + cwdUnmet
+	if extra <= 0 || totalUnmet == 0 {
+		return sessionWidth, cwdWidth
+	}
+	sessionAdd := min(sessionUnmet, extra*sessionUnmet/totalUnmet)
+	cwdAdd := min(cwdUnmet, extra-sessionAdd)
+	remaining := extra - sessionAdd - cwdAdd
+	additionalSession := min(sessionUnmet-sessionAdd, remaining)
+	sessionAdd += additionalSession
+	remaining -= additionalSession
+	cwdAdd += min(cwdUnmet-cwdAdd, remaining)
+	return sessionWidth + sessionAdd, cwdWidth + cwdAdd
 }
 
 func normalizedListOptions(options listOptions) (listOptions, error) {
@@ -1037,10 +1121,10 @@ func (app *application) runListSummary(ctx context.Context, o listOptions) error
 	if app.outputJSON {
 		return app.writeJSON(s)
 	}
-	return app.writeSummaryTable(s)
+	return app.writeSummaryTable(s, o.full)
 }
 
-func (app *application) writeSummaryTable(ss []registry.Summary) error {
+func (app *application) writeSummaryTable(ss []registry.Summary, full bool) error {
 	const (
 		summaryMuxWidth     = 10
 		summarySessionWidth = 20
@@ -1052,10 +1136,19 @@ func (app *application) writeSummaryTable(ss []registry.Summary) error {
 	for i, s := range ss {
 		rows = append(rows, []string{multiplexerSummaryKind(s), labels[i], strconv.Itoa(s.Total), strconv.Itoa(s.Live), strconv.Itoa(s.Gone), strconv.Itoa(s.PresenceUnknown), strconv.Itoa(s.Running), strconv.Itoa(s.Waiting), strconv.Itoa(s.Idle), strconv.Itoa(s.ActivityUnknown)})
 	}
-	return app.writeHumanTable(
-		[]humanColumn{{heading: "MUX", width: summaryMuxWidth}, {heading: "SESSION", width: summarySessionWidth}, {heading: "TOTAL", width: summaryCountWidth}, {heading: "LIVE", width: summaryCountWidth}, {heading: "GONE", width: summaryCountWidth}, {heading: "PRES?", width: summaryUnknownWidth}, {heading: "RUN", width: summaryCountWidth}, {heading: "WAIT", width: summaryCountWidth}, {heading: "IDLE", width: summaryCountWidth}, {heading: "ACT?", width: summaryCountWidth}},
-		rows,
-	)
+	columns := []humanColumn{{heading: "MUX", width: summaryMuxWidth}, {heading: "Session", width: summarySessionWidth, wrap: wrapHumanSession}, {heading: "Total", width: summaryCountWidth}, {heading: "Live", width: summaryCountWidth}, {heading: "Gone", width: summaryCountWidth}, {heading: "Pres?", width: summaryUnknownWidth}, {heading: "Run", width: summaryCountWidth}, {heading: "Wait", width: summaryCountWidth}, {heading: "Idle", width: summaryCountWidth}, {heading: "Act?", width: summaryCountWidth}}
+	if !full {
+		return app.writeHumanTable(columns, rows)
+	}
+	for columnIndex := range columns {
+		for _, row := range rows {
+			columns[columnIndex].width = max(columns[columnIndex].width, utf8.RuneCountInString(row[columnIndex]))
+		}
+	}
+	if validateHumanColumns(columns, app.maxLineWidth()) != nil {
+		return app.writeStackedHumanRows(columns, rows)
+	}
+	return app.writeHumanTable(columns, rows)
 }
 
 //nolint:gocritic // label precedence is intentionally explicit for stable output
