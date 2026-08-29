@@ -23,7 +23,7 @@ type codexHookPayload struct {
 	TranscriptPath *string `json:"transcript_path" validate:"omitempty"`
 	CWD            string  `json:"cwd"             validate:"required,notblank"`
 	HookEventName  string  `json:"hook_event_name" validate:"required,notblank"`
-	Model          string  `json:"model"           validate:"required,notblank"`
+	Model          string  `json:"model"           validate:"omitempty"`
 }
 
 type cursorHookPayload struct {

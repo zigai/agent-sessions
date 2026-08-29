@@ -612,6 +612,12 @@ func TestPayloadCompatibleWithHarness(t *testing.T) {
 			want:    true,
 		},
 		{
+			name:    "codex accepts session end payload without model",
+			harness: registry.HarnessCodex,
+			payload: `{"session_id":"codex-session","transcript_path":null,"cwd":"/repo","hook_event_name":"SessionEnd","reason":"other"}`,
+			want:    true,
+		},
+		{
 			name:    "cursor accepts native hook payload",
 			harness: registry.HarnessCursor,
 			payload: `{"conversation_id":"cursor-conversation","session_id":"cursor-session","transcript_path":null,"workspace_roots":["/repo"],"hook_event_name":"sessionEnd","cursor_version":"2026.06.15"}`,
