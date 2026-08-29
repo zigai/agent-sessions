@@ -55,11 +55,15 @@ type Definition struct {
 
 const (
 	IntegrationVersion    = 7
+	piIntegrationVersion  = 8
 	ompIntegrationVersion = 9
 )
 
 // IntegrationVersionFor returns the managed artifact generation for a harness.
 func IntegrationVersionFor(id registry.Harness) int {
+	if id == registry.HarnessPi {
+		return piIntegrationVersion
+	}
 	if id == registry.HarnessOmp {
 		return ompIntegrationVersion
 	}
@@ -90,7 +94,7 @@ func capabilitiesFor(id registry.Harness) Capabilities {
 	case registry.HarnessGoose:
 		capabilities.SessionStart, capabilities.SessionEnd, capabilities.RunningIdle, capabilities.NativeCatalog = true, true, true, true
 	case registry.HarnessPi:
-		capabilities.SessionStart, capabilities.SessionEnd, capabilities.RunningIdle, capabilities.NativeCatalog = true, true, true, true
+		capabilities.SessionStart, capabilities.SessionEnd, capabilities.RunningIdle, capabilities.WaitingPermission, capabilities.NativeCatalog = true, true, true, true, true
 	case registry.HarnessOmp:
 		capabilities.SessionStart, capabilities.SessionEnd, capabilities.RunningIdle, capabilities.WaitingPermission, capabilities.NativeCatalog = true, true, true, true, true
 	case registry.HarnessOpenCode:

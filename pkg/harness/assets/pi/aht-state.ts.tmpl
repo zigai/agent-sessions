@@ -63,6 +63,7 @@ function report(transition: string, ctx?: any, event?: any): void {
   addEvent(args, event?.type);
   addAttribute(args, "pi_event", event?.type);
   addAttribute(args, "pi_reason", event?.reason);
+  addAttribute(args, "pi_prompt_kind", event?.kind);
 
   try {
     const child = spawn(ahtBin, args, {
@@ -88,12 +89,12 @@ export default function (pi: any) {
     report("running", ctx, event);
   });
 
-  pi.on("tool_approval_requested", (event: any, ctx: any) => {
+  pi.on("ui_prompt_start", (event: any, ctx: any) => {
     report("waiting", ctx, event);
   });
 
-  pi.on("tool_approval_resolved", (event: any, ctx: any) => {
-    report("running", ctx, event);
+  pi.on("ui_prompt_end", (event: any, ctx: any) => {
+    report(ctx.isIdle() ? "idle" : "running", ctx, event);
   });
 
   pi.on("agent_settled", (event: any, ctx: any) => {
