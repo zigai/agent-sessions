@@ -9,8 +9,8 @@ import (
 	"strconv"
 	"strings"
 
-	harnesspkg "github.com/zigai/aht/v2/pkg/harness"
-	"github.com/zigai/aht/v2/pkg/registry"
+	harnesspkg "github.com/zigai/aht/pkg/harness"
+	"github.com/zigai/aht/pkg/registry"
 )
 
 // ArtifactStatus describes whether a managed integration artifact is absent,

@@ -9,8 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	harnesspkg "github.com/zigai/aht/v2/pkg/harness"
-	"github.com/zigai/aht/v2/pkg/registry"
+	harnesspkg "github.com/zigai/aht/pkg/harness"
+	"github.com/zigai/aht/pkg/registry"
 )
 
 var errRemoveFailed = errors.New("one or more integrations failed to remove")

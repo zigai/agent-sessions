@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/zigai/aht/v2/pkg/harnessmeta"
-	"github.com/zigai/aht/v2/pkg/registry"
+	"github.com/zigai/aht/pkg/harnessmeta"
+	"github.com/zigai/aht/pkg/registry"
 )
 
 type EnvField string

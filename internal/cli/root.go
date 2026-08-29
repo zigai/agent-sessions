@@ -21,14 +21,14 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/zigai/aht/v2/internal/agentstate"
-	"github.com/zigai/aht/v2/internal/processinfo"
-	"github.com/zigai/aht/v2/pkg/brokerapi"
-	harnesspkg "github.com/zigai/aht/v2/pkg/harness"
-	"github.com/zigai/aht/v2/pkg/herdrctx"
-	"github.com/zigai/aht/v2/pkg/registry"
-	"github.com/zigai/aht/v2/pkg/tmuxctx"
-	"github.com/zigai/aht/v2/pkg/zellijctx"
+	"github.com/zigai/aht/internal/agentstate"
+	"github.com/zigai/aht/internal/processinfo"
+	"github.com/zigai/aht/pkg/brokerapi"
+	harnesspkg "github.com/zigai/aht/pkg/harness"
+	"github.com/zigai/aht/pkg/herdrctx"
+	"github.com/zigai/aht/pkg/registry"
+	"github.com/zigai/aht/pkg/tmuxctx"
+	"github.com/zigai/aht/pkg/zellijctx"
 )
 
 var (

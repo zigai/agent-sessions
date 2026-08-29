@@ -4,7 +4,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/zigai/aht/v2/pkg/registry"
+	"github.com/zigai/aht/pkg/registry"
 )
 
 const (

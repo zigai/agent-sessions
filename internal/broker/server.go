@@ -10,8 +10,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/zigai/aht/v2/pkg/brokerapi"
-	"github.com/zigai/aht/v2/pkg/registry"
+	"github.com/zigai/aht/pkg/brokerapi"
+	"github.com/zigai/aht/pkg/registry"
 )
 
 const (

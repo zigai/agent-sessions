@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 	"slices"
 
-	harnesspkg "github.com/zigai/aht/v2/pkg/harness"
-	"github.com/zigai/aht/v2/pkg/registry"
+	harnesspkg "github.com/zigai/aht/pkg/harness"
+	"github.com/zigai/aht/pkg/registry"
 )
 
 // IntegrationStatus describes the managed artifacts for one harness integration.

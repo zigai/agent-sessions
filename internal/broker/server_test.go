@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/zigai/aht/v2/pkg/brokerapi"
-	"github.com/zigai/aht/v2/pkg/registry"
+	"github.com/zigai/aht/pkg/brokerapi"
+	"github.com/zigai/aht/pkg/registry"
 )
 
 //nolint:cyclop // One end-to-end scenario verifies transport, permissions, and streaming.

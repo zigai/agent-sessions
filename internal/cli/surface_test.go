@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/zigai/aht/v2/internal/service"
-	"github.com/zigai/aht/v2/pkg/registry"
+	"github.com/zigai/aht/internal/service"
+	"github.com/zigai/aht/pkg/registry"
 )
 
 func TestRootHelpShowsCompactCanonicalSurface(t *testing.T) {

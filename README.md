@@ -10,7 +10,7 @@ Supported harnesses: `claude`, `codex`, `cursor`, `copilot`, `cline`,
 ## Installation
 
 ```sh
-go install github.com/zigai/aht/v2@latest
+go install github.com/zigai/aht@latest
 ```
 
 Prebuilt archives and Linux packages are available from

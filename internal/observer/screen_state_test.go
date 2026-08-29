@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/zigai/aht/v2/internal/processinfo"
-	"github.com/zigai/aht/v2/pkg/registry"
-	"github.com/zigai/aht/v2/pkg/tmuxctx"
+	"github.com/zigai/aht/internal/processinfo"
+	"github.com/zigai/aht/pkg/registry"
+	"github.com/zigai/aht/pkg/tmuxctx"
 )
 
 func TestObserverDetectsScreenStateForTargetAgents(t *testing.T) {

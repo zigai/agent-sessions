@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/zigai/aht/v2/pkg/registry"
+	"github.com/zigai/aht/pkg/registry"
 )
 
 func TestSameTmuxServerDoesNotTreatMissingIdentityAsWildcard(t *testing.T) {

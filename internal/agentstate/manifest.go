@@ -17,7 +17,7 @@ import (
 
 	"github.com/pelletier/go-toml/v2"
 
-	"github.com/zigai/aht/v2/pkg/registry"
+	"github.com/zigai/aht/pkg/registry"
 )
 
 const (

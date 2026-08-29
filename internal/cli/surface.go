@@ -10,10 +10,10 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/zigai/aht/v2/internal/install"
-	"github.com/zigai/aht/v2/internal/service"
-	harnesspkg "github.com/zigai/aht/v2/pkg/harness"
-	"github.com/zigai/aht/v2/pkg/registry"
+	"github.com/zigai/aht/internal/install"
+	"github.com/zigai/aht/internal/service"
+	harnesspkg "github.com/zigai/aht/pkg/harness"
+	"github.com/zigai/aht/pkg/registry"
 )
 
 var (

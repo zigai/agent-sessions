@@ -56,7 +56,7 @@ clean:
 
 # Build with local development version metadata
 build-dev:
-    go build -ldflags "-X github.com/zigai/aht/v2/internal/cli.version=dev -X github.com/zigai/aht/v2/internal/cli.commit=$(git rev-parse --short HEAD) -X github.com/zigai/aht/v2/internal/cli.date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" -o aht .
+    go build -ldflags "-X github.com/zigai/aht/internal/cli.version=dev -X github.com/zigai/aht/internal/cli.commit=$(git rev-parse --short HEAD) -X github.com/zigai/aht/internal/cli.date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" -o aht .
 
 # Run a dry-run release
 release-dry-run:

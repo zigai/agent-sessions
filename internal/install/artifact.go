@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/zigai/aht/v2/pkg/registry"
+	"github.com/zigai/aht/pkg/registry"
 )
 
 type renderedFileInstall struct {

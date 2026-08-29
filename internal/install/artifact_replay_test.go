@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/zigai/aht/v2/pkg/harness"
+	"github.com/zigai/aht/pkg/harness"
 )
 
 func TestIntegrationManagedArtifactsUseV2Reports(t *testing.T) {

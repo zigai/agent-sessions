@@ -16,9 +16,9 @@ import (
 
 	"github.com/spf13/cobra"
 
-	harnesspkg "github.com/zigai/aht/v2/pkg/harness"
-	"github.com/zigai/aht/v2/pkg/registry"
-	"github.com/zigai/aht/v2/pkg/tmuxctx"
+	harnesspkg "github.com/zigai/aht/pkg/harness"
+	"github.com/zigai/aht/pkg/registry"
+	"github.com/zigai/aht/pkg/tmuxctx"
 )
 
 var errUnsupportedManagedHook = errors.New("harness does not support managed hooks")

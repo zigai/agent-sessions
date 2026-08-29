@@ -8,11 +8,11 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/zigai/aht/v2/internal/broker"
-	"github.com/zigai/aht/v2/internal/observer"
-	"github.com/zigai/aht/v2/internal/service"
-	"github.com/zigai/aht/v2/pkg/brokerapi"
-	"github.com/zigai/aht/v2/pkg/registry"
+	"github.com/zigai/aht/internal/broker"
+	"github.com/zigai/aht/internal/observer"
+	"github.com/zigai/aht/internal/service"
+	"github.com/zigai/aht/pkg/brokerapi"
+	"github.com/zigai/aht/pkg/registry"
 )
 
 type observeOptions struct {

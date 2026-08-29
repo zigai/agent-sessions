@@ -13,9 +13,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/zigai/aht/v2/internal/processinfo"
-	"github.com/zigai/aht/v2/pkg/registry"
-	"github.com/zigai/aht/v2/pkg/tmuxctx"
+	"github.com/zigai/aht/internal/processinfo"
+	"github.com/zigai/aht/pkg/registry"
+	"github.com/zigai/aht/pkg/tmuxctx"
 )
 
 //nolint:cyclop,gocognit // end-to-end setup and assertions intentionally cover all four agents in one server
