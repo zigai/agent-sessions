@@ -186,7 +186,15 @@ jobs:
           path: dist
 
       - name: Download draft assets
-        run: gh release download "${GITHUB_REF_NAME}" --dir draft-assets
+        run: |
+          set -o pipefail
+          release_id=$(gh release view "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" --json databaseId --jq .databaseId)
+          mkdir -p draft-assets
+          gh api "repos/${GITHUB_REPOSITORY}/releases/${release_id}/assets" --paginate --jq '.[] | [.id, .name] | @tsv' |
+            while IFS=$'\t' read -r asset_id asset_name; do
+              gh api "repos/${GITHUB_REPOSITORY}/releases/assets/${asset_id}" \
+                --header "Accept: application/octet-stream" > "draft-assets/${asset_name}"
+            done
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -197,7 +205,7 @@ jobs:
         run: just verify-artifact dist draft-assets false
 
       - name: Publish verified release
-        run: gh release edit "${GITHUB_REF_NAME}" --draft=false
+        run: gh release edit "${GITHUB_REF_NAME}" --draft=false --repo "${GITHUB_REPOSITORY}"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
