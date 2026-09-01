@@ -826,6 +826,9 @@ func runInspectionCommand(name string, args ...string) (string, error) {
 }
 
 func validatePublishedAssets(manifest releaseManifest, publishedDir string) error {
+	if !filepath.IsAbs(publishedDir) {
+		publishedDir = filepath.Join(filepath.Dir(manifest.Dir), publishedDir)
+	}
 	expected := make(map[string]releaseArtifact)
 	for _, artifact := range manifest.Artifacts {
 		if artifact.Type == "Archive" || artifact.Type == "Linux Package" || artifact.Type == "Checksum" {
