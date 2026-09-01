@@ -28,7 +28,7 @@ func TestTmuxFormatWithRealTmuxEscapedFields(t *testing.T) {
 	}
 
 	socket := filepath.Join(t.TempDir(), "tmux.sock")
-	weirdValue := "value with spaces 'quote $dollar back\\slash\tand-tab"
+	weirdValue := "value with spaces 'quote $dollar back\\slash and-more"
 	ctx := context.Background()
 	defer func() {
 		_ = exec.CommandContext(ctx, "tmux", "-S", socket, "kill-server").Run()

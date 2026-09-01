@@ -110,6 +110,33 @@ func TestParseCurrentEscapedFields(t *testing.T) {
 	}
 }
 
+func TestParseTmuxFieldsHandlesCurrentAndLegacyDollarQuoting(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		output string
+		want   string
+	}{
+		{name: "current plain dollar", output: `tmuxctx:value\ $dollar`, want: `value $dollar`},
+		{name: "legacy plain dollar", output: `tmuxctx:value\ \\$dollar`, want: `value $dollar`},
+		{name: "current literal backslash", output: `tmuxctx:value\ \\\$dollar`, want: `value \$dollar`},
+		{name: "legacy literal backslash", output: `tmuxctx:value\ \\\\$dollar`, want: `value \$dollar`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			fields, err := parseTmuxFields(test.output, 1)
+			if err != nil {
+				t.Fatalf("parseTmuxFields returned error: %v", err)
+			}
+			if len(fields) != 1 || fields[0] != test.want {
+				t.Fatalf("fields = %#v, want [%q]", fields, test.want)
+			}
+		})
+	}
+}
+
 func TestCurrentDisplayMessageArgsTargetsTmuxPane(t *testing.T) {
 	got := currentDisplayMessageArgs("format", "%12")
 	want := []string{"display-message", "-p", "-t", "%12", "-F", "format"}
