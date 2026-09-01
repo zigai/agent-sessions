@@ -15,12 +15,8 @@ help:
 test:
     go test ./...
 
-# Run a selected Go test package with optional arguments
-test-package package="./..." args="":
-    go test {{ args }} {{ package }}
-
-# Run the complete integration suite
-test-integration:
+# Run tests that require real local system boundaries
+integration:
     #!/usr/bin/env sh
     set -eu
     if ! command -v tmux >/dev/null 2>&1; then
@@ -29,13 +25,9 @@ test-integration:
     fi
     go test -count=1 -v -tags=integration ./...
 
-# Validate release artifacts
-test-release-artifacts artifact_dir="dist" published_dir="" negative_controls="false":
-    AHT_ARTIFACT_DIR="{{ artifact_dir }}" AHT_PUBLISHED_ARTIFACT_DIR="{{ published_dir }}" AHT_ARTIFACT_NEGATIVE_CONTROLS="{{ negative_controls }}" go test -count=1 -tags=integration ./internal/systemtest -run '^TestReleaseArtifacts$'
-
-# Validate release artifacts through the workflow contract
-verify-artifact artifact_dir="dist" published_dir="" negative_controls="false":
-    just test-release-artifacts "{{ artifact_dir }}" "{{ published_dir }}" "{{ negative_controls }}"
+# Validate built release artifacts and optional published copies
+artifacts artifact_dir="dist" published_dir="":
+    AHT_ARTIFACT_DIR="{{ artifact_dir }}" AHT_PUBLISHED_ARTIFACT_DIR="{{ published_dir }}" go test -count=1 -tags=integration ./internal/systemtest -run '^TestReleaseArtifacts$'
 # Run tests and display coverage
 coverage:
     #!/usr/bin/env sh
@@ -61,20 +53,12 @@ fix:
 lint:
     {{ golangci_lint }} run
 
-# Check Justfile formatting
-lint-just:
-    just --fmt --check
-
-# Validate GitHub Actions workflows
-lint-actions:
-    {{ actionlint }} .github/workflows/ci.yml .github/workflows/release.yml
-# Run all non-mutating checks
-check: lint test race
+# Run all required non-mutating verification
+check: lint test race integration
     go mod tidy -diff
     go build -o /dev/null .
-
-# Run the canonical pull request source gate
-verify-pr: check lint-just lint-actions test-integration
+    just --fmt --check
+    {{ actionlint }} .github/workflows/ci.yml .github/workflows/release.yml
 
 # Build the project
 build:
@@ -103,20 +87,13 @@ _goreleaser-version-check:
         exit 1
     fi
 
-# Run a dry-run release
-release-dry-run: _goreleaser-version-check
+# Build a release snapshot without publishing
+snapshot: _goreleaser-version-check
     goreleaser release --snapshot --clean
 
 # Build and upload a draft release
 release-draft: _goreleaser-version-check
     goreleaser release --clean
-
-# Build and validate a release snapshot
-verify-main: release-dry-run
-    just verify-artifact dist "" true
-
-# Run the canonical tagged-release source gate
-verify-release: verify-pr
 
 _release-check:
     #!/usr/bin/env sh
