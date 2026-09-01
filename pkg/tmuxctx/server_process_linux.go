@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -77,4 +79,23 @@ func readLinuxServerProcess(pid int, uid uint32) (*ServerProcess, error) {
 		return nil, errNotTmuxServer
 	}
 	return &ServerProcess{PID: pid, Args: args}, nil
+}
+
+func isTmuxServerArgs(args []string) bool {
+	if len(args) == 0 {
+		return false
+	}
+	for index, arg := range args {
+		base := filepath.Base(arg)
+		if strings.HasPrefix(base, "tmux: server") {
+			return true
+		}
+		if index != 0 || (base != "tmux" && base != "tmux:") {
+			continue
+		}
+		if slices.Contains(args[1:], "server") {
+			return true
+		}
+	}
+	return false
 }

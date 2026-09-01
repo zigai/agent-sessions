@@ -55,9 +55,6 @@ func darwinTmuxServer(ctx context.Context, process unix.KinfoProc) (ServerProces
 	if err != nil {
 		return zero, false, fmt.Errorf("parsing tmux process %d arguments: %w", pid, err)
 	}
-	if !strings.HasPrefix(command, "tmux: server") && !isTmuxServerArgs(args) {
-		return zero, false, nil
-	}
 	return ServerProcess{PID: pid, Args: args}, true, nil
 }
 
