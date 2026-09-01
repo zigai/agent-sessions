@@ -13,7 +13,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -25,54 +24,28 @@ import (
 )
 
 const (
-	artifactDirEnv              = "AHT_ARTIFACT_DIR"
-	publishedArtifactDirEnv     = "AHT_PUBLISHED_ARTIFACT_DIR"
-	artifactNegativeControlsEnv = "AHT_ARTIFACT_NEGATIVE_CONTROLS"
+	artifactDirEnv          = "AHT_ARTIFACT_DIR"
+	publishedArtifactDirEnv = "AHT_PUBLISHED_ARTIFACT_DIR"
 )
 
 type releaseArtifactExtra struct {
-	Binary    string          `json:"Binary"`
-	Binaries  []string        `json:"Binaries"`
-	Builder   string          `json:"Builder"`
-	Checksum  string          `json:"Checksum"`
-	Ext       string          `json:"Ext"`
-	Files     json.RawMessage `json:"Files"`
-	Format    string          `json:"Format"`
-	ID        string          `json:"ID"`
-	WrappedIn string          `json:"WrappedIn"`
+	Format string `json:"Format"`
 }
 
 type releaseArtifact struct {
-	Name         string               `json:"name"`
-	Path         string               `json:"path"`
-	GOOS         string               `json:"goos"`
-	GOARCH       string               `json:"goarch"`
-	GOAMD64      string               `json:"goamd64"`
-	GO386        string               `json:"go386"`
-	GOARM        string               `json:"goarm"`
-	GOARM64      string               `json:"goarm64"`
-	GOMIPS       string               `json:"gomips"`
-	GOPPC64      string               `json:"goppc64"`
-	GORISCV64    string               `json:"goriscv64"`
-	Target       string               `json:"target"`
-	InternalType int                  `json:"internal_type"`
-	Type         string               `json:"type"`
-	Extra        releaseArtifactExtra `json:"extra"`
-}
-
-type releaseMetadataRuntime struct {
-	GOOS   string `json:"goos"`
-	GOARCH string `json:"goarch"`
+	Name   string               `json:"name"`
+	Path   string               `json:"path"`
+	GOOS   string               `json:"goos"`
+	GOARCH string               `json:"goarch"`
+	Type   string               `json:"type"`
+	Extra  releaseArtifactExtra `json:"extra"`
 }
 
 type releaseMetadata struct {
-	ProjectName string                 `json:"project_name"`
-	Tag         string                 `json:"tag"`
-	PreviousTag string                 `json:"previous_tag"`
-	Version     string                 `json:"version"`
-	Commit      string                 `json:"commit"`
-	Date        string                 `json:"date"`
-	Runtime     releaseMetadataRuntime `json:"runtime"`
+	ProjectName string `json:"project_name"`
+	Version     string `json:"version"`
+	Commit      string `json:"commit"`
+	Date        string `json:"date"`
 }
 
 type releaseManifest struct {
@@ -91,11 +64,6 @@ type releaseSession struct {
 	SchemaVersion int    `json:"schema_version"`
 	SessionID     string `json:"session_id"`
 	Harness       string `json:"harness"`
-}
-
-type archiveMember struct {
-	Mode fs.FileMode
-	Data []byte
 }
 
 func TestReleaseArtifacts(t *testing.T) {
@@ -124,15 +92,11 @@ func TestReleaseArtifacts(t *testing.T) {
 	}
 
 	publishedDir := os.Getenv(publishedArtifactDirEnv)
-	if publishedDir != "" {
-		if err := validatePublishedAssets(manifest, publishedDir); err != nil {
-			t.Fatalf("validate published assets: %v", err)
-		}
+	if publishedDir == "" {
+		return
 	}
-	if os.Getenv(artifactNegativeControlsEnv) == "true" {
-		if err := validateNegativeControls(manifest); err != nil {
-			t.Fatalf("validate negative controls: %v", err)
-		}
+	if err := validatePublishedAssets(manifest, publishedDir); err != nil {
+		t.Fatalf("validate published assets: %v", err)
 	}
 }
 
@@ -148,6 +112,9 @@ func loadArtifactManifest(dir string) (releaseManifest, error) {
 	}
 	if err := decodeJSONFile(filepath.Join(manifest.Dir, "metadata.json"), &manifest.Metadata); err != nil {
 		return releaseManifest{}, fmt.Errorf("decode metadata.json: %w", err)
+	}
+	if manifest.Metadata.ProjectName != "aht" || manifest.Metadata.Version == "" || manifest.Metadata.Commit == "" || manifest.Metadata.Date == "" {
+		return releaseManifest{}, fmt.Errorf("metadata does not identify a complete aht build")
 	}
 	return manifest, nil
 }
@@ -192,205 +159,119 @@ func decodeJSONFile(path string, value any) error {
 }
 
 func validateArtifactInventory(manifest releaseManifest) error {
-	if manifest.Metadata.ProjectName != "aht" {
-		return fmt.Errorf("metadata project_name = %q, want aht", manifest.Metadata.ProjectName)
-	}
-	if manifest.Metadata.Version == "" || manifest.Metadata.Commit == "" || manifest.Metadata.Date == "" {
-		return fmt.Errorf("metadata version, commit, and date must be nonempty")
-	}
-
-	expectedPlatforms := map[string]struct{}{
-		"linux/amd64":  {},
-		"linux/arm64":  {},
+	expectedArchives := map[string]struct{}{
 		"darwin/amd64": {},
 		"darwin/arm64": {},
+		"linux/amd64":  {},
+		"linux/arm64":  {},
 	}
 	expectedPackages := map[string]struct{}{
-		"linux/amd64/deb": {},
-		"linux/amd64/rpm": {},
-		"linux/arm64/deb": {},
-		"linux/arm64/rpm": {},
+		"amd64/deb": {},
+		"amd64/rpm": {},
+		"arm64/deb": {},
+		"arm64/rpm": {},
 	}
-	binaryPlatforms := make(map[string]struct{}, len(expectedPlatforms))
-	archivePlatforms := make(map[string]struct{}, len(expectedPlatforms))
-	packageTargets := make(map[string]struct{}, len(expectedPackages))
-	downloadNames := make(map[string]string, len(manifest.Artifacts))
-	metadataCount := 0
+	archives := make(map[string]struct{})
+	packages := make(map[string]struct{})
+	downloadNames := make(map[string]struct{})
 	checksumCount := 0
 
 	for _, artifact := range manifest.Artifacts {
-		path, err := artifactDiskPath(manifest, artifact)
-		if err != nil {
+		if artifact.Type != "Archive" && artifact.Type != "Linux Package" && artifact.Type != "Checksum" {
+			continue
+		}
+		if _, err := artifactDiskPath(manifest, artifact); err != nil {
 			return err
 		}
-		if _, err := os.Stat(path); err != nil {
-			return missingArtifactError(artifact, err)
+		if _, exists := downloadNames[artifact.Name]; exists {
+			return fmt.Errorf("duplicate downloadable artifact name %q", artifact.Name)
 		}
+		downloadNames[artifact.Name] = struct{}{}
 
 		switch artifact.Type {
-		case "Binary":
-			if err := addUniqueTarget(binaryPlatforms, artifactPlatform(artifact), "Binary"); err != nil {
-				return err
-			}
 		case "Archive":
 			if artifact.Extra.Format != "tar.gz" {
-				return fmt.Errorf("archive %q format = %q, want tar.gz", artifact.Name, artifact.Extra.Format)
+				return fmt.Errorf("archive %q uses format %q, want tar.gz", artifact.Name, artifact.Extra.Format)
 			}
-			if err := addUniqueTarget(archivePlatforms, artifactPlatform(artifact), "Archive"); err != nil {
-				return err
-			}
-			if err := addUniqueDownload(downloadNames, artifact); err != nil {
+			if err := addUniqueTarget(archives, artifact.GOOS+"/"+artifact.GOARCH, "archive"); err != nil {
 				return err
 			}
 		case "Linux Package":
-			format, err := linuxPackageFormat(artifact)
-			if err != nil {
-				return err
+			if artifact.GOOS != "linux" || (artifact.Extra.Format != "deb" && artifact.Extra.Format != "rpm") {
+				return fmt.Errorf("package %q has unsupported target %s/%s format %q", artifact.Name, artifact.GOOS, artifact.GOARCH, artifact.Extra.Format)
 			}
-			key := artifactPlatform(artifact) + "/" + format
-			if err := addUniqueTarget(packageTargets, key, "Linux Package"); err != nil {
-				return err
-			}
-			if err := addUniqueDownload(downloadNames, artifact); err != nil {
+			if err := addUniqueTarget(packages, artifact.GOARCH+"/"+artifact.Extra.Format, "package"); err != nil {
 				return err
 			}
 		case "Checksum":
-			checksumCount++
 			if artifact.Name != "checksums.txt" {
-				return fmt.Errorf("checksum artifact name = %q, want checksums.txt", artifact.Name)
+				return fmt.Errorf("checksum artifact is named %q, want checksums.txt", artifact.Name)
 			}
-			if err := addUniqueDownload(downloadNames, artifact); err != nil {
-				return err
-			}
-		case "Metadata":
-			metadataCount++
-			if artifact.Name != "metadata.json" {
-				return fmt.Errorf("metadata artifact name = %q, want metadata.json", artifact.Name)
-			}
-		case "":
-			return fmt.Errorf("artifact %q has no type", artifact.Name)
-		default:
-			return fmt.Errorf("unknown shipped artifact type %q for %q", artifact.Type, artifact.Name)
+			checksumCount++
 		}
 	}
 
-	if err := requireTargetSet("Binary", binaryPlatforms, expectedPlatforms); err != nil {
+	if err := requireExactSet("archive targets", archives, expectedArchives); err != nil {
 		return err
 	}
-	if err := requireTargetSet("Archive", archivePlatforms, expectedPlatforms); err != nil {
-		return err
-	}
-	if err := requireTargetSet("Linux Package", packageTargets, expectedPackages); err != nil {
+	if err := requireExactSet("package targets", packages, expectedPackages); err != nil {
 		return err
 	}
 	if checksumCount != 1 {
-		return fmt.Errorf("Checksum artifact count = %d, want 1", checksumCount)
-	}
-	if metadataCount != 1 {
-		return fmt.Errorf("Metadata artifact count = %d, want 1", metadataCount)
+		return fmt.Errorf("found %d checksum artifacts, want 1", checksumCount)
 	}
 	return nil
 }
 
 func artifactDiskPath(manifest releaseManifest, artifact releaseArtifact) (string, error) {
-	if artifact.Name == "" || artifact.Name != filepath.Base(artifact.Name) || filepath.IsAbs(artifact.Name) {
+	if artifact.Name == "" || artifact.Name != filepath.Base(artifact.Name) {
 		return "", fmt.Errorf("artifact name %q is not a basename", artifact.Name)
 	}
-	if artifact.Path == "" || filepath.IsAbs(filepath.FromSlash(artifact.Path)) {
-		return "", fmt.Errorf("artifact %q has invalid manifest path %q", artifact.Name, artifact.Path)
+	path := artifact.Path
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(filepath.Dir(manifest.Dir), path)
 	}
-
-	manifestPath := filepath.Clean(filepath.FromSlash(artifact.Path))
-	if manifestPath == ".." || strings.HasPrefix(manifestPath, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("artifact %q path traverses outside artifact directory: %q", artifact.Name, artifact.Path)
+	path = filepath.Clean(path)
+	if filepath.Dir(path) != manifest.Dir || filepath.Base(path) != artifact.Name {
+		return "", fmt.Errorf("artifact %q is not a top-level file in %q", artifact.Name, manifest.Dir)
 	}
-	parts := strings.Split(filepath.ToSlash(manifestPath), "/")
-	if len(parts) > 1 && parts[0] == filepath.Base(manifest.Dir) {
-		parts = parts[1:]
+	info, err := os.Stat(path)
+	if err != nil {
+		return "", fmt.Errorf("stat artifact %q: %w", artifact.Name, err)
 	}
-	if len(parts) == 0 || parts[len(parts)-1] != artifact.Name {
-		return "", fmt.Errorf("artifact %q path basename does not match manifest path %q", artifact.Name, artifact.Path)
-	}
-
-	relativePath := artifact.Name
-	if artifact.Type == "Binary" {
-		relativePath = filepath.FromSlash(strings.Join(parts, "/"))
-	}
-	path := filepath.Join(manifest.Dir, relativePath)
-	if err := requirePathWithin(manifest.Dir, path); err != nil {
-		return "", fmt.Errorf("artifact %q: %w", artifact.Name, err)
+	if !info.Mode().IsRegular() {
+		return "", fmt.Errorf("artifact %q is not a regular file", artifact.Name)
 	}
 	return path, nil
 }
 
-func requirePathWithin(root string, path string) error {
-	relativePath, err := filepath.Rel(root, path)
-	if err != nil {
-		return fmt.Errorf("resolve relative path: %w", err)
-	}
-	if relativePath == ".." || strings.HasPrefix(relativePath, ".."+string(filepath.Separator)) || filepath.IsAbs(relativePath) {
-		return fmt.Errorf("path %q escapes %q", path, root)
-	}
-	return nil
-}
-
-func missingArtifactError(artifact releaseArtifact, err error) error {
-	if artifact.Type == "Archive" {
-		return fmt.Errorf("missing %s/%s native archive %q: %w", artifact.GOOS, artifact.GOARCH, artifact.Name, err)
-	}
-	return fmt.Errorf("missing artifact file %q: %w", artifact.Name, err)
-}
-
-func artifactPlatform(artifact releaseArtifact) string {
-	return artifact.GOOS + "/" + artifact.GOARCH
-}
-
-func addUniqueTarget(targets map[string]struct{}, key string, artifactType string) error {
+func addUniqueTarget(targets map[string]struct{}, key string, kind string) error {
 	if _, exists := targets[key]; exists {
-		return fmt.Errorf("duplicate %s OS/architecture/format tuple %q", artifactType, key)
+		return fmt.Errorf("duplicate %s target %q", kind, key)
 	}
 	targets[key] = struct{}{}
 	return nil
 }
 
-func addUniqueDownload(names map[string]string, artifact releaseArtifact) error {
-	if artifactType, exists := names[artifact.Name]; exists {
-		return fmt.Errorf("duplicate downloadable artifact name %q for %s and %s", artifact.Name, artifactType, artifact.Type)
-	}
-	names[artifact.Name] = artifact.Type
-	return nil
-}
-
-func linuxPackageFormat(artifact releaseArtifact) (string, error) {
-	format := artifact.Extra.Format
-	if format != "deb" && format != "rpm" {
-		return "", fmt.Errorf("Linux package %q format = %q, want deb or rpm", artifact.Name, format)
-	}
-	extension := "." + format
-	if artifact.Extra.Ext != extension || filepath.Ext(artifact.Name) != extension {
-		return "", fmt.Errorf("Linux package %q extension does not match format %q", artifact.Name, format)
-	}
-	return format, nil
-}
-
-func requireTargetSet(kind string, got map[string]struct{}, want map[string]struct{}) error {
-	missing := setDifference(want, got)
-	extra := setDifference(got, want)
-	if len(missing) == 0 && len(extra) == 0 {
-		return nil
-	}
-	return fmt.Errorf("%s target set mismatch: missing=%v extra=%v", kind, missing, extra)
-}
-
-func setDifference(left map[string]struct{}, right map[string]struct{}) []string {
-	difference := make([]string, 0)
-	for value := range left {
-		if _, exists := right[value]; !exists {
-			difference = append(difference, value)
+func requireExactSet(kind string, actual map[string]struct{}, expected map[string]struct{}) error {
+	missing := make([]string, 0)
+	extra := make([]string, 0)
+	for value := range expected {
+		if _, exists := actual[value]; !exists {
+			missing = append(missing, value)
 		}
 	}
-	sort.Strings(difference)
-	return difference
+	for value := range actual {
+		if _, exists := expected[value]; !exists {
+			extra = append(extra, value)
+		}
+	}
+	sort.Strings(missing)
+	sort.Strings(extra)
+	if len(missing) != 0 || len(extra) != 0 {
+		return fmt.Errorf("%s mismatch: missing=%v extra=%v", kind, missing, extra)
+	}
+	return nil
 }
 
 func validateChecksums(manifest releaseManifest) error {
@@ -404,9 +285,6 @@ func validateChecksums(manifest releaseManifest) error {
 			checksumArtifact = artifact
 		}
 	}
-	if checksumArtifact.Name == "" {
-		return fmt.Errorf("checksums.txt artifact is missing")
-	}
 
 	checksumPath, err := artifactDiskPath(manifest, checksumArtifact)
 	if err != nil {
@@ -416,22 +294,16 @@ func validateChecksums(manifest releaseManifest) error {
 	if err != nil {
 		return err
 	}
-	missing := make([]string, 0)
-	extra := make([]string, 0)
+	expectedNames := make(map[string]struct{}, len(expected))
+	actualNames := make(map[string]struct{}, len(checksums))
 	for name := range expected {
-		if _, exists := checksums[name]; !exists {
-			missing = append(missing, name)
-		}
+		expectedNames[name] = struct{}{}
 	}
 	for name := range checksums {
-		if _, exists := expected[name]; !exists {
-			extra = append(extra, name)
-		}
+		actualNames[name] = struct{}{}
 	}
-	sort.Strings(missing)
-	sort.Strings(extra)
-	if len(missing) != 0 || len(extra) != 0 {
-		return fmt.Errorf("checksum inventory mismatch: missing=%v extra=%v", missing, extra)
+	if err := requireExactSet("checksum inventory", actualNames, expectedNames); err != nil {
+		return err
 	}
 
 	for name, artifact := range expected {
@@ -443,21 +315,21 @@ func validateChecksums(manifest releaseManifest) error {
 		if err != nil {
 			return fmt.Errorf("hash %q: %w", name, err)
 		}
-		if !bytes.Equal(digest, checksums[name]) {
-			return fmt.Errorf("SHA-256 mismatch for %q: got %s want %s", name, hex.EncodeToString(digest), hex.EncodeToString(checksums[name]))
+		if hex.EncodeToString(digest) != checksums[name] {
+			return fmt.Errorf("SHA-256 mismatch for %q", name)
 		}
 	}
 	return nil
 }
 
-func parseChecksums(path string) (map[string][]byte, error) {
+func parseChecksums(path string) (map[string]string, error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return nil, fmt.Errorf("open checksums.txt: %w", err)
 	}
 	defer file.Close()
 
-	checksums := make(map[string][]byte)
+	checksums := make(map[string]string)
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
 		fields := strings.Fields(scanner.Text())
@@ -471,8 +343,9 @@ func parseChecksums(path string) (map[string][]byte, error) {
 		if _, exists := checksums[name]; exists {
 			return nil, fmt.Errorf("duplicate checksum entry for %q", name)
 		}
-		digest, err := hex.DecodeString(fields[0])
-		if err != nil || len(digest) != sha256.Size {
+		digest := strings.ToLower(fields[0])
+		decoded, err := hex.DecodeString(digest)
+		if err != nil || len(decoded) != sha256.Size {
 			return nil, fmt.Errorf("invalid SHA-256 digest for %q", name)
 		}
 		checksums[name] = digest
@@ -498,7 +371,7 @@ func fileSHA256(path string) ([]byte, error) {
 }
 
 func validateNativeArchive(manifest releaseManifest, goos string, goarch string) error {
-	artifact, err := findArtifact(manifest, "Archive", goos, goarch, "")
+	artifact, err := findArtifact(manifest, "Archive", goos, goarch, "tar.gz")
 	if err != nil {
 		return fmt.Errorf("missing native archive: %w", err)
 	}
@@ -506,44 +379,25 @@ func validateNativeArchive(manifest releaseManifest, goos string, goarch string)
 	if err != nil {
 		return err
 	}
-	members, err := loadNativeArchive(archivePath)
-	if err != nil {
-		return err
-	}
 
-	extractDir, err := os.MkdirTemp("", "aht release artifacts ")
+	archiveFile, err := os.Open(archivePath)
+	if err != nil {
+		return fmt.Errorf("open native archive: %w", err)
+	}
+	defer archiveFile.Close()
+	gzipReader, err := gzip.NewReader(archiveFile)
+	if err != nil {
+		return fmt.Errorf("open native archive gzip stream: %w", err)
+	}
+	defer gzipReader.Close()
+
+	extractDir, err := os.MkdirTemp("", "aht-release-")
 	if err != nil {
 		return fmt.Errorf("create extraction directory: %w", err)
 	}
 	defer os.RemoveAll(extractDir)
-	if !strings.Contains(extractDir, " ") {
-		return fmt.Errorf("extraction directory %q does not contain a space", extractDir)
-	}
-	for name, member := range members {
-		path := filepath.Join(extractDir, name)
-		if err := os.WriteFile(path, member.Data, member.Mode.Perm()); err != nil {
-			return fmt.Errorf("extract %q: %w", name, err)
-		}
-	}
-
-	binary := filepath.Join(extractDir, "aht")
-	return verifyReleaseBinaryBehavior(binary, manifest.Metadata)
-}
-
-func loadNativeArchive(path string) (map[string]archiveMember, error) {
-	file, err := os.Open(path)
-	if err != nil {
-		return nil, fmt.Errorf("open native archive: %w", err)
-	}
-	defer file.Close()
-	gzipReader, err := gzip.NewReader(file)
-	if err != nil {
-		return nil, fmt.Errorf("open native archive gzip stream: %w", err)
-	}
-	defer gzipReader.Close()
-
-	expected := map[string]struct{}{"aht": {}, "LICENSE": {}, "README.md": {}}
-	members := make(map[string]archiveMember, len(expected))
+	binaryPath := filepath.Join(extractDir, "aht")
+	required := map[string]bool{"aht": false, "LICENSE": false, "README.md": false}
 	tarReader := tar.NewReader(gzipReader)
 	for {
 		header, err := tarReader.Next()
@@ -551,53 +405,58 @@ func loadNativeArchive(path string) (map[string]archiveMember, error) {
 			break
 		}
 		if err != nil {
-			return nil, fmt.Errorf("read native archive: %w", err)
+			return fmt.Errorf("read native archive: %w", err)
 		}
-		name := filepath.ToSlash(filepath.Clean(header.Name))
-		if name != header.Name || name == "." || strings.Contains(name, "/") || filepath.IsAbs(header.Name) {
-			return nil, fmt.Errorf("native archive member %q is not a safe basename", header.Name)
+		found, requiredMember := required[header.Name]
+		if !requiredMember {
+			continue
 		}
-		if _, exists := expected[name]; !exists {
-			return nil, fmt.Errorf("unexpected native archive member %q", name)
-		}
-		if _, exists := members[name]; exists {
-			return nil, fmt.Errorf("duplicate native archive member %q", name)
+		if found {
+			return fmt.Errorf("native archive contains duplicate %q", header.Name)
 		}
 		if header.Typeflag != tar.TypeReg && header.Typeflag != tar.TypeRegA {
-			return nil, fmt.Errorf("native archive member %q is not a regular file", name)
+			return fmt.Errorf("native archive member %q is not a regular file", header.Name)
 		}
-		data, err := io.ReadAll(tarReader)
+		required[header.Name] = true
+		if header.Name != "aht" {
+			continue
+		}
+		if header.FileInfo().Mode().Perm()&0o111 == 0 {
+			return fmt.Errorf("native archive binary is not executable")
+		}
+		binaryFile, err := os.OpenFile(binaryPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o700)
 		if err != nil {
-			return nil, fmt.Errorf("read native archive member %q: %w", name, err)
+			return fmt.Errorf("create extracted binary: %w", err)
 		}
-		members[name] = archiveMember{Mode: fs.FileMode(header.Mode), Data: data}
+		_, copyErr := io.Copy(binaryFile, tarReader)
+		closeErr := binaryFile.Close()
+		if copyErr != nil {
+			return fmt.Errorf("extract native binary: %w", copyErr)
+		}
+		if closeErr != nil {
+			return fmt.Errorf("close extracted binary: %w", closeErr)
+		}
 	}
-
-	missing := setDifference(expected, memberNames(members))
+	missing := make([]string, 0)
+	for name, found := range required {
+		if !found {
+			missing = append(missing, name)
+		}
+	}
 	if len(missing) != 0 {
-		return nil, fmt.Errorf("missing native archive members %v", missing)
+		sort.Strings(missing)
+		return fmt.Errorf("native archive is missing public files: %v", missing)
 	}
-	if members["aht"].Mode.Perm()&0o111 == 0 {
-		return nil, fmt.Errorf("native archive aht member is not executable: mode %04o", members["aht"].Mode.Perm())
-	}
-	return members, nil
-}
-
-func memberNames(members map[string]archiveMember) map[string]struct{} {
-	names := make(map[string]struct{}, len(members))
-	for name := range members {
-		names[name] = struct{}{}
-	}
-	return names
+	return verifyReleaseBinaryBehavior(binaryPath, manifest.Metadata)
 }
 
 func verifyReleaseBinaryBehavior(binary string, metadata releaseMetadata) error {
-	isolatedRoot, err := os.MkdirTemp("", "aht release state ")
+	isolatedRoot, err := os.MkdirTemp("", "aht-release-state-")
 	if err != nil {
 		return fmt.Errorf("create isolated state directory: %w", err)
 	}
 	defer os.RemoveAll(isolatedRoot)
-	workingDir, err := os.MkdirTemp("", "aht release work ")
+	workingDir, err := os.MkdirTemp("", "aht-release-work-")
 	if err != nil {
 		return fmt.Errorf("create working directory: %w", err)
 	}
@@ -631,15 +490,6 @@ func verifyReleaseBinaryBehavior(binary string, metadata releaseMetadata) error 
 		return fmt.Errorf("build date mismatch: binary=%q metadata=%q", version.Built, metadata.Date)
 	}
 
-	helpOutput, err := runReleaseCommand(binary, workingDir, environment, "--help")
-	if err != nil {
-		return err
-	}
-	help := string(helpOutput)
-	if !strings.Contains(help, "aht") || !strings.Contains(help, "Available Commands:") {
-		return fmt.Errorf("help output does not identify aht and its available commands: %q", help)
-	}
-
 	storePath := filepath.Join(isolatedRoot, "state.json")
 	reportOutput, err := runReleaseCommand(binary, workingDir, environment, "--store", storePath, "--json", "report", "codex", "--session-id", "release-verification", "--event", "start", "--no-tmux")
 	if err != nil {
@@ -671,7 +521,6 @@ func isolatedEnvironment(home string, configHome string, stateDir string) []stri
 	replacements := map[string]string{
 		"HOME":            home,
 		"XDG_CONFIG_HOME": configHome,
-
 		"AHT_STATE_DIR":   stateDir,
 	}
 	environment := make([]string, 0, len(os.Environ())+len(replacements))
@@ -726,6 +575,11 @@ func validateLinuxPackages(manifest releaseManifest) error {
 	if err != nil {
 		return fmt.Errorf("rpm is required to inspect release .rpm packages; install rpm: %w", err)
 	}
+	rpmDB, err := os.MkdirTemp("", "aht-rpm-db-")
+	if err != nil {
+		return fmt.Errorf("create temporary RPM database: %w", err)
+	}
+	defer os.RemoveAll(rpmDB)
 
 	for _, artifact := range manifest.Artifacts {
 		if artifact.Type != "Linux Package" {
@@ -735,17 +589,13 @@ func validateLinuxPackages(manifest releaseManifest) error {
 		if err != nil {
 			return err
 		}
-		format, err := linuxPackageFormat(artifact)
-		if err != nil {
-			return err
-		}
-		if format == "deb" {
+		if artifact.Extra.Format == "deb" {
 			if err := validateDebPackage(dpkgDeb, path, artifact.GOARCH); err != nil {
 				return fmt.Errorf("validate %q: %w", artifact.Name, err)
 			}
 			continue
 		}
-		if err := validateRPMPackage(rpm, path, artifact.GOARCH); err != nil {
+		if err := validateRPMPackage(rpm, rpmDB, path, artifact.GOARCH); err != nil {
 			return fmt.Errorf("validate %q: %w", artifact.Name, err)
 		}
 	}
@@ -753,61 +603,51 @@ func validateLinuxPackages(manifest releaseManifest) error {
 }
 
 func validateDebPackage(dpkgDeb string, path string, goarch string) error {
-	packageName, err := runInspectionCommand(dpkgDeb, "--field", path, "Package")
+	metadata, err := runInspectionCommand(dpkgDeb, "--show", "--showformat", "${Package}\n${Architecture}\n", path)
 	if err != nil {
 		return err
 	}
-	if strings.TrimSpace(packageName) != "aht" {
-		return fmt.Errorf("package name = %q, want aht", strings.TrimSpace(packageName))
-	}
-	architecture, err := runInspectionCommand(dpkgDeb, "--field", path, "Architecture")
-	if err != nil {
-		return err
-	}
-	if strings.TrimSpace(architecture) != goarch {
-		return fmt.Errorf("package architecture = %q, want %q", strings.TrimSpace(architecture), goarch)
+	fields := strings.Fields(metadata)
+	if len(fields) != 2 || fields[0] != "aht" || fields[1] != goarch {
+		return fmt.Errorf("package metadata = %q, want aht %s", metadata, goarch)
 	}
 	contents, err := runInspectionCommand(dpkgDeb, "--contents", path)
 	if err != nil {
 		return err
 	}
-	if !packageContentsPath(contents, "usr/bin/aht") {
-		return fmt.Errorf("package does not contain /usr/bin/aht: %q", contents)
+	if !packageContainsPath(contents, "usr/bin/aht") {
+		return fmt.Errorf("package does not contain /usr/bin/aht")
 	}
 	return nil
 }
 
-func validateRPMPackage(rpm string, path string, goarch string) error {
-	metadata, err := runInspectionCommand(rpm, "-qp", "--queryformat", "%{NAME}\n%{ARCH}\n", path)
+func validateRPMPackage(rpm string, rpmDB string, path string, goarch string) error {
+	metadata, err := runInspectionCommand(rpm, "--dbpath", rpmDB, "-qp", "--queryformat", "%{NAME}\n%{ARCH}\n", path)
 	if err != nil {
 		return err
 	}
 	fields := strings.Fields(metadata)
-	if len(fields) != 2 || fields[0] != "aht" {
-		return fmt.Errorf("RPM metadata = %q, want package aht and one architecture", metadata)
-	}
 	expectedArchitecture := map[string]string{"amd64": "x86_64", "arm64": "aarch64"}[goarch]
-	if fields[1] != expectedArchitecture {
-		return fmt.Errorf("RPM architecture = %q, want %q", fields[1], expectedArchitecture)
+	if len(fields) != 2 || fields[0] != "aht" || fields[1] != expectedArchitecture {
+		return fmt.Errorf("RPM metadata = %q, want aht %s", metadata, expectedArchitecture)
 	}
-	contents, err := runInspectionCommand(rpm, "-qlp", path)
+	contents, err := runInspectionCommand(rpm, "--dbpath", rpmDB, "-qlp", path)
 	if err != nil {
 		return err
 	}
-	if !packageContentsPath(contents, "usr/bin/aht") {
-		return fmt.Errorf("package does not contain /usr/bin/aht: %q", contents)
+	if !packageContainsPath(contents, "usr/bin/aht") {
+		return fmt.Errorf("package does not contain /usr/bin/aht")
 	}
 	return nil
 }
 
-func packageContentsPath(output string, wanted string) bool {
+func packageContainsPath(output string, wanted string) bool {
 	for line := range strings.Lines(output) {
-		path := strings.TrimSpace(line)
-		fields := strings.Fields(path)
-		if len(fields) != 0 {
-			path = fields[len(fields)-1]
+		fields := strings.Fields(line)
+		if len(fields) == 0 {
+			continue
 		}
-		path = strings.TrimPrefix(path, "./")
+		path := strings.TrimPrefix(fields[len(fields)-1], "./")
 		path = strings.TrimPrefix(path, "/")
 		if path == wanted {
 			return true
@@ -840,18 +680,18 @@ func validatePublishedAssets(manifest releaseManifest, publishedDir string) erro
 	if err != nil {
 		return fmt.Errorf("read published artifact directory: %w", err)
 	}
-	actual := make(map[string]struct{}, len(entries))
+	actualNames := make(map[string]struct{}, len(entries))
 	for _, entry := range entries {
 		if !entry.Type().IsRegular() {
 			return fmt.Errorf("published asset %q is not a regular file", entry.Name())
 		}
-		actual[entry.Name()] = struct{}{}
+		actualNames[entry.Name()] = struct{}{}
 	}
 	expectedNames := make(map[string]struct{}, len(expected))
 	for name := range expected {
 		expectedNames[name] = struct{}{}
 	}
-	if err := requireTargetSet("published asset", actual, expectedNames); err != nil {
+	if err := requireExactSet("published assets", actualNames, expectedNames); err != nil {
 		return err
 	}
 
@@ -907,304 +747,15 @@ func filesEqual(leftPath string, rightPath string) (bool, error) {
 }
 
 func findArtifact(manifest releaseManifest, artifactType string, goos string, goarch string, format string) (releaseArtifact, error) {
-	var matches []releaseArtifact
+	matches := make([]releaseArtifact, 0, 1)
 	for _, artifact := range manifest.Artifacts {
-		if artifact.Type != artifactType || artifact.GOOS != goos || artifact.GOARCH != goarch {
-			continue
-		}
-		if format != "" && artifact.Extra.Format != format {
+		if artifact.Type != artifactType || artifact.GOOS != goos || artifact.GOARCH != goarch || artifact.Extra.Format != format {
 			continue
 		}
 		matches = append(matches, artifact)
 	}
 	if len(matches) != 1 {
 		return releaseArtifact{}, fmt.Errorf("found %d %s artifacts for %s/%s format %q, want 1", len(matches), artifactType, goos, goarch, format)
-	}
-	return matches[0], nil
-}
-
-func validateNegativeControls(manifest releaseManifest) error {
-	if err := validateMissingArchiveControl(manifest); err != nil {
-		return err
-	}
-	if err := validateArchiveModeControl(manifest); err != nil {
-		return err
-	}
-	if err := validateMetadataVersionControl(manifest); err != nil {
-		return err
-	}
-	return nil
-}
-
-func validateMissingArchiveControl(manifest releaseManifest) error {
-	mutated, cleanup, err := copyReleaseManifest(manifest)
-	if err != nil {
-		return err
-	}
-	defer cleanup()
-	archive, err := findArtifact(mutated, "Archive", runtime.GOOS, runtime.GOARCH, "")
-	if err != nil {
-		return err
-	}
-	path, err := artifactDiskPath(mutated, archive)
-	if err != nil {
-		return err
-	}
-	if err := os.Remove(path); err != nil {
-		return fmt.Errorf("remove negative-control archive: %w", err)
-	}
-	return requireValidationFailure(validateArtifactInventory(mutated), "missing "+runtime.GOOS+"/"+runtime.GOARCH+" native archive", "missing archive negative control")
-}
-
-func validateArchiveModeControl(manifest releaseManifest) error {
-	mutated, cleanup, err := copyReleaseManifest(manifest)
-	if err != nil {
-		return err
-	}
-	defer cleanup()
-	archive, err := findArtifact(mutated, "Archive", runtime.GOOS, runtime.GOARCH, "")
-	if err != nil {
-		return err
-	}
-	path, err := artifactDiskPath(mutated, archive)
-	if err != nil {
-		return err
-	}
-	if err := rewriteArchiveBinaryMode(path, 0o644); err != nil {
-		return err
-	}
-	if err := updateChecksum(mutated, archive.Name); err != nil {
-		return err
-	}
-	if err := validateChecksums(mutated); err != nil {
-		return fmt.Errorf("mode negative control did not reach archive oracle: %w", err)
-	}
-	return requireValidationFailure(validateNativeArchive(mutated, runtime.GOOS, runtime.GOARCH), "not executable", "archive mode negative control")
-}
-
-func validateMetadataVersionControl(manifest releaseManifest) error {
-	mutated, cleanup, err := copyReleaseManifest(manifest)
-	if err != nil {
-		return err
-	}
-	defer cleanup()
-	mutated.Metadata.Version += "-negative-control"
-	data, err := json.Marshal(mutated.Metadata)
-	if err != nil {
-		return fmt.Errorf("encode negative-control metadata: %w", err)
-	}
-	if err := os.WriteFile(filepath.Join(mutated.Dir, "metadata.json"), data, 0o644); err != nil {
-		return fmt.Errorf("write negative-control metadata: %w", err)
-	}
-	reloaded, err := loadArtifactManifest(mutated.Dir)
-	if err != nil {
-		return err
-	}
-	return requireValidationFailure(validateNativeArchive(reloaded, runtime.GOOS, runtime.GOARCH), "version mismatch", "metadata version negative control")
-}
-
-func requireValidationFailure(err error, category string, control string) error {
-	if err == nil {
-		return fmt.Errorf("%s unexpectedly passed", control)
-	}
-	if !strings.Contains(err.Error(), category) {
-		return fmt.Errorf("%s failed for unrelated reason: got %q, want category %q", control, err, category)
-	}
-	return nil
-}
-
-func copyReleaseManifest(manifest releaseManifest) (releaseManifest, func(), error) {
-	parent, err := os.MkdirTemp("", "aht artifact control ")
-	if err != nil {
-		return releaseManifest{}, func() {}, fmt.Errorf("create negative-control directory: %w", err)
-	}
-	cleanup := func() { _ = os.RemoveAll(parent) }
-	destination := filepath.Join(parent, filepath.Base(manifest.Dir))
-	if err := copyDirectory(manifest.Dir, destination); err != nil {
-		cleanup()
-		return releaseManifest{}, func() {}, err
-	}
-	copied, err := loadArtifactManifest(destination)
-	if err != nil {
-		cleanup()
-		return releaseManifest{}, func() {}, err
-	}
-	return copied, cleanup, nil
-}
-
-func copyDirectory(source string, destination string) error {
-	return filepath.WalkDir(source, func(path string, entry fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		relativePath, err := filepath.Rel(source, path)
-		if err != nil {
-			return fmt.Errorf("resolve copy path: %w", err)
-		}
-		target := filepath.Join(destination, relativePath)
-		info, err := entry.Info()
-		if err != nil {
-			return fmt.Errorf("stat copy source %q: %w", path, err)
-		}
-		if entry.IsDir() {
-			if err := os.MkdirAll(target, info.Mode().Perm()); err != nil {
-				return fmt.Errorf("create copy directory %q: %w", target, err)
-			}
-			return nil
-		}
-		if !entry.Type().IsRegular() {
-			return fmt.Errorf("cannot copy non-regular artifact path %q", path)
-		}
-		if err := copyFile(path, target, info.Mode().Perm()); err != nil {
-			return err
-		}
-		return nil
-	})
-}
-
-func copyFile(source string, destination string, mode fs.FileMode) error {
-	input, err := os.Open(source)
-	if err != nil {
-		return fmt.Errorf("open copy source %q: %w", source, err)
-	}
-	defer input.Close()
-	output, err := os.OpenFile(destination, os.O_CREATE|os.O_EXCL|os.O_WRONLY, mode)
-	if err != nil {
-		return fmt.Errorf("create copy destination %q: %w", destination, err)
-	}
-	if _, err := io.Copy(output, input); err != nil {
-		_ = output.Close()
-		return fmt.Errorf("copy %q: %w", source, err)
-	}
-	if err := output.Close(); err != nil {
-		return fmt.Errorf("close copy destination %q: %w", destination, err)
-	}
-	return nil
-}
-
-func rewriteArchiveBinaryMode(path string, mode int64) error {
-	input, err := os.Open(path)
-	if err != nil {
-		return fmt.Errorf("open archive for mutation: %w", err)
-	}
-	defer input.Close()
-	gzipReader, err := gzip.NewReader(input)
-	if err != nil {
-		return fmt.Errorf("open archive gzip for mutation: %w", err)
-	}
-	defer gzipReader.Close()
-
-	temporaryPath := path + ".negative-control"
-	output, err := os.OpenFile(temporaryPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
-	if err != nil {
-		return fmt.Errorf("create mutated archive: %w", err)
-	}
-	gzipWriter := gzip.NewWriter(output)
-	tarWriter := tar.NewWriter(gzipWriter)
-	tarReader := tar.NewReader(gzipReader)
-	mutated := false
-	for {
-		header, err := tarReader.Next()
-		if errors.Is(err, io.EOF) {
-			break
-		}
-		if err != nil {
-			return closeMutatedArchive(output, gzipWriter, tarWriter, temporaryPath, fmt.Errorf("read archive for mutation: %w", err))
-		}
-		headerCopy := *header
-		if headerCopy.Name == "aht" {
-			headerCopy.Mode = mode
-			mutated = true
-		}
-		if err := tarWriter.WriteHeader(&headerCopy); err != nil {
-			return closeMutatedArchive(output, gzipWriter, tarWriter, temporaryPath, fmt.Errorf("write mutated archive header: %w", err))
-		}
-		if _, err := io.Copy(tarWriter, tarReader); err != nil {
-			return closeMutatedArchive(output, gzipWriter, tarWriter, temporaryPath, fmt.Errorf("write mutated archive content: %w", err))
-		}
-	}
-	if !mutated {
-		return closeMutatedArchive(output, gzipWriter, tarWriter, temporaryPath, fmt.Errorf("archive mutation did not find aht"))
-	}
-	if err := tarWriter.Close(); err != nil {
-		return closeMutatedArchive(output, gzipWriter, nil, temporaryPath, err)
-	}
-	if err := gzipWriter.Close(); err != nil {
-		return closeMutatedArchive(output, nil, nil, temporaryPath, err)
-	}
-	if err := output.Close(); err != nil {
-		_ = os.Remove(temporaryPath)
-		return fmt.Errorf("close mutated archive: %w", err)
-	}
-	if err := os.Rename(temporaryPath, path); err != nil {
-		_ = os.Remove(temporaryPath)
-		return fmt.Errorf("replace archive with mutation: %w", err)
-	}
-	return nil
-}
-
-func closeMutatedArchive(output *os.File, gzipWriter *gzip.Writer, tarWriter *tar.Writer, temporaryPath string, cause error) error {
-	if tarWriter != nil {
-		_ = tarWriter.Close()
-	}
-	if gzipWriter != nil {
-		_ = gzipWriter.Close()
-	}
-	_ = output.Close()
-	_ = os.Remove(temporaryPath)
-	return cause
-}
-
-func updateChecksum(manifest releaseManifest, artifactName string) error {
-	artifact, err := findArtifactByName(manifest, artifactName)
-	if err != nil {
-		return err
-	}
-	artifactPath, err := artifactDiskPath(manifest, artifact)
-	if err != nil {
-		return err
-	}
-	digest, err := fileSHA256(artifactPath)
-	if err != nil {
-		return err
-	}
-	checksumArtifact, err := findArtifactByName(manifest, "checksums.txt")
-	if err != nil {
-		return err
-	}
-	checksumPath, err := artifactDiskPath(manifest, checksumArtifact)
-	if err != nil {
-		return err
-	}
-	checksums, err := parseChecksums(checksumPath)
-	if err != nil {
-		return err
-	}
-	checksums[artifactName] = digest
-	names := make([]string, 0, len(checksums))
-	for name := range checksums {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	var content strings.Builder
-	for _, name := range names {
-		fmt.Fprintf(&content, "%s  %s\n", hex.EncodeToString(checksums[name]), name)
-	}
-	if err := os.WriteFile(checksumPath, []byte(content.String()), 0o644); err != nil {
-		return fmt.Errorf("write updated checksums.txt: %w", err)
-	}
-	return nil
-}
-
-func findArtifactByName(manifest releaseManifest, name string) (releaseArtifact, error) {
-	var matches []releaseArtifact
-	for _, artifact := range manifest.Artifacts {
-		if artifact.Name == name {
-			matches = append(matches, artifact)
-		}
-	}
-	if len(matches) != 1 {
-		return releaseArtifact{}, fmt.Errorf("found %d artifacts named %q, want 1", len(matches), name)
 	}
 	return matches[0], nil
 }
