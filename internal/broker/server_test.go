@@ -4,6 +4,7 @@ package broker
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -19,7 +20,14 @@ func TestServerStreamsEffectiveStateChanges(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
-	path := filepath.Join(t.TempDir(), "state.json")
+	path, err := shortStatePath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = os.Remove(path)
+		_ = os.Remove(brokerapi.SocketPath(path))
+	})
 	store, err := registry.OpenMemoryStore(path)
 	if err != nil {
 		t.Fatal(err)
@@ -34,6 +42,8 @@ func TestServerStreamsEffectiveStateChanges(t *testing.T) {
 	go func() { serverErrors <- server.Serve(ctx) }()
 
 	select {
+	case err := <-serverErrors:
+		t.Fatalf("server exited before readiness: %v", err)
 	case <-ctx.Done():
 		t.Fatal(ctx.Err())
 	case <-ready:
@@ -109,6 +119,22 @@ func receiveSnapshot(
 		}
 		return snapshot
 	}
+}
+
+// shortStatePath keeps the derived socket below Darwin's Unix socket path limit.
+func shortStatePath() (string, error) {
+	stateFile, err := os.CreateTemp("", "aht-broker-state-")
+	if err != nil {
+		return "", fmt.Errorf("creating temporary state path: %w", err)
+	}
+	path := stateFile.Name()
+	if err := stateFile.Close(); err != nil {
+		return "", fmt.Errorf("closing temporary state file: %w", err)
+	}
+	if err := os.Remove(path); err != nil {
+		return "", fmt.Errorf("removing temporary state file: %w", err)
+	}
+	return path, nil
 }
 
 func BenchmarkBrokerObserveRoundTrip(b *testing.B) {
