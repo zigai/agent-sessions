@@ -285,6 +285,38 @@ func TestListPanesWithOptionsDoesNotProbeMissingDefaultServer(t *testing.T) {
 	}
 }
 
+func TestListPanesWithOptionsIgnoresUnreachableDiscoveredServer(t *testing.T) {
+	t.Parallel()
+	called := false
+	panes, err := ListPanesWithOptions(context.Background(), ListOptions{
+		Run: func(context.Context, Env, ...string) (string, error) {
+			called = true
+			return "", context.Canceled
+		},
+		ServerProcesses: func(context.Context) ([]ServerProcess, error) {
+			return []ServerProcess{{PID: 42, Args: []string{"tmux", "-S", "/tmp/stale.sock", "new-session", "-d"}}}, nil
+		},
+	})
+	if err != nil || len(panes) != 0 || !called {
+		t.Fatalf("stale-server discovery = panes %#v, called %t, error %v", panes, called, err)
+	}
+}
+
+func TestListPanesWithOptionsReportsUnreachableCurrentServer(t *testing.T) {
+	t.Parallel()
+	const socket = "/tmp/current.sock"
+	panes, err := ListPanesWithOptions(context.Background(), ListOptions{
+		Env: Env{TMUX: socket + ",123,0", TMUXPane: "%1"},
+		Run: func(context.Context, Env, ...string) (string, error) {
+			return "", context.Canceled
+		},
+		ServerProcesses: func(context.Context) ([]ServerProcess, error) { return nil, nil },
+	})
+	if !errors.Is(err, context.Canceled) || len(panes) != 0 {
+		t.Fatalf("current-server discovery = panes %#v, error %v", panes, err)
+	}
+}
+
 func TestListPanesWithOptionsDeduplicatesCanonicalSocketIdentity(t *testing.T) {
 	t.Parallel()
 	const socket = "/tmp/tmux-1000/default"

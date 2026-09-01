@@ -142,6 +142,7 @@ func ListPanesWithEnv(ctx context.Context, env Env) ([]Pane, error) {
 
 func ListPanesWithOptions(ctx context.Context, options ListOptions) ([]Pane, error) {
 	env := options.Env
+	currentServerSocket := tmuxServerSocket(env.TMUX)
 	if options.Run == nil {
 		options.Run = runTmuxWithEnv
 	}
@@ -161,7 +162,7 @@ func ListPanesWithOptions(ctx context.Context, options ListOptions) ([]Pane, err
 		args = append(args, "list-panes", "-a", "-F", listPanesFormat())
 		output, runErr := options.Run(ctx, env, args...)
 		if runErr != nil {
-			if firstErr == nil {
+			if server.Identity == currentServerSocket && firstErr == nil {
 				firstErr = runErr
 			}
 			continue
