@@ -142,6 +142,7 @@ func ListPanesWithEnv(ctx context.Context, env Env) ([]Pane, error) {
 
 func ListPanesWithOptions(ctx context.Context, options ListOptions) ([]Pane, error) {
 	env := options.Env
+	currentServerSocket := tmuxServerSocket(env.TMUX)
 	if options.Run == nil {
 		options.Run = runTmuxWithEnv
 	}
@@ -161,7 +162,7 @@ func ListPanesWithOptions(ctx context.Context, options ListOptions) ([]Pane, err
 		args = append(args, "list-panes", "-a", "-F", listPanesFormat())
 		output, runErr := options.Run(ctx, env, args...)
 		if runErr != nil {
-			if firstErr == nil {
+			if server.Identity == currentServerSocket && firstErr == nil {
 				firstErr = runErr
 			}
 			continue
@@ -419,7 +420,7 @@ func parseEscapedFields(output string) ([]string, bool, error) {
 		return nil, false, nil
 	}
 
-	words, err := shellWords(output)
+	words, err := shellWords(normalizeLegacyTmuxDollarEscapes(output))
 	if err != nil {
 		return nil, false, err
 	}
@@ -436,6 +437,39 @@ func parseEscapedFields(output string) ([]string, bool, error) {
 	}
 
 	return fields, true, nil
+}
+
+func normalizeLegacyTmuxDollarEscapes(output string) string {
+	var normalized strings.Builder
+	last := 0
+	changed := false
+	for index := 0; index < len(output); {
+		if output[index] != '\\' {
+			index++
+			continue
+		}
+		start := index
+		for index < len(output) && output[index] == '\\' {
+			index++
+		}
+		if index >= len(output) || output[index] != '$' || (index-start)%2 != 0 {
+			continue
+		}
+		if !changed {
+			normalized.Grow(len(output))
+			changed = true
+		}
+		normalized.WriteString(output[last:start])
+		normalized.WriteString(output[start+1 : index])
+		normalized.WriteByte('$')
+		index++
+		last = index
+	}
+	if !changed {
+		return output
+	}
+	normalized.WriteString(output[last:])
+	return normalized.String()
 }
 
 func shellWords(input string) ([]string, error) {

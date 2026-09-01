@@ -26,7 +26,12 @@ func TestRealTmuxBottomScreenDetectionForFourAgents(t *testing.T) {
 	if _, err := exec.LookPath("tmux"); err != nil {
 		t.Skip("tmux is not installed")
 	}
-	socket := filepath.Join(t.TempDir(), "tmux.sock")
+	socketDirectory, err := shortTmuxDirectory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(socketDirectory) })
+	socket := filepath.Join(socketDirectory, "tmux.sock")
 	ctx := context.Background()
 	defer func() { _ = exec.CommandContext(context.Background(), "tmux", "-S", socket, "kill-server").Run() }()
 
@@ -165,4 +170,8 @@ func activityValue(value *registry.Activity) registry.Activity {
 
 func shellSingleQuote(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
+}
+
+func shortTmuxDirectory() (string, error) {
+	return os.MkdirTemp("/tmp", "aht-observer-tmux-")
 }

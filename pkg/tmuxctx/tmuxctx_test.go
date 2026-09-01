@@ -110,6 +110,33 @@ func TestParseCurrentEscapedFields(t *testing.T) {
 	}
 }
 
+func TestParseTmuxFieldsHandlesCurrentAndLegacyDollarQuoting(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		output string
+		want   string
+	}{
+		{name: "current plain dollar", output: `tmuxctx:value\ $dollar`, want: `value $dollar`},
+		{name: "legacy plain dollar", output: `tmuxctx:value\ \\$dollar`, want: `value $dollar`},
+		{name: "current literal backslash", output: `tmuxctx:value\ \\\$dollar`, want: `value \$dollar`},
+		{name: "legacy literal backslash", output: `tmuxctx:value\ \\\\$dollar`, want: `value \$dollar`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			fields, err := parseTmuxFields(test.output, 1)
+			if err != nil {
+				t.Fatalf("parseTmuxFields returned error: %v", err)
+			}
+			if len(fields) != 1 || fields[0] != test.want {
+				t.Fatalf("fields = %#v, want [%q]", fields, test.want)
+			}
+		})
+	}
+}
+
 func TestCurrentDisplayMessageArgsTargetsTmuxPane(t *testing.T) {
 	got := currentDisplayMessageArgs("format", "%12")
 	want := []string{"display-message", "-p", "-t", "%12", "-F", "format"}
@@ -255,6 +282,38 @@ func TestListPanesWithOptionsDoesNotProbeMissingDefaultServer(t *testing.T) {
 	})
 	if err != nil || len(panes) != 0 || called {
 		t.Fatalf("no-server discovery = panes %#v, called %t, error %v", panes, called, err)
+	}
+}
+
+func TestListPanesWithOptionsIgnoresUnreachableDiscoveredServer(t *testing.T) {
+	t.Parallel()
+	called := false
+	panes, err := ListPanesWithOptions(context.Background(), ListOptions{
+		Run: func(context.Context, Env, ...string) (string, error) {
+			called = true
+			return "", context.Canceled
+		},
+		ServerProcesses: func(context.Context) ([]ServerProcess, error) {
+			return []ServerProcess{{PID: 42, Args: []string{"tmux", "-S", "/tmp/stale.sock", "new-session", "-d"}}}, nil
+		},
+	})
+	if err != nil || len(panes) != 0 || !called {
+		t.Fatalf("stale-server discovery = panes %#v, called %t, error %v", panes, called, err)
+	}
+}
+
+func TestListPanesWithOptionsReportsUnreachableCurrentServer(t *testing.T) {
+	t.Parallel()
+	const socket = "/tmp/current.sock"
+	panes, err := ListPanesWithOptions(context.Background(), ListOptions{
+		Env: Env{TMUX: socket + ",123,0", TMUXPane: "%1"},
+		Run: func(context.Context, Env, ...string) (string, error) {
+			return "", context.Canceled
+		},
+		ServerProcesses: func(context.Context) ([]ServerProcess, error) { return nil, nil },
+	})
+	if !errors.Is(err, context.Canceled) || len(panes) != 0 {
+		t.Fatalf("current-server discovery = panes %#v, error %v", panes, err)
 	}
 }
 

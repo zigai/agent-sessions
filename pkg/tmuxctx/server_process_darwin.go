@@ -15,7 +15,7 @@ import (
 
 func listCurrentUserTmuxServers(ctx context.Context) ([]ServerProcess, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("list tmux servers: %w", err)
 	}
 	processTable, err := unix.SysctlKinfoProcSlice("kern.proc.uid", unix.Getuid())
 	if err != nil {
@@ -23,31 +23,39 @@ func listCurrentUserTmuxServers(ctx context.Context) ([]ServerProcess, error) {
 	}
 	processes := make([]ServerProcess, 0)
 	for _, process := range processTable {
-		if err := ctx.Err(); err != nil {
+		server, found, err := darwinTmuxServer(ctx, process)
+		if err != nil {
 			return nil, err
 		}
-		pid := int(process.Proc.P_pid)
-		command := darwinProcessCommand(process.Proc.P_comm[:])
-		if pid <= 0 || !strings.HasPrefix(filepath.Base(command), "tmux") {
-			continue
-		}
-		data, readErr := unix.SysctlRaw("kern.procargs2", pid)
-		if readErr != nil {
-			if errors.Is(readErr, unix.ESRCH) || errors.Is(readErr, unix.EPERM) || errors.Is(readErr, unix.EACCES) {
-				continue
-			}
-			return nil, fmt.Errorf("reading tmux process %d arguments: %w", pid, readErr)
-		}
-		args, parseErr := parseDarwinProcArgs(data)
-		if parseErr != nil {
-			return nil, fmt.Errorf("parsing tmux process %d arguments: %w", pid, parseErr)
-		}
-		if strings.HasPrefix(command, "tmux: server") || isTmuxServerArgs(args) {
-			processes = append(processes, ServerProcess{PID: pid, Args: args})
+		if found {
+			processes = append(processes, server)
 		}
 	}
-
 	return processes, nil
+}
+
+func darwinTmuxServer(ctx context.Context, process unix.KinfoProc) (ServerProcess, bool, error) {
+	var zero ServerProcess
+	if err := ctx.Err(); err != nil {
+		return zero, false, fmt.Errorf("inspect tmux server: %w", err)
+	}
+	pid := int(process.Proc.P_pid)
+	command := darwinProcessCommand(process.Proc.P_comm[:])
+	if pid <= 0 || !strings.HasPrefix(filepath.Base(command), "tmux") {
+		return zero, false, nil
+	}
+	data, err := unix.SysctlRaw("kern.procargs2", pid)
+	if err != nil {
+		if errors.Is(err, unix.ESRCH) || errors.Is(err, unix.EPERM) || errors.Is(err, unix.EACCES) || errors.Is(err, unix.EINVAL) {
+			return zero, false, nil
+		}
+		return zero, false, fmt.Errorf("reading tmux process %d arguments: %w", pid, err)
+	}
+	args, err := parseDarwinProcArgs(data)
+	if err != nil {
+		return zero, false, fmt.Errorf("parsing tmux process %d arguments: %w", pid, err)
+	}
+	return ServerProcess{PID: pid, Args: args}, true, nil
 }
 
 func darwinProcessCommand(data []byte) string {

@@ -75,7 +75,7 @@ func launchAgentPath() (string, error) {
 }
 
 func (b *darwinBackend) describe() Result {
-	return Result{Platform: "darwin", Manager: "launchctl", ManagedPath: b.path, ManagedVersion: managedVersion, Path: b.path, Version: managedVersion}
+	return Result{Platform: "darwin", Manager: "launchctl", ManagedPath: b.path, ManagedVersion: managedVersion, Path: b.path, Version: managedVersion, Installed: false, Current: false, Running: false, Changed: false, Message: ""}
 }
 func (b *darwinBackend) content() string                               { return b.rendered }
 func (b *darwinBackend) reload(context.Context, CommandExecutor) error { return nil }
@@ -97,7 +97,7 @@ func (b *darwinBackend) unload(ctx context.Context, executor CommandExecutor) er
 	output, err := executor.Run(ctx, "launchctl", "bootout", b.domain, b.path)
 	if err != nil && !managerMissing(output) {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			return err
+			return fmt.Errorf("unload launchd service: %w", err)
 		}
 		return wrapManagerError("launchctl bootout observer", output, err)
 	}

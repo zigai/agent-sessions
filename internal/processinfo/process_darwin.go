@@ -14,54 +14,70 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+const darwinPSMinimumFieldCount = 6
+
+var (
+	errNilDarwinProcessTable        = errors.New("nil process table")
+	errInvalidDarwinProcessRecord   = errors.New("invalid process record")
+	errTruncatedDarwinPSRecord      = errors.New("truncated ps record")
+	errInvalidDarwinPSPID           = errors.New("invalid ps pid")
+	errInvalidDarwinPSParentPID     = errors.New("invalid ps parent pid")
+	errInvalidDarwinPSProcessGroup  = errors.New("invalid ps process group id")
+	errInvalidDarwinPSForegroundPID = errors.New("invalid ps foreground process group id")
+	errInvalidDarwinLsofPID         = errors.New("invalid lsof pid")
+)
+
 // List returns a current-user process snapshot from the kernel process table,
 // enriched by one ps and one lsof invocation.
 func List(ctx context.Context) ([]Process, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("list processes: %w", err)
 	}
 	kinfo, err := unix.SysctlKinfoProcSlice("kern.proc.uid", unix.Getuid())
 	if err != nil {
 		return nil, classifyDarwinError("kern.proc.uid", err)
 	}
-	if kinfo == nil {
-		return nil, &TableError{Path: "kern.proc.uid", Err: errors.New("nil process table")}
-	}
-
-	pids := make([]string, 0, len(kinfo))
-	processes := make([]Process, 0, len(kinfo))
-	for _, process := range kinfo {
-		pid := int(process.Proc.P_pid)
-		startIdentity, validStart := darwinProcessStartIdentity(process)
-		if pid <= 0 || process.Eproc.Ppid < 0 || process.Eproc.Pgid < 0 || !validStart {
-			return nil, &TableError{Path: "kern.proc.uid", Err: fmt.Errorf("invalid process record pid=%d", pid)}
-		}
-		pids = append(pids, strconv.Itoa(pid))
-		processes = append(processes, Process{
-			PID:            pid,
-			PPID:           int(process.Eproc.Ppid),
-			ProcessGroupID: int(process.Eproc.Pgid),
-			StartIdentity:  startIdentity,
-			Executable:     darwinCString(process.Proc.P_comm[:]),
-		})
+	processes, pids, err := darwinKernelProcesses(kinfo)
+	if err != nil {
+		return nil, err
 	}
 	if len(pids) == 0 {
 		return processes, nil
 	}
 
-	psOutput, err := exec.CommandContext(ctx, "/bin/ps", "-o", "pid=,ppid=,pgid=,tpgid=,tty=,comm=,args=", "-p", strings.Join(pids, ",")).Output()
+	byPID, err := darwinPSInventory(ctx, pids)
+	if err != nil {
+		return nil, err
+	}
+	enrichDarwinProcesses(processes, byPID)
+	if cwd, err := darwinLsofCWD(ctx, pids); err == nil {
+		for i := range processes {
+			processes[i].CWD = cwd[processes[i].PID]
+		}
+	} else if ctxErr := ctx.Err(); ctxErr != nil {
+		return nil, fmt.Errorf("inspect process working directories: %w", ctxErr)
+	}
+	return processes, nil
+}
+
+func darwinPSInventory(ctx context.Context, pids []string) (map[int]darwinPSRow, error) {
+	output, err := exec.CommandContext(ctx, "/bin/ps", "-o", "pid=,ppid=,pgid=,tpgid=,tty=,comm=,args=", "-p", strings.Join(pids, ",")).Output()
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
-			return nil, ctxErr
+			return nil, fmt.Errorf("wait for ps process inventory: %w", ctxErr)
 		}
 		return nil, classifyDarwinError("/bin/ps", err)
 	}
-	byPID, err := parseDarwinPS(string(psOutput))
+	rows, err := parseDarwinPS(string(output))
 	if err != nil {
 		return nil, &TableError{Path: "/bin/ps", Err: err}
 	}
+	return rows, nil
+}
+
+func enrichDarwinProcesses(processes []Process, rows map[int]darwinPSRow) {
 	for i := range processes {
-		row, ok := byPID[processes[i].PID]
+		row, ok := rows[processes[i].PID]
 		if !ok {
 			continue
 		}
@@ -74,15 +90,39 @@ func List(ctx context.Context) ([]Process, error) {
 		processes[i].TTY = row.TTY
 		processes[i].Args = row.Args
 	}
+}
 
-	if cwd, err := darwinLsofCWD(ctx, pids); err == nil {
-		for i := range processes {
-			processes[i].CWD = cwd[processes[i].PID]
-		}
-	} else if ctxErr := ctx.Err(); ctxErr != nil {
-		return nil, ctxErr
+func darwinKernelProcesses(kinfo []unix.KinfoProc) ([]Process, []string, error) {
+	if kinfo == nil {
+		return nil, nil, &TableError{Path: "kern.proc.uid", Err: errNilDarwinProcessTable}
 	}
-	return processes, nil
+	pids := make([]string, 0, len(kinfo))
+	processes := make([]Process, 0, len(kinfo))
+	for _, process := range kinfo {
+		pid := int(process.Proc.P_pid)
+		startIdentity, validStart := darwinProcessStartIdentity(process)
+		if pid <= 0 || process.Eproc.Ppid < 0 || process.Eproc.Pgid < 0 || !validStart {
+			return nil, nil, &TableError{Path: "kern.proc.uid", Err: fmt.Errorf("pid %d: %w", pid, errInvalidDarwinProcessRecord)}
+		}
+		pids = append(pids, strconv.Itoa(pid))
+		processes = append(processes, Process{
+			PID:                pid,
+			PPID:               int(process.Eproc.Ppid),
+			ProcessGroupID:     int(process.Eproc.Pgid),
+			Foreground:         false,
+			StartIdentity:      startIdentity,
+			Executable:         darwinCString(process.Proc.P_comm[:]),
+			CWD:                "",
+			TTY:                "",
+			AgentHint:          "",
+			MultiplexerKind:    "",
+			MultiplexerServer:  "",
+			MultiplexerSession: "",
+			MultiplexerPane:    "",
+			Args:               nil,
+		})
+	}
+	return processes, pids, nil
 }
 
 // Find returns the current-user process identified by pid. A false found
@@ -116,44 +156,58 @@ type darwinPSRow struct {
 
 func parseDarwinPS(output string) (map[int]darwinPSRow, error) {
 	rows := make(map[int]darwinPSRow)
-	for _, line := range strings.Split(output, "\n") {
+	for line := range strings.SplitSeq(output, "\n") {
 		if strings.TrimSpace(line) == "" {
 			continue
 		}
-		fields := strings.Fields(line)
-		if len(fields) < 6 {
-			return nil, errors.New("truncated ps record")
+		row, err := parseDarwinPSRow(strings.Fields(line))
+		if err != nil {
+			return nil, err
 		}
-		pid, err := strconv.Atoi(fields[0])
-		if err != nil || pid <= 0 {
-			return nil, errors.New("invalid ps pid")
-		}
-		ppid, err := strconv.Atoi(fields[1])
-		if err != nil || ppid < 0 {
-			return nil, errors.New("invalid ps parent pid")
-		}
-		pgid, err := strconv.Atoi(fields[2])
-		if err != nil || pgid < 0 {
-			return nil, errors.New("invalid ps process group id")
-		}
-		tpgid, err := strconv.Atoi(fields[3])
-		if err != nil || tpgid < -1 {
-			return nil, errors.New("invalid ps foreground process group id")
-		}
-		args := append([]string(nil), fields[6:]...)
-		rows[pid] = darwinPSRow{PID: pid, PPID: ppid, ProcessGroupID: pgid, Foreground: tpgid > 0 && pgid == tpgid, TTY: fields[4], Executable: fields[5], Args: args}
+		rows[row.PID] = row
 	}
 	return rows, nil
+}
+
+func parseDarwinPSRow(fields []string) (darwinPSRow, error) {
+	if len(fields) < darwinPSMinimumFieldCount {
+		return darwinPSRow{}, errTruncatedDarwinPSRecord
+	}
+	pid, err := strconv.Atoi(fields[0])
+	if err != nil || pid <= 0 {
+		return darwinPSRow{}, errInvalidDarwinPSPID
+	}
+	ppid, err := strconv.Atoi(fields[1])
+	if err != nil || ppid < 0 {
+		return darwinPSRow{}, errInvalidDarwinPSParentPID
+	}
+	pgid, err := strconv.Atoi(fields[2])
+	if err != nil || pgid < 0 {
+		return darwinPSRow{}, errInvalidDarwinPSProcessGroup
+	}
+	tpgid, err := strconv.Atoi(fields[3])
+	if err != nil || tpgid < -1 {
+		return darwinPSRow{}, errInvalidDarwinPSForegroundPID
+	}
+	return darwinPSRow{
+		PID:            pid,
+		PPID:           ppid,
+		ProcessGroupID: pgid,
+		Foreground:     tpgid > 0 && pgid == tpgid,
+		TTY:            fields[4],
+		Executable:     fields[5],
+		Args:           append([]string(nil), fields[darwinPSMinimumFieldCount:]...),
+	}, nil
 }
 
 func darwinLsofCWD(ctx context.Context, pids []string) (map[int]string, error) {
 	output, err := exec.CommandContext(ctx, "/usr/sbin/lsof", "-a", "-d", "cwd", "-p", strings.Join(pids, ","), "-Fn").Output()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("run lsof process inventory: %w", err)
 	}
 	cwds := make(map[int]string)
 	pid := 0
-	for _, line := range strings.Split(string(output), "\n") {
+	for line := range strings.SplitSeq(string(output), "\n") {
 		if line == "" {
 			continue
 		}
@@ -161,7 +215,7 @@ func darwinLsofCWD(ctx context.Context, pids []string) (map[int]string, error) {
 		case 'p':
 			value, err := strconv.Atoi(line[1:])
 			if err != nil || value <= 0 {
-				return nil, errors.New("invalid lsof pid")
+				return nil, errInvalidDarwinLsofPID
 			}
 			pid = value
 		case 'n':

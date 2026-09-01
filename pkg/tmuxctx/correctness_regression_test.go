@@ -4,6 +4,7 @@ package tmuxctx
 
 import (
 	"context"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"testing"
@@ -27,8 +28,13 @@ func TestTmuxFormatWithRealTmuxEscapedFields(t *testing.T) {
 		t.Skip("tmux not installed")
 	}
 
-	socket := filepath.Join(t.TempDir(), "tmux.sock")
-	weirdValue := "value with spaces 'quote $dollar back\\slash\tand-tab"
+	socketDirectory, err := shortTmuxDirectory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(socketDirectory) })
+	socket := filepath.Join(socketDirectory, "tmux.sock")
+	weirdValue := "value with spaces 'quote $dollar back\\slash and-more"
 	ctx := context.Background()
 	defer func() {
 		_ = exec.CommandContext(ctx, "tmux", "-S", socket, "kill-server").Run()

@@ -2,13 +2,22 @@ name: CI
 
 on:
   pull_request:
+  push:
+    branches:
+      - master
+  merge_group:
 
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  test:
-    runs-on: ubuntu-latest
+  verify-linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -19,39 +28,18 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Verify dependency metadata
-        run: |
-          go mod tidy
-          git diff --exit-code -- go.mod go.sum
-
-      - name: Run unit tests
-        run: go test ./...
-
-      - name: Run race tests
-        run: go test -race ./...
-
-      - name: Set up Bun
-        uses: oven-sh/setup-bun@v2
+      - name: Set up Just
+        uses: extractions/setup-just@v3
 
       - name: Install tmux
         run: sudo apt-get update && sudo apt-get install --yes tmux
 
-      - name: Run integration tests
-        run: go test -tags=integration ./...
+      - name: Verify source
+        run: just verify-pr
 
-  lint:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Run golangci-lint
-        uses: golangci/golangci-lint-action@v8
-        with:
-          version: v2.12.2
-
-  test-darwin:
-    runs-on: macos-latest
+  verify-darwin:
+    runs-on: macos-15
+    timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -62,8 +50,124 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Run unit tests
-        run: go test ./...
+      - name: Set up Just
+        uses: extractions/setup-just@v3
 
-      - name: Run race tests
-        run: go test -race ./...
+      - name: Install tmux
+        run: brew install tmux
+
+      - name: Verify source
+        run: just verify-pr
+
+  build-snapshot:
+    needs:
+      - verify-linux
+      - verify-darwin
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Set up Just
+        uses: extractions/setup-just@v3
+
+      - name: Install GoReleaser
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: v2.13.3
+          install-only: true
+
+      - name: Install package inspectors
+        run: sudo apt-get update && sudo apt-get install --yes dpkg rpm
+
+      - name: Build and validate snapshot
+        run: just verify-main
+
+      - name: Upload snapshot
+        uses: actions/upload-artifact@v4
+        with:
+          name: snapshot-${{ github.sha }}
+          path: dist
+          retention-days: 14
+
+  native-artifact-validation:
+    name: native-artifact-validation (${{ matrix.target }})
+    needs:
+      - build-snapshot
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: linux-amd64
+            runner: ubuntu-24.04
+          - target: linux-arm64
+            runner: ubuntu-24.04-arm
+          - target: darwin-amd64
+            runner: macos-15-intel
+          - target: darwin-arm64
+            runner: macos-15
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Set up Just
+        uses: extractions/setup-just@v3
+
+      - name: Download snapshot
+        uses: actions/download-artifact@v4
+        with:
+          name: snapshot-${{ github.sha }}
+          path: dist
+
+      - name: Install package inspectors
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install --yes dpkg rpm
+
+      - name: Validate native artifact
+        shell: bash
+        run: |
+          set -o pipefail
+          just verify-artifact dist 2>&1 | tee artifact-validation.log
+
+      - name: Upload failed validation evidence
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: snapshot-validation-${{ matrix.target }}-${{ github.sha }}
+          path: |
+            dist/artifacts.json
+            dist/metadata.json
+            dist/checksums.txt
+            artifact-validation.log
+          retention-days: 14
+
+  artifact-validation:
+    if: ${{ always() }}
+    needs:
+      - build-snapshot
+      - native-artifact-validation
+    runs-on: ubuntu-slim
+    timeout-minutes: 2
+    steps:
+      - name: Require every artifact gate
+        run: |
+          test "${{ needs.build-snapshot.result }}" = "success"
+          test "${{ needs.native-artifact-validation.result }}" = "success"

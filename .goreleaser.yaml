@@ -3,7 +3,7 @@ project_name: aht
 
 before:
   hooks:
-    - go mod tidy
+    - go mod tidy -diff
 
 builds:
   - main: ./main.go
@@ -26,10 +26,6 @@ archives:
   - name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     formats:
       - tar.gz
-    format_overrides:
-      - goos: windows
-        formats:
-          - zip
     files:
 
       - LICENSE
@@ -77,5 +73,5 @@ release:
   github:
     owner: zigai
     name: aht
-  draft: false
+  draft: true
   prerelease: auto

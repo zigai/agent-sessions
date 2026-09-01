@@ -801,12 +801,14 @@ func TestSetupEnablesTrackerWhenIntegrationFails(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
 	t.Setenv(registry.StateDirEnv, filepath.Join(home, "state"))
 	binDir := t.TempDir()
-	systemctlPath := filepath.Join(binDir, "systemctl")
-	if err := os.WriteFile(systemctlPath, []byte("#!/bin/sh\nexit 0\n"), 0o600); err != nil {
-		t.Fatalf("writing fake systemctl: %v", err)
-	}
-	if err := os.Chmod(systemctlPath, 0o700); err != nil {
-		t.Fatalf("making fake systemctl executable: %v", err)
+	for _, executable := range []string{"systemctl", "launchctl"} {
+		path := filepath.Join(binDir, executable)
+		if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o600); err != nil {
+			t.Fatalf("writing fake %s: %v", executable, err)
+		}
+		if err := os.Chmod(path, 0o700); err != nil {
+			t.Fatalf("making fake %s executable: %v", executable, err)
+		}
 	}
 	t.Setenv("PATH", binDir)
 
