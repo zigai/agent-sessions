@@ -13,54 +13,28 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  verify-linux:
+  verify-tag:
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 2
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
         with:
-          go-version-file: go.mod
-          cache: true
+          fetch-depth: 0
 
-      - name: Set up Just
-        uses: extractions/setup-just@v3
-
-      - name: Install tmux
-        run: sudo apt-get update && sudo apt-get install --yes tmux
-
-      - name: Verify tagged source
-        run: just verify-release
-
-  verify-darwin:
-    runs-on: macos-15
-    timeout-minutes: 10
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-          cache: true
-
-      - name: Set up Just
-        uses: extractions/setup-just@v3
-
-      - name: Install tmux
-        run: brew install tmux
-
-      - name: Verify tagged source
-        run: just verify-release
+      - name: Require current protected master
+        run: |
+          git fetch origin master
+          tag_commit=$(git rev-parse HEAD)
+          master_commit=$(git rev-parse origin/master)
+          if [ "${tag_commit}" != "${master_commit}" ]; then
+            echo "Error: release tag must point at current protected master (${master_commit}), got ${tag_commit}." >&2
+            exit 1
+          fi
 
   build-draft:
     needs:
-      - verify-linux
-      - verify-darwin
+      - verify-tag
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -144,7 +118,7 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          just verify-artifact dist 2>&1 | tee artifact-validation.log
+          just artifacts dist 2>&1 | tee artifact-validation.log
 
       - name: Upload failed validation evidence
         if: failure()
@@ -202,7 +176,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install --yes dpkg rpm
 
       - name: Compare draft assets with tested artifacts
-        run: just verify-artifact dist draft-assets false
+        run: just artifacts dist draft-assets
 
       - name: Publish verified release
         run: gh release edit "${GITHUB_REF_NAME}" --draft=false --repo "${GITHUB_REPOSITORY}"
