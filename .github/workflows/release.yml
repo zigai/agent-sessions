@@ -5,15 +5,66 @@ on:
     tags:
       - "v*"
 
-env:
-  GORELEASER_VERSION: v2.13.3
-
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
-  release:
-    runs-on: ubuntu-latest
+  verify-linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Set up Just
+        uses: extractions/setup-just@v3
+
+      - name: Install tmux
+        run: sudo apt-get update && sudo apt-get install --yes tmux
+
+      - name: Verify tagged source
+        run: just verify-release
+
+  verify-darwin:
+    runs-on: macos-15
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Set up Just
+        uses: extractions/setup-just@v3
+
+      - name: Install tmux
+        run: brew install tmux
+
+      - name: Verify tagged source
+        run: just verify-release
+
+  build-draft:
+    needs:
+      - verify-linux
+      - verify-darwin
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -26,11 +77,142 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Run GoReleaser
+      - name: Set up Just
+        uses: extractions/setup-just@v3
+
+      - name: Install GoReleaser
         uses: goreleaser/goreleaser-action@v6
         with:
           distribution: goreleaser
-          version: ${{ env.GORELEASER_VERSION }}
-          args: release --clean
+          version: v2.13.3
+          install-only: true
+
+      - name: Build draft release
+        run: just release-draft
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ github.sha }}
+          path: dist
+          retention-days: 14
+
+  native-artifact-smoke:
+    name: native-artifact-smoke (${{ matrix.target }})
+    needs:
+      - build-draft
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: linux-amd64
+            runner: ubuntu-24.04
+          - target: linux-arm64
+            runner: ubuntu-24.04-arm
+          - target: darwin-amd64
+            runner: macos-15-intel
+          - target: darwin-arm64
+            runner: macos-15
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Set up Just
+        uses: extractions/setup-just@v3
+
+      - name: Download release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: release-${{ github.sha }}
+          path: dist
+
+      - name: Install package inspectors
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install --yes dpkg rpm
+
+      - name: Validate native artifact
+        shell: bash
+        run: |
+          set -o pipefail
+          just verify-artifact dist 2>&1 | tee artifact-validation.log
+
+      - name: Upload failed validation evidence
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-validation-${{ matrix.target }}-${{ github.sha }}
+          path: |
+            dist/artifacts.json
+            dist/metadata.json
+            dist/checksums.txt
+            artifact-validation.log
+          retention-days: 14
+
+  publish-release:
+    needs:
+      - build-draft
+      - native-artifact-smoke
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Set up Just
+        uses: extractions/setup-just@v3
+
+      - name: Download tested artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: release-${{ github.sha }}
+          path: dist
+
+      - name: Download draft assets
+        run: gh release download "${GITHUB_REF_NAME}" --dir draft-assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install package inspectors
+        run: sudo apt-get update && sudo apt-get install --yes dpkg rpm
+
+      - name: Compare draft assets with tested artifacts
+        run: just verify-artifact dist draft-assets false
+
+      - name: Publish verified release
+        run: gh release edit "${GITHUB_REF_NAME}" --draft=false
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  cleanup-failed-draft:
+    if: ${{ always() && needs.build-draft.result == 'success' && needs.publish-release.result != 'success' }}
+    needs:
+      - build-draft
+      - native-artifact-smoke
+      - publish-release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - name: Delete failed draft release
+        run: gh release delete "${GITHUB_REF_NAME}" --yes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
