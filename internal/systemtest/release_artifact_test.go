@@ -527,7 +527,7 @@ func validateNativeArchive(manifest releaseManifest, goos string, goarch string)
 	}
 
 	binary := filepath.Join(extractDir, "aht")
-	return smokeReleaseBinary(binary, manifest.Metadata)
+	return verifyReleaseBinaryBehavior(binary, manifest.Metadata)
 }
 
 func loadNativeArchive(path string) (map[string]archiveMember, error) {
@@ -591,7 +591,7 @@ func memberNames(members map[string]archiveMember) map[string]struct{} {
 	return names
 }
 
-func smokeReleaseBinary(binary string, metadata releaseMetadata) error {
+func verifyReleaseBinaryBehavior(binary string, metadata releaseMetadata) error {
 	isolatedRoot, err := os.MkdirTemp("", "aht release state ")
 	if err != nil {
 		return fmt.Errorf("create isolated state directory: %w", err)
@@ -641,7 +641,7 @@ func smokeReleaseBinary(binary string, metadata releaseMetadata) error {
 	}
 
 	storePath := filepath.Join(isolatedRoot, "state.json")
-	reportOutput, err := runReleaseCommand(binary, workingDir, environment, "--store", storePath, "--json", "report", "codex", "--session-id", "release-smoke", "--event", "start", "--no-tmux")
+	reportOutput, err := runReleaseCommand(binary, workingDir, environment, "--store", storePath, "--json", "report", "codex", "--session-id", "release-verification", "--event", "start", "--no-tmux")
 	if err != nil {
 		return err
 	}
@@ -649,7 +649,7 @@ func smokeReleaseBinary(binary string, metadata releaseMetadata) error {
 	if err := json.Unmarshal(reportOutput, &reported); err != nil {
 		return fmt.Errorf("decode report output %q: %w", reportOutput, err)
 	}
-	if reported.SchemaVersion != 2 || reported.SessionID != "release-smoke" || reported.Harness != "codex" {
+	if reported.SchemaVersion != 2 || reported.SessionID != "release-verification" || reported.Harness != "codex" {
 		return fmt.Errorf("report output does not contain the schema-v2 Codex session: %q", reportOutput)
 	}
 

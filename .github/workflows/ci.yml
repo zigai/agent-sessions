@@ -100,8 +100,8 @@ jobs:
           path: dist
           retention-days: 14
 
-  native-artifact-smoke:
-    name: native-artifact-smoke (${{ matrix.target }})
+  native-artifact-validation:
+    name: native-artifact-validation (${{ matrix.target }})
     needs:
       - build-snapshot
     strategy:
@@ -159,15 +159,15 @@ jobs:
             artifact-validation.log
           retention-days: 14
 
-  artifact-smoke:
+  artifact-validation:
     if: ${{ always() }}
     needs:
       - build-snapshot
-      - native-artifact-smoke
+      - native-artifact-validation
     runs-on: ubuntu-slim
     timeout-minutes: 2
     steps:
       - name: Require every artifact gate
         run: |
           test "${{ needs.build-snapshot.result }}" = "success"
-          test "${{ needs.native-artifact-smoke.result }}" = "success"
+          test "${{ needs.native-artifact-validation.result }}" = "success"

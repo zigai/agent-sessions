@@ -24,6 +24,13 @@ func TestListPanesDiscoversRealNamedServer(t *testing.T) {
 		t.Skip("tmux is not installed")
 	}
 
+	tmuxDirectory, err := shortTmuxDirectory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(tmuxDirectory) })
+	t.Setenv("TMUX_TMPDIR", tmuxDirectory)
+
 	name := fmt.Sprintf("aht-discovery-%d-%d", os.Getpid(), time.Now().UnixNano())
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -53,4 +60,8 @@ func TestListPanesDiscoversRealNamedServer(t *testing.T) {
 		case <-ticker.C:
 		}
 	}
+}
+
+func shortTmuxDirectory() (string, error) {
+	return os.MkdirTemp("/tmp", "aht-tmux-")
 }
