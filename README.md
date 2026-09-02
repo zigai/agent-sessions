@@ -1,11 +1,4 @@
-+
-+[![CI](https://github.com/zigai/aht/actions/workflows/ci.yml/badge.svg)](https://github.com/zigai/aht/actions/workflows/ci.yml)
-+[![Go version](https://img.shields.io/github/go-mod/go-version/zigai/aht)](https://github.com/zigai/aht/blob/master/go.mod)
-+[![Release](https://img.shields.io/github/v/release/zigai/aht)](https://github.com/zigai/aht/releases/latest)
-+[![Downloads](https://img.shields.io/github/downloads/zigai/aht/total)](https://github.com/zigai/aht/releases)
-+[![License: MIT](https://img.shields.io/github/license/zigai/aht)](https://github.com/zigai/aht/blob/master/LICENSE)
-
-AHT (Agent Harness Tracker) tracks coding-agent sessions, activity, processes,
+# AHT
 
 AHT (Agent Harness Tracker) tracks coding-agent sessions, activity, processes,
 and terminal-multiplexer locations through a local realtime broker.
