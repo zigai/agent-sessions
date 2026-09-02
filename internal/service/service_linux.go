@@ -62,13 +62,9 @@ func RenderSystemdUnit(options Options) (string, error) {
 func SystemdUnitPath() (string, error) { return systemdUnitPath() }
 
 func systemdUnitPath() (string, error) {
-	base := os.Getenv("XDG_CONFIG_HOME")
-	if base == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return "", fmt.Errorf("resolve home directory: %w", err)
-		}
-		base = filepath.Join(home, ".config")
+	base, err := os.UserConfigDir()
+	if err != nil {
+		return "", fmt.Errorf("resolve user config directory: %w", err)
 	}
 	return filepath.Join(base, "systemd", "user", linuxUnitName), nil
 }
