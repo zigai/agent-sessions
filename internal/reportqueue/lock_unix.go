@@ -16,7 +16,7 @@ type queueLock struct {
 }
 
 func tryOpenQueueLock(path string) (*queueLock, error) {
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, fileMode)
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, fileMode) //nolint:gosec // Path is the lock file beneath the caller-selected queue root.
 	if err != nil {
 		return nil, fmt.Errorf("opening queue lock: %w", err)
 	}

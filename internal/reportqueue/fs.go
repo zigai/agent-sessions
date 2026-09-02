@@ -25,7 +25,7 @@ var (
 
 func ensureQueueDirs(q Queue) error {
 	for _, dir := range []string{q.root, q.pendingDir(), q.processingDir(), q.deadDir()} {
-		if err := os.MkdirAll(dir, dirMode); err != nil {
+		if err := os.MkdirAll(dir, dirMode); err != nil { //nolint:gosec // Queue owns these directories beneath its caller-selected root.
 			return fmt.Errorf("creating queue directory %s: %w", dir, err)
 		}
 	}
@@ -49,7 +49,7 @@ func writeJSON(path string, value any, exclusive bool) error {
 	data = append(data, '\n')
 
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, dirMode); err != nil {
+	if err := os.MkdirAll(dir, dirMode); err != nil { //nolint:gosec // Path is derived from the caller-selected queue root.
 		return fmt.Errorf("creating queue directory: %w", err)
 	}
 	temp, err := os.CreateTemp(dir, filepath.Base(path)+".tmp-*")
@@ -63,7 +63,7 @@ func writeJSON(path string, value any, exclusive bool) error {
 			return
 		}
 		_ = temp.Close()
-		_ = os.Remove(tempPath)
+		_ = os.Remove(tempPath) //nolint:gosec // CreateTemp returned this path beneath the caller-selected queue directory.
 	}()
 	if err := temp.Chmod(fileMode); err != nil {
 		return fmt.Errorf("setting queue item permissions: %w", err)
@@ -87,7 +87,7 @@ func writeJSON(path string, value any, exclusive bool) error {
 
 func publishQueueFile(tempPath, path string, exclusive bool) error {
 	if !exclusive {
-		if err := os.Rename(tempPath, path); err != nil {
+		if err := os.Rename(tempPath, path); err != nil { //nolint:gosec // Both paths are managed queue files beneath the caller-selected root.
 			return fmt.Errorf("renaming queue item: %w", err)
 		}
 		return nil
@@ -95,7 +95,7 @@ func publishQueueFile(tempPath, path string, exclusive bool) error {
 	if err := os.Link(tempPath, path); err != nil {
 		return fmt.Errorf("publishing queue item: %w", err)
 	}
-	if err := os.Remove(tempPath); err != nil {
+	if err := os.Remove(tempPath); err != nil { //nolint:gosec // CreateTemp returned this path beneath the caller-selected queue directory.
 		return fmt.Errorf("removing temp queue item: %w", err)
 	}
 	return nil
@@ -135,7 +135,7 @@ func readEnvelope(path string) (Envelope, error) {
 }
 
 func readQueueFile(path string) ([]byte, error) {
-	file, err := os.Open(path)
+	file, err := os.Open(path) //nolint:gosec // Callers pass files enumerated beneath owned queue directories.
 	if err != nil {
 		return nil, fmt.Errorf("opening queue file: %w", err)
 	}
@@ -152,12 +152,12 @@ func readQueueFile(path string) ([]byte, error) {
 }
 
 func renameDurable(from string, to string) error {
-	if err := os.MkdirAll(filepath.Dir(to), dirMode); err != nil {
+	if err := os.MkdirAll(filepath.Dir(to), dirMode); err != nil { //nolint:gosec // Destination is derived from an owned queue directory.
 		return fmt.Errorf("creating destination queue directory: %w", err)
 	}
 	fromDir := filepath.Dir(from)
 	toDir := filepath.Dir(to)
-	if err := os.Rename(from, to); err != nil {
+	if err := os.Rename(from, to); err != nil { //nolint:gosec // Both paths are managed files beneath owned queue directories.
 		return fmt.Errorf("renaming queue item: %w", err)
 	}
 	if err := syncDir(fromDir); err != nil {
@@ -171,7 +171,7 @@ func renameDurable(from string, to string) error {
 }
 
 func removeDurable(path string) error {
-	err := os.Remove(path)
+	err := os.Remove(path) //nolint:gosec // Callers pass managed files beneath owned queue directories.
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("removing queue item: %w", err)
 	}
@@ -180,7 +180,7 @@ func removeDurable(path string) error {
 }
 
 func syncDir(dir string) error {
-	file, err := os.Open(dir)
+	file, err := os.Open(dir) //nolint:gosec // Callers pass owned queue directories for durability sync.
 	if err != nil {
 		return fmt.Errorf("opening directory for sync: %w", err)
 	}

@@ -1,6 +1,7 @@
 package reportqueue
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -8,6 +9,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -300,6 +302,86 @@ func TestQueueRecoversStaleProcessingLease(t *testing.T) {
 	if drain.Recovered != 1 || drain.Succeeded != 1 {
 		t.Fatalf("expected recovered item to drain, got %#v", drain)
 	}
+}
+
+func TestQueueRecoversLeaseAfterWorkerIsKilled(t *testing.T) { //nolint:cyclop // Subprocess lifecycle assertions are intentionally explicit at each failure boundary.
+	storePath := filepath.Join(t.TempDir(), "state.json")
+	queue := New(storePath)
+	now := time.Date(2026, 9, 1, 16, 30, 0, 0, time.UTC)
+	envelope := testEnvelope(storePath, "killed-worker", registry.ActivityRunning, now)
+	envelope.ID = "killed-worker"
+	enqueueTestEnvelope(t, queue, envelope, now)
+
+	command := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestQueueKilledWorkerHelper$") //nolint:gosec // Re-executes this test binary.
+	command.Env = append(os.Environ(), "AHT_QUEUE_KILLED_WORKER_HELPER=1", "AHT_QUEUE_KILLED_WORKER_STORE="+storePath)
+	stdout, err := command.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	command.Stderr = os.Stderr
+	if err := command.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if command.ProcessState == nil {
+			_ = command.Process.Kill()
+			_ = command.Wait()
+		}
+	})
+	line, err := bufio.NewReader(stdout).ReadString('\n')
+	expectedClaim := fmt.Sprintf("claimed %s\n", queue.Root())
+	if err != nil || line != expectedClaim {
+		t.Fatalf("waiting for child claim: line=%q want=%q error=%v", line, expectedClaim, err)
+	}
+	requireNoQueueFiles(t, queue.pendingDir(), "pending after child claim")
+	processing, err := filepath.Glob(filepath.Join(queue.processingDir(), "*.json"))
+	if err != nil || len(processing) != 1 {
+		t.Fatalf("processing after child claim = %v, error=%v; want one lease", processing, err)
+	}
+	if err := command.Process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	if err := command.Wait(); err == nil {
+		t.Fatal("killed child exited successfully")
+	}
+	processing, err = filepath.Glob(filepath.Join(queue.processingDir(), "*.json"))
+	if err != nil || len(processing) != 1 {
+		t.Fatalf("processing after child death = %v, error=%v; want one abandoned lease", processing, err)
+	}
+
+	processed := 0
+	options := testDrainOptions(time.Now().UTC().Add(time.Second), func(context.Context, Envelope) error {
+		processed++
+		return nil
+	})
+	options.LeaseTimeout = time.Millisecond
+	result, err := queue.Drain(t.Context(), options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Recovered != 1 || result.Succeeded != 1 || processed != 1 {
+		t.Fatalf("killed-worker recovery = %#v, processed=%d; want one recovered success", result, processed)
+	}
+	requireNoQueueFiles(t, queue.pendingDir(), "pending")
+	requireNoQueueFiles(t, queue.processingDir(), "processing")
+}
+
+func TestQueueKilledWorkerHelper(t *testing.T) {
+	if os.Getenv("AHT_QUEUE_KILLED_WORKER_HELPER") != "1" {
+		return
+	}
+
+	queue := New(os.Getenv("AHT_QUEUE_KILLED_WORKER_STORE"))
+	_, err := queue.Drain(t.Context(), DrainOptions{
+		MaxItems:     1,
+		LeaseTimeout: time.Minute,
+		Now:          time.Now,
+		Processor: func(context.Context, Envelope) error {
+			fmt.Printf("claimed %s\n", queue.Root())
+			select {}
+		},
+	})
+	t.Fatalf("child drain returned: %v", err)
 }
 
 func TestTmuxCacheRespectsTTL(t *testing.T) {

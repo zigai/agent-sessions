@@ -330,7 +330,7 @@ func (q Queue) deadLetter(path string, envelope Envelope, processErr error) erro
 
 func (q Queue) moveUnreadableToDead(path string, readErr error) error {
 	dest := filepath.Join(q.deadDir(), filepath.Base(path)+".invalid")
-	if err := os.WriteFile(dest, []byte(safeError(readErr)+"\n"), fileMode); err != nil {
+	if err := os.WriteFile(dest, []byte(safeError(readErr)+"\n"), fileMode); err != nil { //nolint:gosec // Destination is a basename beneath the owned dead-letter directory.
 		return fmt.Errorf("writing dead queue item: %w", err)
 	}
 	if err := syncDir(q.deadDir()); err != nil {
