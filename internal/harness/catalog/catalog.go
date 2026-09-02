@@ -26,6 +26,11 @@ import (
 	"github.com/zigai/aht/pkg/registry"
 )
 
+var (
+	emptyPayloadDefaults harness.PayloadDefaults
+	emptyHookResult      harness.HookResult
+)
+
 var adapters = []harness.Adapter{
 	claude.New(),
 	codex.New(),
@@ -126,24 +131,24 @@ func DefaultsFromPayload(harnessID registry.Harness, rawPayload json.RawMessage)
 
 func DefaultsFromPayloadWithError(harnessID registry.Harness, rawPayload json.RawMessage) (harness.PayloadDefaults, error) {
 	if len(rawPayload) == 0 {
-		return emptyPayloadDefaults(), nil
+		return emptyPayloadDefaults, nil
 	}
 	adapter, ok := Find(harnessID)
 	if !ok {
-		return emptyPayloadDefaults(), nil
+		return emptyPayloadDefaults, nil
 	}
 	payloadAdapter, ok := adapter.(harness.PayloadAdapter)
 	if !ok {
-		return emptyPayloadDefaults(), nil
+		return emptyPayloadDefaults, nil
 	}
 	var payload map[string]any
 	if err := json.Unmarshal(rawPayload, &payload); err != nil {
-		return emptyPayloadDefaults(), fmt.Errorf("decoding hook payload defaults: %w", err)
+		return emptyPayloadDefaults, fmt.Errorf("decoding hook payload defaults: %w", err)
 	}
 	if errorAdapter, ok := adapter.(harness.PayloadDefaultsErrorAdapter); ok {
 		defaults, err := errorAdapter.PayloadDefaultsWithError(payload)
 		if err != nil {
-			return emptyPayloadDefaults(), fmt.Errorf("deriving harness payload defaults: %w", err)
+			return emptyPayloadDefaults, fmt.Errorf("deriving harness payload defaults: %w", err)
 		}
 		return defaults, nil
 	}
@@ -207,11 +212,11 @@ func HandleHook(
 ) (harness.HookResult, bool) {
 	adapter, ok := Find(harnessID)
 	if !ok {
-		return emptyHookResult(), false
+		return emptyHookResult, false
 	}
 	hookAdapter, ok := adapter.(harness.HookAdapter)
 	if !ok {
-		return emptyHookResult(), false
+		return emptyHookResult, false
 	}
 	result := hookAdapter.HandleHook(harness.HookInvocation{
 		Event:      explicitEvent,
@@ -276,24 +281,4 @@ func appendUnique(values []string, next ...string) []string {
 
 func normalizeToken(value string) string {
 	return strings.ToLower(strings.TrimSpace(value))
-}
-
-func emptyPayloadDefaults() harness.PayloadDefaults {
-	return harness.PayloadDefaults{
-		SessionID:   "",
-		SessionPath: "",
-		CWD:         "",
-		ProjectRoot: "",
-		Event:       "",
-		Attributes:  nil,
-	}
-}
-
-func emptyHookResult() harness.HookResult {
-	var report registry.Observation
-	return harness.HookResult{
-		Report:   report,
-		ReportOK: false,
-		Response: nil,
-	}
 }

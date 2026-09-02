@@ -17,6 +17,12 @@ const (
 
 type droidHarness struct{ harness.BaseAdapter }
 
+type hookPayload struct {
+	SessionID     string `json:"session_id"      validate:"required,notblank"`
+	CWD           string `json:"cwd"             validate:"required,notblank"`
+	HookEventName string `json:"hook_event_name" validate:"required,notblank"`
+}
+
 func New() harness.Adapter {
 	return droidHarness{BaseAdapter: harness.NewBaseAdapter(harness.Definition{
 		ID: registry.HarnessDroid,
@@ -116,7 +122,7 @@ func (droidHarness) ResumeCommand(sessionID string, _ string) []string {
 }
 
 func (droidHarness) PayloadCompatible(rawPayload json.RawMessage) bool {
-	return droidPayloadValidator(rawPayload)
+	return harness.PayloadValidator[hookPayload]()(rawPayload)
 }
 
 func (droidHarness) PayloadDefaults(payload map[string]any) harness.PayloadDefaults {
@@ -144,17 +150,6 @@ func droidPayloadDefaults(payload map[string]any) harness.PayloadDefaults {
 		Event:       harness.PayloadString(payload, "hook_event_name"),
 		Attributes:  attributes,
 	}
-}
-
-func droidPayloadValidator(rawPayload json.RawMessage) bool {
-	payload, ok := harness.PayloadObject(rawPayload)
-	if !ok {
-		return false
-	}
-
-	return harness.PayloadString(payload, "session_id") != "" &&
-		harness.PayloadString(payload, "cwd") != "" &&
-		harness.PayloadString(payload, "hook_event_name") != ""
 }
 
 func droidConfigDir() string {
