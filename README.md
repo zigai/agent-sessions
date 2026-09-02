@@ -58,23 +58,59 @@ commands and options.
 
 ## Go library
 
-Use [`client`](https://pkg.go.dev/github.com/zigai/aht/pkg/client) to read
-the current user's agent-harness state through the realtime broker, with a
-durable-registry fallback for one-shot operations:
+AHT provides four public Go packages:
+
+- [`client`](https://pkg.go.dev/github.com/zigai/aht/pkg/client) reads and watches agent-harness state through the local realtime broker, falling back to the durable registry file when the broker is not running.
+- [`registry`](https://pkg.go.dev/github.com/zigai/aht/pkg/registry) defines the core domain model (`Session`, `Presence`, `Activity`), state reducer, and storage engines (`FileStore` and `MemoryStore`).
+- [`manage`](https://pkg.go.dev/github.com/zigai/aht/pkg/manage) programmatically installs harness integrations and manages the platform-native background tracker service (`systemd` on Linux, `launchd` on macOS).
+- [`harness`](https://pkg.go.dev/github.com/zigai/aht/pkg/harness) provides the supported harness catalog, alias normalization, and executable command matching.
+
+### Reading sessions
 
 ```go
-aht := client.New(client.Config{})
-sessions, err := aht.List(ctx, registry.Filter{
-    Presence: registry.PresenceLive,
-})
+package main
+
+import (
+	"context"
+	"fmt"
+
+	"github.com/zigai/aht/pkg/client"
+	"github.com/zigai/aht/pkg/registry"
+)
+
+func main() {
+	ctx := context.Background()
+
+	// Connects to the realtime broker, falling back to the local sessions.json registry.
+	aht := client.New(client.Config{})
+
+	sessions, err := aht.List(ctx, registry.Filter{
+		Presence: registry.PresenceLive,
+	})
+	if err != nil {
+		panic(err)
+	}
+
+	for _, session := range sessions {
+		activity := "unknown"
+		if session.Activity != nil {
+			activity = string(*session.Activity)
+		}
+		fmt.Printf("%s (%s): %s\n", session.Harness, session.SessionID, activity)
+	}
+}
 ```
 
-Use [`registry`](https://pkg.go.dev/github.com/zigai/aht/pkg/registry) to
-embed the state reducer and storage engine, and
-[`manage`](https://pkg.go.dev/github.com/zigai/aht/pkg/manage) to install
-harness integrations or control background tracking. The
-[`harness`](https://pkg.go.dev/github.com/zigai/aht/pkg/harness) package
-provides the supported harness catalog and executable-name matching.
+### Watching realtime updates
+
+```go
+err := aht.Watch(ctx, registry.Filter{}, func(snapshot registry.StateSnapshot) error {
+	for _, session := range snapshot.Sessions {
+		fmt.Printf("revision %d: %s (%s) is %s\n", snapshot.Revision, session.Harness, session.ID, session.Presence)
+	}
+	return nil
+})
+```
 
 ## Hook Installation
 
