@@ -73,14 +73,11 @@ type manifestCacheEntry struct {
 var manifestCache sync.Map
 
 func DefaultConfigDir() string {
-	if value := strings.TrimSpace(os.Getenv("XDG_CONFIG_HOME")); value != "" {
-		return filepath.Join(value, "aht", "detection")
-	}
-	home, err := os.UserHomeDir()
-	if err != nil || home == "" {
+	configDir, err := os.UserConfigDir()
+	if err != nil || configDir == "" {
 		return ""
 	}
-	return filepath.Join(home, ".config", "aht", "detection")
+	return filepath.Join(configDir, "aht", "detection")
 }
 
 func (l Loader) Supports(harness registry.Harness) bool {
