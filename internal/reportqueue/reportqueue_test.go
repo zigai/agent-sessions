@@ -543,7 +543,7 @@ func testEnvelope(storePath string, sessionID string, activity registry.Activity
 		CreatedAt:           observedAt,
 		StorePath:           storePath,
 		Kind:                KindReport,
-		Report:              ReportFromRegistry(testRegistryObservation(sessionID, activity, observedAt)),
+		Report:              testRegistryObservation(sessionID, activity, observedAt),
 		RawPayloadSet:       false,
 		NoTmux:              false,
 		Runtime:             RuntimeContext{CWD: "", ParentArgs: nil, Env: nil},
@@ -608,7 +608,7 @@ func TestEnvelopeV2ObservationRoundTrip(t *testing.T) {
 		CreatedAt:     now,
 		StorePath:     "/tmp/store.json",
 		Kind:          KindReport,
-		Report:        ReportFromRegistry(observation),
+		Report:        observation,
 		RawPayloadSet: true,
 	}
 	encoded, err := json.Marshal(envelope)

@@ -25,11 +25,11 @@ func TestProcessQueuedObservation(t *testing.T) {
 		CreatedAt: at,
 		StorePath: storePath,
 		Kind:      reportqueue.KindReport,
-		Report: reportqueue.ReportFromRegistry(registry.Observation{
+		Report: registry.Observation{
 			Source: registry.ObservationSourceNative, Evidence: registry.ObservationEvidenceNativeEvent,
 			Harness: registry.HarnessClaude, NativeEvent: "permission_prompt", Activity: &activity,
 			Identity: registry.ObservationIdentity{SessionID: "queued"}, Process: process, ObservedAt: at,
-		}),
+		},
 		CachedTmux: registry.TmuxContext{Inside: true, SessionName: "dev", PaneID: "%4", PaneTTY: "/dev/pts/4"},
 	}
 	if err := app.processQueuedReport(context.Background(), reportqueue.New(storePath), envelope); err != nil {
@@ -54,11 +54,11 @@ func TestProcessQueuedObservationRestoresZellijRuntimeContext(t *testing.T) {
 	at := time.Now().UTC().Add(-time.Minute)
 	envelope := reportqueue.Envelope{
 		Version: reportqueue.EnvelopeVersion, CreatedAt: at, StorePath: storePath, Kind: reportqueue.KindReport,
-		Report: reportqueue.ReportFromRegistry(registry.Observation{
+		Report: registry.Observation{
 			Source: registry.ObservationSourceNative, Evidence: registry.ObservationEvidenceNativeEvent,
 			Harness: registry.HarnessCodex, NativeEvent: "turn_complete",
 			Identity: registry.ObservationIdentity{SessionID: "queued-zellij"}, ObservedAt: at,
-		}),
+		},
 		Runtime: reportqueue.RuntimeContext{Env: map[string]string{"ZELLIJ_SESSION_NAME": "work", "ZELLIJ_PANE_ID": "7"}},
 	}
 	if err := app.processQueuedReport(context.Background(), reportqueue.New(storePath), envelope); err != nil {
@@ -106,15 +106,6 @@ func TestQueuedDefaultsOnlyEnvelopeDoesNotPersistStdin(t *testing.T) {
 	}
 	if bytes.Contains(data, []byte(secret)) || bytes.Contains(data, []byte("stdin_base64")) {
 		t.Fatalf("defaults-only queue envelope retained stdin: %s", data)
-	}
-}
-
-func TestStartQueueDrainerReportsSpawnFailure(t *testing.T) {
-	t.Parallel()
-
-	err := startQueueDrainer(context.Background(), filepath.Join(t.TempDir(), "missing-drainer"), nil)
-	if err == nil {
-		t.Fatal("expected queue drainer start error")
 	}
 }
 

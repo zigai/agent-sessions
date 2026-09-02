@@ -42,18 +42,6 @@ type Envelope struct {
 // registry observation semantics.
 type Report = registry.Observation
 
-func ReportFromRegistry(observation registry.Observation) Report {
-	return observation
-}
-
-func RegistryObservation(report Report) registry.Observation {
-	return report
-}
-
-func RegistryReport(report Report) registry.Observation {
-	return report
-}
-
 type RuntimeContext struct {
 	CWD        string            `json:"cwd,omitempty"`
 	ParentArgs []string          `json:"parent_args,omitempty"`

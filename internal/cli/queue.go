@@ -5,14 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"os"
-	"os/exec"
-	"strconv"
 	"strings"
 	"time"
-
-	"github.com/spf13/cobra"
 
 	"github.com/zigai/aht/internal/reportqueue"
 	"github.com/zigai/aht/internal/tmuxctx"
@@ -30,56 +25,6 @@ var (
 	errUnsupportedQueueEnvelopeVersion = errors.New("unsupported queue envelope version")
 	errUnsupportedQueueEnvelopeKind    = errors.New("unsupported queue envelope kind")
 )
-
-//nolint:unused // Queue code is isolated from the realtime hot path for offline recovery tooling.
-func (app *application) newDrainQueueCommand() *cobra.Command {
-	var maxItems int
-	var lease time.Duration
-	c := &cobra.Command{Use: drainQueueCommandName, Hidden: true, RunE: func(cmd *cobra.Command, _ []string) error {
-		r, e := app.drainQueue(cmd.Context(), reportqueue.DrainOptions{MaxItems: maxItems, LeaseTimeout: lease})
-		if e != nil {
-			return e
-		}
-		if app.outputJSON {
-			return app.writeJSON(r)
-		}
-		return app.writeHumanDetails([]humanDetail{
-			{label: "Processed", value: strconv.Itoa(r.Processed)},
-			{label: "Succeeded", value: strconv.Itoa(r.Succeeded)},
-			{label: "Retried", value: strconv.Itoa(r.Retried)},
-			{label: "Dead", value: strconv.Itoa(r.Dead)},
-			{label: "Recovered", value: strconv.Itoa(r.Recovered)},
-			{label: "Locked", value: strconv.FormatBool(r.Locked)},
-		})
-	}}
-	c.Flags().IntVar(&maxItems, "max-items", 0, "maximum queue items")
-	c.Flags().DurationVar(&lease, "lease-timeout", defaultQueueLeaseTimeout, "processing lease timeout")
-	return c
-}
-
-//nolint:unused // Queue code is isolated from the realtime hot path for offline recovery tooling.
-func (app *application) newQueueStatusCommand() *cobra.Command {
-	return &cobra.Command{Use: queueStatusCommandName, Hidden: true, RunE: func(cmd *cobra.Command, _ []string) error {
-		s, e := reportqueue.New(app.store().Path()).Status(cmd.Context())
-		if e != nil {
-			return fmt.Errorf("queue status: %w", e)
-		}
-		if app.outputJSON {
-			return app.writeJSON(s)
-		}
-		return app.writeHumanDetails([]humanDetail{
-			{label: "Root", value: s.Root},
-			{label: "Pending", value: strconv.Itoa(s.Pending)},
-			{label: "Ready", value: strconv.Itoa(s.Ready)},
-			{label: "Deferred", value: strconv.Itoa(s.Deferred)},
-			{label: "Processing", value: strconv.Itoa(s.Processing)},
-			{label: "Retries", value: strconv.Itoa(s.Retries)},
-			{label: "Stale leases", value: strconv.Itoa(s.StaleLeases)},
-			{label: "Dead", value: strconv.Itoa(s.Dead)},
-			{label: "Invalid", value: strconv.Itoa(s.Invalid)},
-		})
-	}}
-}
 
 //nolint:unused // Queue code is isolated from the realtime hot path for offline recovery tooling.
 func (app *application) drainQueue(ctx context.Context, o reportqueue.DrainOptions) (reportqueue.DrainResult, error) {
@@ -138,7 +83,7 @@ func validateQueuedEnvelope(e reportqueue.Envelope) error {
 }
 
 func normalizedQueuedObservation(e reportqueue.Envelope) registry.Observation {
-	o := reportqueue.RegistryObservation(e.Report)
+	o := e.Report
 	if !e.RawPayloadSet && string(o.RawPayload) == "null" {
 		o.RawPayload = nil
 	}
@@ -179,14 +124,13 @@ func (app *application) queuedReportTmux(ctx context.Context, q reportqueue.Queu
 }
 
 //nolint:unused // Queue code is isolated from the realtime hot path for offline recovery tooling.
-func (app *application) kickQueueDrainer(ctx context.Context, path string) {
-	drainer := app.queueDrainer
-	if drainer == nil {
-		drainer = kickQueueDrainer
-	}
-	if err := drainer(ctx, path); err != nil {
-		app.warnf("warning: %v\n", err)
-	}
+func (app *application) kickQueueDrainer(ctx context.Context) {
+	go func() {
+		_, _ = app.drainQueue(context.WithoutCancel(ctx), reportqueue.DrainOptions{
+			MaxItems:     drainQueueBatchSize,
+			LeaseTimeout: defaultQueueLeaseTimeout,
+		})
+	}()
 }
 
 //nolint:unused // Queue code is isolated from the realtime hot path for offline recovery tooling.
@@ -211,7 +155,7 @@ func (app *application) runQueuedReport(ctx context.Context, stdin io.Reader, o 
 	if _, e = q.Enqueue(ctx, envelope, reportqueue.EnqueueOptions{Now: func() time.Time { return now }}); e != nil {
 		return fmt.Errorf("queueing report: %w", e)
 	}
-	app.kickQueueDrainer(ctx, app.store().Path())
+	app.kickQueueDrainer(ctx)
 	if app.outputJSON {
 		return app.writeJSON(map[string]string{statusCommandName: "queued"})
 	}
@@ -234,7 +178,7 @@ func queuedReportEnvelope(
 		CreatedAt:     now,
 		StorePath:     storePath,
 		Kind:          reportqueue.KindReport,
-		Report:        reportqueue.ReportFromRegistry(prepared.observation),
+		Report:        prepared.observation,
 		RawPayloadSet: len(prepared.observation.RawPayload) > 0,
 		NoTmux:        noTmux,
 		Runtime:       runtime,
@@ -268,37 +212,4 @@ func queuedReportRuntime(q reportqueue.Queue, now time.Time, parentArgs []string
 		},
 	}
 	return runtime, cachedTmux
-}
-
-func kickQueueDrainer(ctx context.Context, path string) error {
-	binary, err := os.Executable()
-	if err != nil {
-		return fmt.Errorf("locating queue drainer executable: %w", err)
-	}
-	if strings.HasSuffix(binary, ".test") {
-		return nil
-	}
-	args := []string{}
-	if path != "" {
-		args = append(args, "--store", path)
-	}
-	args = append(args, drainQueueCommandName, "--max-items", strconv.Itoa(drainQueueBatchSize))
-
-	return startQueueDrainer(ctx, binary, args)
-}
-
-func startQueueDrainer(ctx context.Context, binary string, args []string) error {
-	cmd := exec.CommandContext(context.WithoutCancel(ctx), binary, args...)
-	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("starting queue drainer: %w", err)
-	}
-	go func() {
-		// The queue is durable and a later CLI invocation retries failed drains;
-		// this owner exists to wait and release the child process resources.
-		if err := cmd.Wait(); err != nil {
-			slog.WarnContext(context.WithoutCancel(ctx), "queue drainer exited unsuccessfully", "error", err)
-		}
-	}()
-
-	return nil
 }

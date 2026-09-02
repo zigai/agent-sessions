@@ -33,13 +33,13 @@ func readPayloadDefaultsInput(reader io.Reader) ([]byte, error) {
 	}
 
 	trimmed := bytes.TrimSpace(data)
-	if len(trimmed) == 0 || trimmed[0] != '{' || !json.Valid(trimmed) {
+	if len(trimmed) == 0 || trimmed[0] != '{' {
 		return retainBoundedPayloadDefaults(data)
 	}
 
 	var payload map[string]json.RawMessage
 	if err := json.Unmarshal(trimmed, &payload); err != nil {
-		return nil, fmt.Errorf("decoding defaults payload: %w", err)
+		return retainBoundedPayloadDefaults(data)
 	}
 	delete(payload, "tool_input")
 	delete(payload, "tool_response")
