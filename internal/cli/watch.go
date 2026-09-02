@@ -288,29 +288,23 @@ func activityEqual(a, b *registry.Activity) bool {
 }
 
 func tmuxLocationEqual(a, b registry.TmuxContext) bool {
-	return a.Inside == b.Inside &&
-		a.ServerSocket == b.ServerSocket &&
-		a.SessionID == b.SessionID &&
-		a.SessionName == b.SessionName &&
-		a.WindowID == b.WindowID &&
-		a.WindowIndex == b.WindowIndex &&
-		a.PaneID == b.PaneID &&
-		a.PaneIndex == b.PaneIndex
+	a.WindowName, b.WindowName = "", ""
+	a.PaneCurrentPath, b.PaneCurrentPath = "", ""
+	a.PanePID, b.PanePID = 0, 0
+	a.PaneTTY, b.PaneTTY = "", ""
+	a.ClientTTY, b.ClientTTY = "", ""
+	return a == b
 }
 
 func multiplexerLocationEqual(a, b registry.MultiplexerContext) bool {
-	return a.Kind == b.Kind &&
-		a.ServerID == b.ServerID &&
-		a.SessionID == b.SessionID &&
-		a.SessionName == b.SessionName &&
-		a.WorkspaceID == b.WorkspaceID &&
-		a.WorkspaceName == b.WorkspaceName &&
-		a.TabID == b.TabID &&
-		a.TabIndex == b.TabIndex &&
-		a.WindowID == b.WindowID &&
-		a.WindowIndex == b.WindowIndex &&
-		a.PaneID == b.PaneID &&
-		a.PaneIndex == b.PaneIndex
+	a.WindowName, b.WindowName = "", ""
+	a.TabName, b.TabName = "", ""
+	a.WorkspaceName, b.WorkspaceName = "", ""
+	a.PaneCurrentPath, b.PaneCurrentPath = "", ""
+	a.PanePID, b.PanePID = 0, 0
+	a.PaneTTY, b.PaneTTY = "", ""
+	a.ClientTTY, b.ClientTTY = "", ""
+	return a == b
 }
 
 func nativeEvent(s registry.Session) string {

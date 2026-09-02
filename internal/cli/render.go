@@ -214,12 +214,26 @@ func truncateHumanText(value string, width int) string {
 	if width <= 1 {
 		return "…"
 	}
-	runes := []rune(value)
-	return string(runes[:width-1]) + "…"
+	return strings.TrimRight(text.Snip(value, width, "…"), " ")
 }
 
 func wrapHumanText(value string, width int) []string {
-	return wrapDelimitedHumanText(value, width, "")
+	value = sanitizeHumanText(value)
+	if value == "" {
+		return []string{"-"}
+	}
+	wrapped := text.WrapSoft(value, width)
+	lines := strings.Split(wrapped, "\n")
+	result := make([]string, 0, len(lines))
+	for _, line := range lines {
+		if trimmed := strings.TrimSpace(line); trimmed != "" {
+			result = append(result, trimmed)
+		}
+	}
+	if len(result) == 0 {
+		return []string{"-"}
+	}
+	return result
 }
 
 func wrapHumanPath(value string, width int) []string {

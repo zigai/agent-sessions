@@ -76,6 +76,34 @@ func TestDiffWatchEventsIgnoresTransientWindowNameAndPathChanges(t *testing.T) {
 	}
 }
 
+func TestDiffWatchEventsIgnoresTransientMultiplexerTabNameChanges(t *testing.T) {
+	t.Parallel()
+	at := time.Now().UTC()
+	activity := registry.ActivityIdle
+	old := registry.Session{
+		ID:       "s2",
+		Harness:  registry.HarnessClaude,
+		Presence: registry.PresenceLive,
+		Activity: &activity,
+		Multiplexer: registry.MultiplexerContext{
+			Kind:        registry.MultiplexerZellij,
+			SessionName: "main",
+			TabID:       "1",
+			TabName:     "default",
+			PaneID:      "terminal_1",
+		},
+		UpdatedAt: at,
+	}
+	next := old
+	next.Multiplexer.TabName = "running-editor"
+	next.UpdatedAt = at.Add(time.Second)
+
+	events := diffWatchEvents(map[string]registry.Session{"s2": old}, map[string]registry.Session{"s2": next}, at.Add(2*time.Second))
+	if len(events) != 0 {
+		t.Fatalf("expected 0 events for transient multiplexer tab name change, got %#v", events)
+	}
+}
+
 func TestWatchJSONModeEmitsJSONLinesOnlyWhenRequested(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "sessions.json")
 	store := registry.NewFileStore(path)
