@@ -211,7 +211,7 @@ func TestStoreGCUsesInclusiveAgeBoundary(t *testing.T) {
 	base := time.Date(2026, 7, 17, 12, 0, 0, 0, time.UTC)
 	threshold := 10 * time.Minute
 	store := NewFileStore(filepath.Join(t.TempDir(), "sessions.json"))
-	store.SetNowForTest(func() time.Time { return base })
+	store.setNowForTest(func() time.Time { return base })
 	presence := PresenceGone
 	for _, observation := range []Observation{
 		{Source: ObservationSourceNative, Evidence: ObservationEvidenceNativeEvent, Harness: HarnessCodex, Identity: ObservationIdentity{SessionID: "at-threshold"}, Presence: &presence, ObservedAt: base.Add(-threshold)},
@@ -244,7 +244,7 @@ func TestObserveAutomaticallyRemovesExpiredGoneSessions(t *testing.T) {
 	base := time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC)
 	now := base
 	store := NewFileStore(filepath.Join(t.TempDir(), "sessions.json"))
-	store.SetNowForTest(func() time.Time { return now })
+	store.setNowForTest(func() time.Time { return now })
 
 	gone := PresenceGone
 	if _, err := store.Observe(context.Background(), Observation{

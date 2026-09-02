@@ -64,14 +64,6 @@ func OpenMemoryStore(path string) (*MemoryStore, error) {
 // Path returns the durable snapshot path associated with the store.
 func (s *MemoryStore) Path() string { return s.path }
 
-// SetNowForTest replaces the receipt clock. It is intended for deterministic tests.
-func (s *MemoryStore) SetNowForTest(now func() time.Time) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	s.now = now
-}
-
 // Observe records one observation atomically.
 func (s *MemoryStore) Observe(ctx context.Context, observation Observation) (Session, error) {
 	sessions, err := s.ObserveBatch(ctx, []Observation{observation})
@@ -351,6 +343,13 @@ func (s *MemoryStore) RunPersistence(ctx context.Context, settle, maximumDelay t
 			return fmt.Errorf("persisting registry snapshot: %w", err)
 		}
 	}
+}
+
+func (s *MemoryStore) setNowForTest(now func() time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.now = now
 }
 
 func (s *MemoryStore) flushOnShutdown(ctx context.Context) error {

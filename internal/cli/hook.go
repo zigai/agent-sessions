@@ -18,8 +18,8 @@ import (
 
 	"github.com/zigai/aht/internal/harness"
 	harnesspkg "github.com/zigai/aht/internal/harness/catalog"
+	"github.com/zigai/aht/internal/tmuxctx"
 	"github.com/zigai/aht/pkg/registry"
-	"github.com/zigai/aht/pkg/tmuxctx"
 )
 
 var errUnsupportedManagedHook = errors.New("harness does not support managed hooks")

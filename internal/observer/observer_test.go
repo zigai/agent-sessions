@@ -11,10 +11,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/zigai/aht/internal/muxctx"
 	"github.com/zigai/aht/internal/processinfo"
-	"github.com/zigai/aht/pkg/muxctx"
+	"github.com/zigai/aht/internal/tmuxctx"
 	"github.com/zigai/aht/pkg/registry"
-	"github.com/zigai/aht/pkg/tmuxctx"
 )
 
 func TestResultStringIncludesDegradedStateAndError(t *testing.T) {

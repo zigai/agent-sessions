@@ -25,7 +25,11 @@ type Client struct {
 
 // NewClient returns a client for the broker associated with storePath.
 func NewClient(storePath string) *Client {
-	return &Client{socketPath: SocketPath(storePath), dialTimeout: defaultDialTimeout}
+	return NewClientForSocket(SocketPath(storePath))
+}
+
+func NewClientForSocket(socketPath string) *Client {
+	return &Client{socketPath: socketPath, dialTimeout: defaultDialTimeout}
 }
 
 // SocketPath returns the exact endpoint used by the client.

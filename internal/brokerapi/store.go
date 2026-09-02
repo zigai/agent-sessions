@@ -20,8 +20,12 @@ var _ registry.Store = (*Store)(nil)
 
 // NewStore returns a broker-backed registry store for storePath.
 func NewStore(storePath string) *Store {
+	return NewStoreForSocket(storePath, SocketPath(storePath))
+}
+
+func NewStoreForSocket(storePath string, socketPath string) *Store {
 	return &Store{
-		client:   NewClient(storePath),
+		client:   NewClientForSocket(socketPath),
 		fallback: registry.NewFileStore(storePath),
 	}
 }

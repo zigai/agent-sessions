@@ -9,12 +9,12 @@ import (
 	"strings"
 
 	harness "github.com/zigai/aht/internal/harness/catalog"
+	"github.com/zigai/aht/internal/herdrctx"
+	"github.com/zigai/aht/internal/muxctx"
 	"github.com/zigai/aht/internal/processinfo"
-	"github.com/zigai/aht/pkg/herdrctx"
-	"github.com/zigai/aht/pkg/muxctx"
+	"github.com/zigai/aht/internal/tmuxctx"
+	"github.com/zigai/aht/internal/zellijctx"
 	"github.com/zigai/aht/pkg/registry"
-	"github.com/zigai/aht/pkg/tmuxctx"
-	"github.com/zigai/aht/pkg/zellijctx"
 )
 
 var errUnsupportedMultiplexerPane = errors.New("unsupported multiplexer pane")

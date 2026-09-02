@@ -24,12 +24,12 @@ import (
 	"github.com/zigai/aht/internal/agentstate"
 	"github.com/zigai/aht/internal/harness"
 	harnesspkg "github.com/zigai/aht/internal/harness/catalog"
+	"github.com/zigai/aht/internal/herdrctx"
 	"github.com/zigai/aht/internal/processinfo"
-	"github.com/zigai/aht/pkg/brokerapi"
-	"github.com/zigai/aht/pkg/herdrctx"
+	"github.com/zigai/aht/internal/tmuxctx"
+	"github.com/zigai/aht/internal/zellijctx"
+	"github.com/zigai/aht/pkg/client"
 	"github.com/zigai/aht/pkg/registry"
-	"github.com/zigai/aht/pkg/tmuxctx"
-	"github.com/zigai/aht/pkg/zellijctx"
 )
 
 var (
@@ -162,7 +162,7 @@ func executeCLI(ctx context.Context, args []string, stdin io.Reader, stdout, std
 
 func (app *application) store() *registry.FileStore { return registry.NewFileStore(app.storePath) }
 func (app *application) registryStore() registry.Store {
-	return brokerapi.NewStore(app.storePath)
+	return client.New(client.Config{StorePath: app.storePath})
 }
 
 func (app *application) writeJSON(value any) error {

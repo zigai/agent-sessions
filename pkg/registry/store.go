@@ -76,8 +76,7 @@ func NewFileStore(path string) *FileStore {
 	return &FileStore{path: path, now: func() time.Time { return time.Now().UTC() }}
 }
 
-func (s *FileStore) Path() string                       { return s.path }
-func (s *FileStore) SetNowForTest(now func() time.Time) { s.now = now }
+func (s *FileStore) Path() string { return s.path }
 
 func (s *FileStore) Observe(ctx context.Context, observation Observation) (Session, error) {
 	sessions, err := s.ObserveBatch(ctx, []Observation{observation})
@@ -1198,6 +1197,8 @@ func (s *FileStore) Reset(ctx context.Context) (ResetResult, error) {
 	}
 	return result, nil
 }
+
+func (s *FileStore) setNowForTest(now func() time.Time) { s.now = now }
 
 func storedSessionCount(data []byte) int {
 	if len(data) == 0 {

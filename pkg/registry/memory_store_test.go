@@ -18,7 +18,7 @@ func TestMemoryStorePublishesOnlyEffectiveStateChanges(t *testing.T) {
 		t.Fatal(err)
 	}
 	base := time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC)
-	store.SetNowForTest(func() time.Time { return base })
+	store.setNowForTest(func() time.Time { return base })
 
 	initial, err := store.State(t.Context(), Filter{})
 	if err != nil {
@@ -89,7 +89,7 @@ func TestSequencedNativeReportsRejectStaleAndUnsequencedUpdates(t *testing.T) {
 		t.Fatal(err)
 	}
 	base := time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC)
-	store.SetNowForTest(func() time.Time { return base.Add(time.Minute) })
+	store.setNowForTest(func() time.Time { return base.Add(time.Minute) })
 	reporter := map[string]string{"aht_integration": "omp-extension"}
 	running := ActivityRunning
 	sequence := uint64(20)

@@ -1,5 +1,11 @@
 # AHT
 
+[![CI](https://github.com/zigai/aht/actions/workflows/ci.yml/badge.svg)](https://github.com/zigai/aht/actions/workflows/ci.yml)
+[![Go Reference](https://pkg.go.dev/badge/github.com/zigai/aht.svg)](https://pkg.go.dev/github.com/zigai/aht)
+[![Go version](https://img.shields.io/github/go-mod/go-version/zigai/aht)](https://github.com/zigai/aht/blob/master/go.mod)
+[![Release](https://img.shields.io/github/v/release/zigai/aht)](https://github.com/zigai/aht/releases/latest)
+[![License: MIT](https://img.shields.io/github/license/zigai/aht)](https://github.com/zigai/aht/blob/master/LICENSE)
+
 AHT (Agent Harness Tracker) tracks coding-agent sessions, activity, processes,
 and terminal-multiplexer locations through a local realtime broker.
 
@@ -49,6 +55,26 @@ aht manage doctor
 
 Run `aht --help` or `aht <command> --help` for all
 commands and options.
+
+## Go library
+
+Use [`client`](https://pkg.go.dev/github.com/zigai/aht/pkg/client) to read
+the current user's agent-harness state through the realtime broker, with a
+durable-registry fallback for one-shot operations:
+
+```go
+aht := client.New(client.Config{})
+sessions, err := aht.List(ctx, registry.Filter{
+    Presence: registry.PresenceLive,
+})
+```
+
+Use [`registry`](https://pkg.go.dev/github.com/zigai/aht/pkg/registry) to
+embed the state reducer and storage engine, and
+[`manage`](https://pkg.go.dev/github.com/zigai/aht/pkg/manage) to install
+harness integrations or control background tracking. The
+[`harness`](https://pkg.go.dev/github.com/zigai/aht/pkg/harness) package
+provides the supported harness catalog and executable-name matching.
 
 ## Hook Installation
 

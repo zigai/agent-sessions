@@ -18,7 +18,7 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/zigai/aht/pkg/brokerapi"
+	"github.com/zigai/aht/internal/brokerapi"
 	"github.com/zigai/aht/pkg/registry"
 )
 

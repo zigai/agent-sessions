@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/zigai/aht/pkg/muxctx"
+	"github.com/zigai/aht/internal/muxctx"
 	"github.com/zigai/aht/pkg/registry"
 )
 

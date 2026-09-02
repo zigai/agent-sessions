@@ -18,8 +18,8 @@ import (
 
 	harnesspkg "github.com/zigai/aht/internal/harness/catalog"
 	"github.com/zigai/aht/internal/processinfo"
+	"github.com/zigai/aht/internal/tmuxctx"
 	"github.com/zigai/aht/pkg/registry"
-	"github.com/zigai/aht/pkg/tmuxctx"
 )
 
 var (

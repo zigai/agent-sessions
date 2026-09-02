@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/zigai/aht/pkg/brokerapi"
+	"github.com/zigai/aht/pkg/client"
 	"github.com/zigai/aht/pkg/registry"
 )
 
@@ -90,72 +90,53 @@ func (app *application) runWatch(ctx context.Context, o watchOptions) error {
 		return fmt.Errorf("%w: %q", errInvalidWatchFormat, o.format)
 	}
 
-	subscription, err := brokerapi.NewClient(app.store().Path()).Subscribe(ctx, o.filter)
+	ahtClient := client.New(client.Config{StorePath: app.store().Path()})
+	err := app.runBrokerWatch(ctx, o, ahtClient)
 	if err == nil {
-		defer subscription.Close()
-
-		return app.runBrokerWatch(ctx, o, subscription)
+		return nil
 	}
-	if !brokerapi.IsUnavailable(err) {
-		return fmt.Errorf("subscribing to registry broker: %w", err)
+	if !client.IsUnavailable(err) {
+		return fmt.Errorf("watching registry broker: %w", err)
 	}
 
 	return app.runFilesystemWatch(ctx, o)
 }
 
-//nolint:gocognit,cyclop // subscription closure and snapshot channels share one lifecycle loop.
 func (app *application) runBrokerWatch(
 	ctx context.Context,
 	o watchOptions,
-	subscription *brokerapi.Subscription,
+	ahtClient *client.Client,
 ) error {
 	var previous []registry.Session
 	writer := &watchEventWriter{app: app, format: o.format}
 	initialized := false
-	snapshots := subscription.Snapshots
-	errorsChannel := subscription.Errors
-	for snapshots != nil || errorsChannel != nil {
-		select {
-		case <-ctx.Done():
-			return nil
-		case err, ok := <-errorsChannel:
-			if !ok {
-				errorsChannel = nil
-				continue
-			}
-			if err != nil {
-				return fmt.Errorf("watching registry broker: %w", err)
-			}
-		case state, ok := <-snapshots:
-			if !ok {
-				snapshots = nil
-				continue
-			}
-
-			if !initialized {
-				initialized = true
-				previous = state.Sessions
-				if !o.noSnapshot {
-					if err := writer.write(snapshotWatchEvents(previous, o.now())); err != nil {
-						return err
-					}
-				}
-				notifyWatchReady(o.ready)
-				continue
-			}
-
-			events := diffWatchEvents(
-				watchSessionMap(previous),
-				watchSessionMap(state.Sessions),
-				o.now(),
-			)
-			if err := writer.write(events); err != nil {
-				return err
-			}
+	err := ahtClient.Watch(ctx, o.filter, func(state registry.StateSnapshot) error {
+		if !initialized {
+			initialized = true
 			previous = state.Sessions
+			if !o.noSnapshot {
+				if err := writer.write(snapshotWatchEvents(previous, o.now())); err != nil {
+					return err
+				}
+			}
+			notifyWatchReady(o.ready)
+			return nil
 		}
-	}
 
+		events := diffWatchEvents(
+			watchSessionMap(previous),
+			watchSessionMap(state.Sessions),
+			o.now(),
+		)
+		if err := writer.write(events); err != nil {
+			return err
+		}
+		previous = state.Sessions
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("watching AHT state: %w", err)
+	}
 	return nil
 }
 

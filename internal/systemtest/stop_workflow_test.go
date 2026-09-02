@@ -16,7 +16,7 @@ import (
 
 	"github.com/zigai/aht/internal/processinfo"
 	"github.com/zigai/aht/pkg/registry"
-	"github.com/zigai/aht/pkg/tmuxctx"
+	"github.com/zigai/aht/internal/tmuxctx"
 )
 
 type systemStopResult struct {

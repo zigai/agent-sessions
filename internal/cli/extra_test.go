@@ -12,8 +12,8 @@ import (
 
 	"github.com/zigai/aht/internal/observer"
 	"github.com/zigai/aht/internal/processinfo"
+	"github.com/zigai/aht/internal/tmuxctx"
 	"github.com/zigai/aht/pkg/registry"
-	"github.com/zigai/aht/pkg/tmuxctx"
 )
 
 var errTestPaneList = errors.New("pane inventory unavailable")

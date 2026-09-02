@@ -9,9 +9,9 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/zigai/aht/internal/broker"
+	"github.com/zigai/aht/internal/brokerapi"
 	"github.com/zigai/aht/internal/observer"
 	"github.com/zigai/aht/internal/service"
-	"github.com/zigai/aht/pkg/brokerapi"
 	"github.com/zigai/aht/pkg/registry"
 )
 

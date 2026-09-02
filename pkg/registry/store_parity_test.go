@@ -30,8 +30,8 @@ func exerciseEquivalentStores(t *testing.T, seed uint64) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	fileStore.SetNowForTest(func() time.Time { return base.Add(time.Hour) })
-	memoryStore.SetNowForTest(func() time.Time { return base.Add(time.Hour) })
+	fileStore.setNowForTest(func() time.Time { return base.Add(time.Hour) })
+	memoryStore.setNowForTest(func() time.Time { return base.Add(time.Hour) })
 
 	generator := rand.New(rand.NewPCG(seed, seed^0x9e3779b97f4a7c15)) //nolint:gosec // Reproducible property-test sequences are required.
 	sequences := map[string]uint64{}

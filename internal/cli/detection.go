@@ -9,11 +9,11 @@ import (
 	"time"
 
 	"github.com/zigai/aht/internal/agentstate"
-	"github.com/zigai/aht/pkg/herdrctx"
-	"github.com/zigai/aht/pkg/muxctx"
+	"github.com/zigai/aht/internal/herdrctx"
+	"github.com/zigai/aht/internal/muxctx"
+	"github.com/zigai/aht/internal/tmuxctx"
+	"github.com/zigai/aht/internal/zellijctx"
 	"github.com/zigai/aht/pkg/registry"
-	"github.com/zigai/aht/pkg/tmuxctx"
-	"github.com/zigai/aht/pkg/zellijctx"
 )
 
 var errTmuxPaneNotLive = errors.New("tmux pane is not live")
