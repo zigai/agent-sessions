@@ -33,22 +33,19 @@ func TestManagedHookEmitsProtocolJSONWhenRequested(t *testing.T) {
 	}
 }
 
-func TestManagedHookGeneratedCommandUsesFastPath(t *testing.T) {
+func TestManagedHookGeneratedCommandExecutes(t *testing.T) {
 	t.Parallel()
 	var stdout bytes.Buffer
 	payload := `{"conversationId":"session-1","workspacePaths":["/repo"],"transcriptPath":"/tmp/transcript.jsonl","invocationNum":0,"initialNumSteps":0}`
-	handled, err := tryExecuteFastPath(
+	code := executeCLI(
 		context.Background(),
 		[]string{"--store", filepath.Join(t.TempDir(), "sessions.json"), "--json", "hook", "agy", "--event", "PreInvocation", "--queue"},
 		strings.NewReader(payload),
 		&stdout,
 		&bytes.Buffer{},
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !handled {
-		t.Fatal("generated hook command did not use fast path")
+	if code != 0 {
+		t.Fatalf("expected exit code 0, got %d", code)
 	}
 	if !json.Valid(stdout.Bytes()) {
 		t.Fatalf("expected protocol JSON, got %q", stdout.String())

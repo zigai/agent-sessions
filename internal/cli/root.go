@@ -73,11 +73,10 @@ const (
 )
 
 type application struct {
-	storePath    string
-	outputJSON   bool
-	stdout       io.Writer
-	stderr       io.Writer
-	queueDrainer func(context.Context, string) error
+	storePath  string
+	outputJSON bool
+	stdout     io.Writer
+	stderr     io.Writer
 }
 
 func configureCobra() {
@@ -88,7 +87,7 @@ func configureCobra() {
 
 func NewRootCommand(stdout io.Writer, stderr io.Writer) *cobra.Command {
 	configureCobra()
-	return newRootCommand(&application{stdout: stdout, stderr: stderr, queueDrainer: kickQueueDrainer})
+	return newRootCommand(&application{stdout: stdout, stderr: stderr})
 }
 
 func newRootCommand(app *application) *cobra.Command {
@@ -143,16 +142,10 @@ func Execute() {
 }
 
 func executeCLI(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
-	if handled, err := tryExecuteFastPath(ctx, args, stdin, stdout, stderr); handled {
-		if err != nil {
-			_, _ = fmt.Fprintln(stderr, err)
-			return 1
-		}
-		return 0
-	}
 	//nolint:contextcheck // Cobra propagates ExecuteContext to every command operation.
 	root := NewRootCommand(stdout, stderr)
 	root.SetArgs(args)
+	root.SetIn(stdin)
 	if err := root.ExecuteContext(ctx); err != nil {
 		_, _ = fmt.Fprintln(stderr, err)
 		return 1
