@@ -533,23 +533,10 @@ func installPluginDirectory(
 		return Result{}, err
 	}
 
-	migrationCleanup := false
-	if plan.Migration != nil {
-		migrationCleanup, err = plan.Migration.NeedsCleanup(plan.Dir)
-		if err != nil {
-			return Result{}, fmt.Errorf("checking plugin migration: %w", err)
-		}
-	}
-	changed := pluginChanged || manifestChanged || migrationCleanup || len(obsoleteFiles) > 0
+	changed := pluginChanged || manifestChanged || len(obsoleteFiles) > 0
 
 	if changed && !options.DryRun {
-		var postStage func() error
-		if migrationCleanup {
-			postStage = func() error {
-				return plan.Migration.Cleanup(plan.Dir)
-			}
-		}
-		if err := writePluginDirectoryChanges(plugin, plan.ImportManifest, manifest, pluginChanged, manifestChanged, postStage); err != nil {
+		if err := writePluginDirectoryChanges(plugin, plan.ImportManifest, manifest, pluginChanged, manifestChanged); err != nil {
 			return Result{}, err
 		}
 		if err := removeManagedObsoleteFiles(obsoleteFiles); err != nil {
@@ -576,7 +563,6 @@ func writePluginDirectoryChanges(
 	manifest importManifest,
 	pluginChanged bool,
 	manifestChanged bool,
-	postStages ...func() error,
 ) error {
 	var rollback func() error
 	var commit func() error
@@ -596,11 +582,6 @@ func writePluginDirectoryChanges(
 			return rollbackPluginDirectory(rollback, err)
 		}
 		if err := writeImportManifest(importPlan.Path, manifest); err != nil {
-			return rollbackPluginDirectoryAndManifest(rollback, rollbackManifest, err)
-		}
-	}
-	if len(postStages) > 0 && postStages[0] != nil {
-		if err := postStages[0](); err != nil {
 			return rollbackPluginDirectoryAndManifest(rollback, rollbackManifest, err)
 		}
 	}

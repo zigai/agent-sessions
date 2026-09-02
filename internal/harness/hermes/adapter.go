@@ -66,7 +66,6 @@ func (hermesHarness) InstallPlan(binary string) harness.InstallPlan {
 		ObsoleteFiles:  nil,
 		ImportManifest: nil,
 		Registration:   newRegistration(hermesCommand, hermesPluginName, "0.0."+version),
-		Migration:      nil,
 	}}}}
 }
 

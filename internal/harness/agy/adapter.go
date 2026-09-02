@@ -91,7 +91,6 @@ func (agyHarness) InstallPlan(binary string) harness.InstallPlan {
 			Components: []string{agyImportComponent},
 		},
 		Registration: nil,
-		Migration:    legacyMigration{},
 	}}, harness.ShimAction{}}}
 }
 

@@ -73,7 +73,6 @@ func (clineHarness) InstallPlan(binary string) harness.InstallPlan {
 		ObsoleteFiles:  clineLegacyHookPaths(),
 		ImportManifest: nil,
 		Registration:   nil,
-		Migration:      nil,
 	}}}}
 }
 

@@ -166,12 +166,6 @@ type PluginDirectoryInstallPlan struct {
 	ObsoleteFiles  []string
 	ImportManifest *ImportManifestInstallPlan
 	Registration   PluginRegistration
-	Migration      PluginDirectoryMigration
-}
-
-type PluginDirectoryMigration interface {
-	NeedsCleanup(pluginDir string) (bool, error)
-	Cleanup(pluginDir string) error
 }
 type PluginRegistrationState uint8
 

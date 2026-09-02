@@ -74,7 +74,6 @@ func (openClawHarness) InstallPlan(binary string) harness.InstallPlan {
 		ObsoleteFiles:  nil,
 		ImportManifest: nil,
 		Registration:   newRegistration(openClawCommand, openClawPluginName, "0.0."+version, true),
-		Migration:      nil,
 	}}}}
 }
 

@@ -87,7 +87,6 @@ func (gooseHarness) InstallPlan(binary string) harness.InstallPlan {
 		ObsoleteFiles:  nil,
 		ImportManifest: nil,
 		Registration:   nil,
-		Migration:      nil,
 	}}}}
 }
 
