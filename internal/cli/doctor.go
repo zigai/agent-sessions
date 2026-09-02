@@ -13,6 +13,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/zigai/aht/internal/agentstate"
+	"github.com/zigai/aht/internal/config"
 	harness "github.com/zigai/aht/internal/harness/catalog"
 	"github.com/zigai/aht/internal/install"
 	"github.com/zigai/aht/internal/processinfo"
@@ -169,6 +170,7 @@ func (app *application) runDoctor(ctx context.Context, includeAll bool) doctorRe
 	}
 	app.addObserverReconciliationCheck(&result, store.Path())
 	app.addDetectionManifestCheck(&result)
+	app.addConfigFileCheck(&result)
 
 	queue := reportqueue.New(store.Path())
 	queueStatus, queueErr := queue.Status(ctx)
@@ -278,6 +280,27 @@ func (app *application) addDetectionManifestCheck(result *doctorResult) {
 		return
 	}
 	result.Checks = append(result.Checks, doctorCheck{Name: "detection.manifests", Status: doctorOK, Message: "all bundled and configured manifests are valid"})
+}
+
+func (app *application) addConfigFileCheck(result *doctorResult) {
+	_, err := app.loadConfig()
+	path := app.resolvedConfigPath
+	if path == "" {
+		path = config.DefaultPath()
+	}
+	if err != nil {
+		result.Checks = append(result.Checks, doctorCheck{Name: "config.file", Status: doctorError, Message: err.Error()})
+		return
+	}
+	if _, statErr := os.Stat(path); statErr != nil {
+		if errors.Is(statErr, os.ErrNotExist) {
+			result.Checks = append(result.Checks, doctorCheck{Name: "config.file", Status: doctorOK, Message: "no config file present (using defaults)"})
+			return
+		}
+		result.Checks = append(result.Checks, doctorCheck{Name: "config.file", Status: doctorError, Message: statErr.Error()})
+		return
+	}
+	result.Checks = append(result.Checks, doctorCheck{Name: "config.file", Status: doctorOK, Message: fmt.Sprintf("config file is valid (%s)", path)})
 }
 
 func (app *application) integrationStatus(ctx context.Context, id registry.Harness) (doctorStatus, string, bool) {

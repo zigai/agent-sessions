@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/zigai/aht/internal/muxctx"
 	"github.com/zigai/aht/internal/observer"
 	"github.com/zigai/aht/internal/processinfo"
-	"github.com/zigai/aht/internal/tmuxctx"
 	"github.com/zigai/aht/pkg/registry"
 )
 
@@ -30,7 +30,7 @@ func TestQuietLongRunningObserverStreamsRequestedJSONLines(t *testing.T) {
 			cancel()
 			return nil, nil
 		},
-		PaneList:    func(context.Context) ([]tmuxctx.Pane, error) { return nil, nil },
+		PaneList:    func(context.Context) ([]muxctx.Pane, error) { return nil, nil },
 		CatalogList: func(context.Context) ([]observer.CatalogEntry, error) { return nil, nil },
 	})
 	if err := app.runObserver(ctx, observeOptions{interval: time.Second, quiet: true}, watcher); err != nil {
@@ -57,7 +57,7 @@ func TestRunObserverOnceReturnsDegradedErrorAfterWritingResult(t *testing.T) {
 		watcher := observer.New(observer.Options{
 			Store:       registry.NewFileStore(filepath.Join(t.TempDir(), "sessions.json")),
 			ProcessList: func(context.Context) ([]processinfo.Process, error) { return nil, nil },
-			PaneList:    func(context.Context) ([]tmuxctx.Pane, error) { return nil, errTestPaneList },
+			PaneList:    func(context.Context) ([]muxctx.Pane, error) { return nil, errTestPaneList },
 			CatalogList: func(context.Context) ([]observer.CatalogEntry, error) { return nil, nil },
 		})
 		err := app.runObserver(context.Background(), observeOptions{once: true}, watcher)

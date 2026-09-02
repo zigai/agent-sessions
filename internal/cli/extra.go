@@ -10,16 +10,20 @@ import (
 
 	"github.com/zigai/aht/internal/broker"
 	"github.com/zigai/aht/internal/brokerapi"
+	"github.com/zigai/aht/internal/config"
 	"github.com/zigai/aht/internal/observer"
 	"github.com/zigai/aht/internal/service"
 	"github.com/zigai/aht/pkg/registry"
 )
 
 type observeOptions struct {
-	once     bool
-	quiet    bool
-	interval time.Duration
-	grace    time.Duration
+	once       bool
+	quiet      bool
+	interval   time.Duration
+	grace      time.Duration
+	autoClean  bool
+	maxGoneAge time.Duration
+	store      registry.Store
 }
 
 const (
@@ -35,6 +39,13 @@ func (app *application) newTrackerRunCommand() *cobra.Command {
 		Use:   "run",
 		Short: "Observe agent processes and native sessions",
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			cfg, err := app.loadConfig()
+			if err != nil {
+				return err
+			}
+			if err := applyTrackerConfig(&o, cmd, cfg); err != nil {
+				return err
+			}
 			if o.interval <= 0 {
 				return errInvalidObserveInterval
 			}
@@ -43,13 +54,14 @@ func (app *application) newTrackerRunCommand() *cobra.Command {
 			}
 			if o.once {
 				watcher := observer.New(observer.Options{
-					StorePath:   app.store().Path(),
-					Interval:    o.interval,
-					GracePeriod: o.grace,
-					HealthPath:  app.store().Path() + ".observer-health.json",
-					Quiet:       o.quiet,
+					StorePath:          app.store().Path(),
+					Interval:           o.interval,
+					GracePeriod:        o.grace,
+					HealthPath:         app.store().Path() + ".observer-health.json",
+					Quiet:              o.quiet,
+					DetectionConfigDir: cfg.Detection.ManifestsDir,
 				})
-
+				o.store = app.store()
 				return app.runObserver(cmd.Context(), o, watcher)
 			}
 
@@ -58,18 +70,19 @@ func (app *application) newTrackerRunCommand() *cobra.Command {
 				return fmt.Errorf("opening in-memory registry: %w", err)
 			}
 			watcher := observer.New(observer.Options{
-				Store:       store,
-				StorePath:   store.Path(),
-				Interval:    o.interval,
-				GracePeriod: o.grace,
-				HealthPath:  store.Path() + ".observer-health.json",
-				Quiet:       o.quiet,
+				Store:              store,
+				StorePath:          store.Path(),
+				Interval:           o.interval,
+				GracePeriod:        o.grace,
+				HealthPath:         store.Path() + ".observer-health.json",
+				Quiet:              o.quiet,
+				DetectionConfigDir: cfg.Detection.ManifestsDir,
 			})
 			server := broker.New(broker.Options{
 				Store:      store,
 				SocketPath: brokerapi.SocketPath(store.Path()),
 			})
-
+			o.store = store
 			return app.runRealtimeObserver(cmd.Context(), o, watcher, store, server)
 		},
 	}
@@ -79,6 +92,46 @@ func (app *application) newTrackerRunCommand() *cobra.Command {
 	flags.DurationVar(&o.grace, "grace-period", 0, "absence grace period")
 	flags.BoolVar(&o.quiet, "quiet", false, "suppress human cycle output and diagnostics")
 	return command
+}
+
+func applyTrackerConfig(o *observeOptions, cmd *cobra.Command, cfg config.Config) error {
+	if err := applyTrackerIntervals(o, cmd, cfg); err != nil {
+		return err
+	}
+	if !cmd.Flags().Changed("quiet") && cfg.Tracker.Quiet != nil {
+		o.quiet = *cfg.Tracker.Quiet
+	}
+	applyTrackerAutoClean(o, cfg)
+	return nil
+}
+
+func applyTrackerIntervals(o *observeOptions, cmd *cobra.Command, cfg config.Config) error {
+	f := cmd.Flags()
+	if !f.Changed("interval") && cfg.Tracker.Interval != "" {
+		d, err := config.ParseDuration(cfg.Tracker.Interval)
+		if err != nil {
+			return fmt.Errorf("parsing tracker interval: %w", err)
+		}
+		o.interval = d
+	}
+	if !f.Changed("grace-period") && cfg.Tracker.GracePeriod != "" {
+		d, err := config.ParseDuration(cfg.Tracker.GracePeriod)
+		if err != nil {
+			return fmt.Errorf("parsing tracker grace period: %w", err)
+		}
+		o.grace = d
+	}
+	return nil
+}
+
+func applyTrackerAutoClean(o *observeOptions, cfg config.Config) {
+	if cfg.Retention.AutoClean != nil && *cfg.Retention.AutoClean && cfg.Retention.MaxGoneAge != "" {
+		d, err := config.ParseDuration(cfg.Retention.MaxGoneAge)
+		if err == nil && d >= 0 {
+			o.autoClean = true
+			o.maxGoneAge = d
+		}
+	}
 }
 
 type trackerComponentResult struct {
@@ -132,14 +185,24 @@ func (app *application) runObserver(ctx context.Context, options observeOptions,
 	if !options.quiet {
 		app.warnf("observer started interval=%s grace-period=%s\n", options.interval, options.grace)
 	}
+	store := options.store
+	if store == nil {
+		store = app.store()
+	}
 	handle := func(result observer.Result) error {
+		if options.autoClean && store != nil {
+			_, _ = store.GC(ctx, options.maxGoneAge)
+		}
 		if app.outputJSON {
 			return app.writeJSONLine(result)
+		}
+		if options.quiet {
+			return nil
 		}
 		return app.writeObserverResult(result)
 	}
 	var err error
-	if options.quiet && !app.outputJSON {
+	if options.quiet && !app.outputJSON && !options.autoClean {
 		err = watcher.Run(ctx)
 	} else {
 		err = watcher.RunWithResults(ctx, handle)
@@ -154,6 +217,15 @@ func (app *application) runObserverOnce(ctx context.Context, options observeOpti
 	result, err := watcher.RunOnce(ctx)
 	if err != nil {
 		return fmt.Errorf("observer run once: %w", err)
+	}
+	if options.autoClean {
+		store := options.store
+		if store == nil {
+			store = app.store()
+		}
+		if store != nil {
+			_, _ = store.GC(ctx, options.maxGoneAge)
+		}
 	}
 	var writeErr error
 	if app.outputJSON {

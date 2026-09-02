@@ -26,7 +26,6 @@ var errUnsupportedManagedHook = errors.New("harness does not support managed hoo
 
 type managedHookOptions struct {
 	event string
-	queue bool
 }
 
 func (app *application) newHookCommand() *cobra.Command {
@@ -42,8 +41,6 @@ func (app *application) newHookCommand() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&options.event, "event", "", "native hook event name")
-	cmd.Flags().BoolVar(&options.queue, "queue", false, "durably queue the report side effect")
-	_ = cmd.Flags().MarkHidden("queue")
 
 	return cmd
 }

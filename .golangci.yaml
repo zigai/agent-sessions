@@ -201,6 +201,8 @@ linters:
 
       - path: "internal/cli/.*\\.go"
         linters: [exhaustruct]
+      - path: "internal/config/.*\\.go"
+        linters: [exhaustruct]
       - path: "internal/install/.*\\.go"
         linters: [dupl]
 

@@ -213,7 +213,7 @@ func TestJSONInvocationFailureLeavesStdoutEmpty(t *testing.T) {
 }
 
 func TestObsoleteQueueCommandsAreRemoved(t *testing.T) {
-	for _, command := range []string{drainQueueCommandName, queueStatusCommandName} {
+	for _, command := range []string{"drain-queue", "queue-status"} {
 		root := NewRootCommand(&bytes.Buffer{}, &bytes.Buffer{})
 		root.SetArgs([]string{command})
 		if err := root.ExecuteContext(context.Background()); err == nil {

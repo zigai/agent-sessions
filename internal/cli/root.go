@@ -22,6 +22,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/zigai/aht/internal/agentstate"
+	"github.com/zigai/aht/internal/config"
 	"github.com/zigai/aht/internal/harness"
 	harnesspkg "github.com/zigai/aht/internal/harness/catalog"
 	"github.com/zigai/aht/internal/herdrctx"
@@ -73,10 +74,35 @@ const (
 )
 
 type application struct {
-	storePath  string
-	outputJSON bool
-	stdout     io.Writer
-	stderr     io.Writer
+	storePath          string
+	configPath         string
+	cfgLoaded          bool
+	cfg                config.Config
+	resolvedConfigPath string
+	cfgErr             error
+	outputJSON         bool
+	stdout             io.Writer
+	stderr             io.Writer
+}
+
+func (app *application) loadConfig() (config.Config, error) {
+	if app.cfgLoaded {
+		return app.cfg, app.cfgErr
+	}
+	if app.configPath == "" {
+		targetPath := config.DefaultPath()
+		if _, statErr := os.Stat(targetPath); errors.Is(statErr, os.ErrNotExist) {
+			// Best-effort auto-creation on first run. If this fails (e.g. read-only filesystem),
+			// proceed without failing startup; config.Load will use built-in defaults.
+			_, _ = config.EnsureConfigFile(targetPath)
+		}
+	}
+	cfg, resolved, err := config.Load(app.configPath)
+	app.cfg = cfg
+	app.resolvedConfigPath = resolved
+	app.cfgErr = err
+	app.cfgLoaded = true
+	return app.cfg, app.cfgErr
 }
 
 func configureCobra() {
@@ -104,6 +130,7 @@ func newRootCommand(app *application) *cobra.Command {
 	root.SetOut(app.stdout)
 	root.SetErr(app.stderr)
 	root.PersistentFlags().StringVar(&app.storePath, "store", "", "registry state file path")
+	root.PersistentFlags().StringVar(&app.configPath, "config", "", "config file path")
 	root.PersistentFlags().BoolVar(&app.outputJSON, "json", false, "emit JSON (JSON Lines for streams)")
 	root.Flags().BoolVarP(&showVersion, "version", "v", false, "print version")
 	root.AddCommand(
@@ -128,6 +155,7 @@ func (app *application) newManageCommand() *cobra.Command {
 		app.newTrackerCommand(),
 		app.newStateCommand(),
 		app.newDoctorCommand(),
+		app.newManageConfigCommand(),
 	)
 	return command
 }
@@ -228,7 +256,6 @@ type reportOptions struct {
 	rawStdin        bool
 	rawDefaultsOnly bool
 	noTmux          bool
-	queue           bool
 	quiet           bool
 	resumeCommand   []string
 	evidence        string
@@ -286,8 +313,6 @@ func (app *application) newReportCommand() *cobra.Command {
 	f.BoolVar(&options.rawStdin, "raw-stdin", false, "store stdin as raw hook payload")
 	f.BoolVar(&options.rawDefaultsOnly, "raw-stdin-defaults-only", false, "read stdin for defaults without storing raw payload")
 	f.BoolVar(&options.noTmux, "no-tmux", false, "do not collect tmux context")
-	f.BoolVar(&options.queue, "queue", false, "durably queue observation")
-	_ = f.MarkHidden("queue")
 	_ = f.MarkHidden("evidence")
 	f.BoolVar(&options.quiet, "quiet", false, "suppress human-readable output")
 	return cmd
@@ -515,19 +540,24 @@ func applyNativeLifecycleDefaults(options *reportOptions, attributes map[string]
 
 	switch normalizedNativeLifecycleEvent(event) {
 	case "start":
-		if options.lifecycle == "" {
-			options.lifecycle = string(registry.NativeLifecycleStart)
-			if nativeLifecycleSourceIsResume(attributes) {
-				options.lifecycle = string(registry.NativeLifecycleResume)
-			}
+		lifecycle := string(registry.NativeLifecycleStart)
+		if nativeLifecycleSourceIsResume(attributes) {
+			lifecycle = string(registry.NativeLifecycleResume)
 		}
-		applyStringDefault(&options.presence, string(registry.PresenceLive))
+		applyLifecyclePresence(options, lifecycle, string(registry.PresenceLive))
 	case "resume":
-		applyStringDefault(&options.lifecycle, string(registry.NativeLifecycleResume))
-		applyStringDefault(&options.presence, string(registry.PresenceLive))
+		applyLifecyclePresence(options, string(registry.NativeLifecycleResume), string(registry.PresenceLive))
 	case "end":
-		applyStringDefault(&options.lifecycle, string(registry.NativeLifecycleEnd))
-		applyStringDefault(&options.presence, string(registry.PresenceGone))
+		applyLifecyclePresence(options, string(registry.NativeLifecycleEnd), string(registry.PresenceGone))
+	}
+}
+
+func applyLifecyclePresence(options *reportOptions, lifecycle, presence string) {
+	if options.lifecycle == "" {
+		options.lifecycle = lifecycle
+	}
+	if options.presence == "" {
+		options.presence = presence
 	}
 }
 
@@ -677,16 +707,6 @@ func reportMultiplexerContext() registry.MultiplexerContext {
 	return zellijctx.Current()
 }
 
-func reportMultiplexerContextFromEnv(env map[string]string) registry.MultiplexerContext {
-	if context := herdrctx.CurrentWithEnv(herdrctx.Env{
-		Enabled: env["HERDR_ENV"], SessionName: env["HERDR_SESSION"], SocketPath: env["HERDR_SOCKET_PATH"],
-		WorkspaceID: env["HERDR_WORKSPACE_ID"], TabID: env["HERDR_TAB_ID"], PaneID: env["HERDR_PANE_ID"],
-	}); !context.Empty() {
-		return context
-	}
-	return zellijctx.CurrentWithEnv(zellijctx.Env{SessionName: env["ZELLIJ_SESSION_NAME"], PaneID: env["ZELLIJ_PANE_ID"]})
-}
-
 func reportProcessAncestors(ctx context.Context, pid int) []processinfo.Process {
 	if pid <= 0 {
 		pid = os.Getppid()
@@ -773,10 +793,11 @@ type listOptions struct {
 func (app *application) newListCommand() *cobra.Command {
 	o := listOptions{}
 	cmd := &cobra.Command{Use: listCommandName, Short: "Show known sessions", RunE: func(c *cobra.Command, _ []string) error {
-		f := c.Flags()
-		o.absoluteSet = f.Changed("absolute-time")
-		o.sortSet = f.Changed("sort")
-		o.descSet = f.Changed("desc")
+		cfg, err := app.loadConfig()
+		if err != nil {
+			return err
+		}
+		applyListConfig(&o, c, cfg)
 		return app.runList(c.Context(), o)
 	}}
 	f := cmd.Flags()
@@ -791,6 +812,33 @@ func (app *application) newListCommand() *cobra.Command {
 	f.BoolVar(&o.desc, "desc", false, "sort descending")
 	f.BoolVar(&o.full, "full", false, "show complete values using an adaptive layout")
 	return cmd
+}
+
+func applyListConfig(o *listOptions, cmd *cobra.Command, cfg config.Config) {
+	f := cmd.Flags()
+	if !f.Changed("presence") && cfg.UI.DefaultPresence != "" {
+		o.presence = cfg.UI.DefaultPresence
+	}
+	if !f.Changed("sort") && cfg.UI.Sort != "" {
+		o.sortBy = cfg.UI.Sort
+		o.sortSet = true
+	} else {
+		o.sortSet = f.Changed("sort")
+	}
+	if !f.Changed("desc") && cfg.UI.SortDesc != nil {
+		o.desc = *cfg.UI.SortDesc
+		o.descSet = true
+	} else {
+		o.descSet = f.Changed("desc")
+	}
+	if !f.Changed("absolute-time") {
+		if (cfg.UI.AbsoluteTime != nil && *cfg.UI.AbsoluteTime) ||
+			cfg.UI.TimeFormat == "absolute" || cfg.UI.TimeFormat == "iso8601" {
+			o.absoluteTime = true
+		}
+	} else {
+		o.absoluteSet = f.Changed("absolute-time")
+	}
 }
 
 func (app *application) runList(ctx context.Context, o listOptions) error {
@@ -823,11 +871,15 @@ func buildFilter(o listOptions) (registry.Filter, error) {
 		f.Harness = h
 	}
 	if o.presence != "" {
-		p, e := registry.NormalizePresence(o.presence)
-		if e != nil {
-			return f, fmt.Errorf("normalize presence: %w", e)
+		if strings.EqualFold(o.presence, "all") {
+			f.Presence = ""
+		} else {
+			p, e := registry.NormalizePresence(o.presence)
+			if e != nil {
+				return f, fmt.Errorf("normalize presence: %w", e)
+			}
+			f.Presence = p
 		}
-		f.Presence = p
 	}
 	if o.activity != "" {
 		a, e := registry.NormalizeActivity(o.activity)
@@ -853,6 +905,7 @@ func (app *application) runListSessions(ctx context.Context, o listOptions) erro
 	if e != nil {
 		return fmt.Errorf("listing sessions: %w", e)
 	}
+	ss = applyConfigFilter(ss, app.cfg.Filter, o.harness)
 	if e = sortListSessions(ss, o); e != nil {
 		return e
 	}
@@ -881,6 +934,87 @@ func (app *application) runListSessions(ctx context.Context, o listOptions) erro
 		return app.writeWrappedHumanTable(columns, rows)
 	}
 	return app.writeHumanTable(listTableColumns(rows, maxWidth), rows)
+}
+
+func matchPathPattern(path, pattern string) bool {
+	if pattern == "" || path == "" {
+		return false
+	}
+	cleanPath := filepath.Clean(path)
+	cleanPattern := filepath.Clean(pattern)
+	if cleanPath == cleanPattern {
+		return true
+	}
+	if matchGlobPattern(cleanPath, cleanPattern, pattern) {
+		return true
+	}
+	return matchPrefixOrWildcard(cleanPath, pattern)
+}
+
+func matchGlobPattern(cleanPath, cleanPattern, pattern string) bool {
+	if matched, err := filepath.Match(pattern, cleanPath); err == nil && matched {
+		return true
+	}
+	if matched, err := filepath.Match(cleanPattern, cleanPath); err == nil && matched {
+		return true
+	}
+	return false
+}
+
+func matchPrefixOrWildcard(cleanPath, pattern string) bool {
+	trimmed := strings.TrimSuffix(strings.TrimSuffix(pattern, "/*"), "/")
+	if cleanPath == trimmed || strings.HasPrefix(cleanPath, trimmed+string(filepath.Separator)) {
+		return true
+	}
+	if strings.Contains(pattern, "**") {
+		sub := strings.Trim(strings.Trim(pattern, "*"), string(filepath.Separator))
+		if sub != "" && (strings.Contains(cleanPath, string(filepath.Separator)+sub+string(filepath.Separator)) ||
+			strings.HasSuffix(cleanPath, string(filepath.Separator)+sub) ||
+			strings.HasPrefix(cleanPath, sub+string(filepath.Separator)) ||
+			cleanPath == sub) {
+			return true
+		}
+	}
+	return false
+}
+
+func sessionMatchesIgnorePaths(s registry.Session, paths []string) bool {
+	if s.CWD == "" || len(paths) == 0 {
+		return false
+	}
+	for _, pat := range paths {
+		if matchPathPattern(s.CWD, pat) {
+			return true
+		}
+	}
+	return false
+}
+
+func applyConfigFilter(sessions []registry.Session, filter config.FilterConfig, agentExplicit string) []registry.Session {
+	if len(sessions) == 0 {
+		return sessions
+	}
+	ignoreHarnessMap := make(map[string]struct{}, len(filter.IgnoreHarnesses))
+	for _, h := range filter.IgnoreHarnesses {
+		norm := strings.ToLower(strings.TrimSpace(h))
+		if norm != "" {
+			ignoreHarnessMap[norm] = struct{}{}
+		}
+	}
+
+	result := make([]registry.Session, 0, len(sessions))
+	for _, s := range sessions {
+		if agentExplicit == "" && len(ignoreHarnessMap) > 0 {
+			if _, ignored := ignoreHarnessMap[strings.ToLower(string(s.Harness))]; ignored {
+				continue
+			}
+		}
+		if sessionMatchesIgnorePaths(s, filter.IgnorePaths) {
+			continue
+		}
+		result = append(result, s)
+	}
+	return result
 }
 
 func listTableColumns(rows [][]string, maxWidth int) []humanColumn {
@@ -1361,9 +1495,15 @@ func readStdinPayloadData(stdin io.Reader, storeRaw, defaultsOnly bool) (json.Ra
 }
 
 func applyPayloadDefaults(o *reportOptions, a map[string]string, d harness.PayloadDefaults) {
-	applyStringDefault(&o.sessionID, d.SessionID)
-	applyStringDefault(&o.sessionPath, d.SessionPath)
-	applyStringDefault(&o.event, d.Event)
+	if o.sessionID == "" {
+		o.sessionID = d.SessionID
+	}
+	if o.sessionPath == "" {
+		o.sessionPath = d.SessionPath
+	}
+	if o.event == "" {
+		o.event = d.Event
+	}
 	applyCWDDefault(o, d.CWD)
 	applyProjectRootDefault(o, d.ProjectRoot)
 	maps.Copy(a, d.Attributes)
@@ -1375,12 +1515,6 @@ func applyReportRuntimeDefaults(o *reportOptions) {
 	}
 	if o.projectRoot == "" && o.projectRootAuto {
 		o.projectRoot = findProjectRoot(o.cwd)
-	}
-}
-
-func applyStringDefault(p *string, v string) {
-	if *p == "" {
-		*p = v
 	}
 }
 
@@ -1397,14 +1531,18 @@ func applyProjectRootDefault(o *reportOptions, v string) {
 	}
 }
 
-func tmuxSessionLabel(c registry.TmuxContext) string {
-	if c.SessionName != "" {
-		return c.SessionName
+func sessionLabel(name, id string) string {
+	if name != "" {
+		return name
 	}
-	if c.SessionID != "" {
-		return c.SessionID
+	if id != "" {
+		return id
 	}
 	return "-"
+}
+
+func tmuxSessionLabel(c registry.TmuxContext) string {
+	return sessionLabel(c.SessionName, c.SessionID)
 }
 
 func tmuxWindowLabel(c registry.TmuxContext) string {
@@ -1421,13 +1559,7 @@ func tmuxWindowLabel(c registry.TmuxContext) string {
 }
 
 func multiplexerSessionLabel(context registry.MultiplexerContext) string {
-	if context.SessionName != "" {
-		return context.SessionName
-	}
-	if context.SessionID != "" {
-		return context.SessionID
-	}
-	return "-"
+	return sessionLabel(context.SessionName, context.SessionID)
 }
 
 func multiplexerContainerLabel(context registry.MultiplexerContext) string {

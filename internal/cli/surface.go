@@ -4,11 +4,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/pelletier/go-toml/v2"
 	"github.com/spf13/cobra"
+
+	"github.com/zigai/aht/internal/config"
 
 	harnesspkg "github.com/zigai/aht/internal/harness/catalog"
 	"github.com/zigai/aht/internal/install"
@@ -330,6 +334,24 @@ func (app *application) newTrackerCommand() *cobra.Command {
 func (app *application) newTrackerEnableCommand() *cobra.Command {
 	options := serviceOptions{binary: defaultInstallBinary(), interval: serviceDefaultInterval}
 	command := &cobra.Command{Use: "enable", Short: "Install, update, and start background tracking", RunE: func(cmd *cobra.Command, _ []string) error {
+		cfg, err := app.loadConfig()
+		if err != nil {
+			return err
+		}
+		if !cmd.Flags().Changed("interval") && cfg.Tracker.Interval != "" {
+			d, err := config.ParseDuration(cfg.Tracker.Interval)
+			if err != nil {
+				return fmt.Errorf("parsing tracker interval: %w", err)
+			}
+			options.interval = d
+		}
+		if !cmd.Flags().Changed("grace-period") && cfg.Tracker.GracePeriod != "" {
+			d, err := config.ParseDuration(cfg.Tracker.GracePeriod)
+			if err != nil {
+				return fmt.Errorf("parsing tracker grace period: %w", err)
+			}
+			options.grace = d
+		}
 		parsed, err := app.parseServiceOptions(options)
 		if err != nil {
 			return err
@@ -420,7 +442,19 @@ type cleanOptions struct {
 func (app *application) newRegistryCleanCommand() *cobra.Command {
 	options := cleanOptions{}
 	command := &cobra.Command{Use: "clean", Short: "Delete gone session records", RunE: func(cmd *cobra.Command, _ []string) error {
+		cfg, err := app.loadConfig()
+		if err != nil {
+			return err
+		}
 		options.ageSet = cmd.Flags().Changed("older-than")
+		if !options.all && !options.ageSet && cfg.Retention.MaxGoneAge != "" {
+			d, err := config.ParseDuration(cfg.Retention.MaxGoneAge)
+			if err != nil {
+				return fmt.Errorf("parsing max gone age: %w", err)
+			}
+			options.olderThan = d
+			options.ageSet = true
+		}
 		return app.runRegistryClean(cmd.Context(), options)
 	}}
 	command.Flags().BoolVar(&options.all, "all", false, "delete every gone session record")
@@ -463,14 +497,20 @@ type explainedInfoResult struct {
 func (app *application) newInfoCommand() *cobra.Command {
 	options := infoOptions{}
 	command := &cobra.Command{Use: "info [session]", Short: "Show session details and optionally explain activity", Args: cobra.MaximumNArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		cfg, err := app.loadConfig()
+		if err != nil {
+			return err
+		}
+		if !cmd.Flags().Changed("config-dir") && cfg.Detection.ManifestsDir != "" {
+			options.configDir = cfg.Detection.ManifestsDir
+		}
 		if (len(args) == 0) == (options.paneID == "") {
 			return errInfoReference
 		}
-		if options.configDir != "" && !options.explain {
+		if cmd.Flags().Changed("config-dir") && !options.explain {
 			return errInfoConfig
 		}
 		var session registry.Session
-		var err error
 		if options.paneID != "" {
 			session, err = app.resolvePaneSession(cmd.Context(), options.paneID)
 		} else {
@@ -541,11 +581,24 @@ func (app *application) newWatchCommand() *cobra.Command {
 	var noSnapshot bool
 	var watchFormat string
 	command := &cobra.Command{Use: "watch", Short: "Stream session changes", RunE: func(cmd *cobra.Command, _ []string) error {
+		cfg, err := app.loadConfig()
+		if err != nil {
+			return err
+		}
+		if !cmd.Flags().Changed("presence") && cfg.UI.DefaultPresence != "" {
+			options.presence = cfg.UI.DefaultPresence
+		}
 		filter, err := buildFilter(options)
 		if err != nil {
 			return err
 		}
-		return app.runWatch(cmd.Context(), watchOptions{filter: filter, noSnapshot: noSnapshot, format: watchFormat, formatSet: cmd.Flags().Changed("format")})
+		return app.runWatch(cmd.Context(), watchOptions{
+			filter:     filter,
+			agent:      options.harness,
+			noSnapshot: noSnapshot,
+			format:     watchFormat,
+			formatSet:  cmd.Flags().Changed("format"),
+		})
 	}}
 	flags := command.Flags()
 	flags.StringVar(&options.harness, "agent", "", "filter by agent")
@@ -589,4 +642,111 @@ func (app *application) newStopCommand() *cobra.Command {
 	command.Flags().BoolVar(&dryRun, "dry-run", false, "show targets without sending signals")
 	command.Flags().BoolVarP(&yes, "yes", "y", false, "confirm stopping all sessions without prompting")
 	return command
+}
+
+func (app *application) newManageConfigCommand() *cobra.Command {
+	command := &cobra.Command{
+		Use:   "config",
+		Short: "Inspect configuration path and effective settings",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return cmd.Help()
+		},
+	}
+	command.AddCommand(
+		app.newManageConfigPathCommand(),
+		app.newManageConfigShowCommand(),
+		app.newManageConfigInitCommand(),
+	)
+	return command
+}
+
+func (app *application) newManageConfigPathCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "path",
+		Short: "Print resolved configuration file path",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			_, err := app.loadConfig()
+			if err != nil && !errors.Is(err, os.ErrNotExist) {
+				return err
+			}
+			path := app.resolvedConfigPath
+			if path == "" {
+				path = config.DefaultPath()
+			}
+			if app.outputJSON {
+				return app.writeJSON(map[string]string{"path": path})
+			}
+			return app.writef("%s\n", path)
+		},
+	}
+}
+
+func (app *application) newManageConfigShowCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "show",
+		Short: "Print effective configuration",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			cfg, err := app.loadConfig()
+			if err != nil {
+				return err
+			}
+			if app.outputJSON {
+				return app.writeJSON(cfg)
+			}
+			data, err := toml.Marshal(cfg)
+			if err != nil {
+				return fmt.Errorf("encode config toml: %w", err)
+			}
+			return app.writef("%s", string(data))
+		},
+	}
+}
+
+func (app *application) newManageConfigInitCommand() *cobra.Command {
+	var force bool
+	cmd := &cobra.Command{
+		Use:   "init",
+		Short: "Initialize default configuration file",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			path := app.configPath
+			if path == "" {
+				path = config.DefaultPath()
+			}
+
+			info, err := os.Stat(path)
+			if err != nil && !errors.Is(err, os.ErrNotExist) {
+				return fmt.Errorf("%w %s: %w", config.ErrAccessConfig, path, err)
+			}
+			if err == nil && info.IsDir() {
+				return fmt.Errorf("%w: %s", config.ErrConfigIsDirectory, path)
+			}
+			if err == nil && !force {
+				if app.outputJSON {
+					return app.writeJSON(map[string]any{
+						"created": false,
+						"path":    path,
+						"message": "config file already exists (use --force to overwrite)",
+					})
+				}
+				return app.writef("config file already exists at %s (use --force to overwrite)\n", path)
+			}
+
+			if err := config.WriteConfigFile(path); err != nil {
+				return fmt.Errorf("init config: %w", err)
+			}
+			if app.outputJSON {
+				return app.writeJSON(map[string]any{
+					"created": true,
+					"path":    path,
+				})
+			}
+			return app.writef("created %s\n", path)
+		},
+	}
+	cmd.Flags().BoolVar(&force, "force", false, "overwrite existing configuration file")
+	return cmd
 }

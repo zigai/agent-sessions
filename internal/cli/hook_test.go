@@ -39,7 +39,7 @@ func TestManagedHookGeneratedCommandExecutes(t *testing.T) {
 	payload := `{"conversationId":"session-1","workspacePaths":["/repo"],"transcriptPath":"/tmp/transcript.jsonl","invocationNum":0,"initialNumSteps":0}`
 	code := executeCLI(
 		context.Background(),
-		[]string{"--store", filepath.Join(t.TempDir(), "sessions.json"), "--json", "hook", "agy", "--event", "PreInvocation", "--queue"},
+		[]string{"--store", filepath.Join(t.TempDir(), "sessions.json"), "--json", "hook", "agy", "--event", "PreInvocation"},
 		strings.NewReader(payload),
 		&stdout,
 		&bytes.Buffer{},

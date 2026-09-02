@@ -50,6 +50,7 @@ var (
 
 type watchOptions struct {
 	filter     registry.Filter
+	agent      string
 	noSnapshot bool
 	format     string
 	formatSet  bool
@@ -111,9 +112,10 @@ func (app *application) runBrokerWatch(
 	writer := &watchEventWriter{app: app, format: o.format}
 	initialized := false
 	err := ahtClient.Watch(ctx, o.filter, func(state registry.StateSnapshot) error {
+		currentSessions := applyConfigFilter(state.Sessions, app.cfg.Filter, o.agent)
 		if !initialized {
 			initialized = true
-			previous = state.Sessions
+			previous = currentSessions
 			if !o.noSnapshot {
 				if err := writer.write(snapshotWatchEvents(previous, o.now())); err != nil {
 					return err
@@ -125,13 +127,13 @@ func (app *application) runBrokerWatch(
 
 		events := diffWatchEvents(
 			watchSessionMap(previous),
-			watchSessionMap(state.Sessions),
+			watchSessionMap(currentSessions),
 			o.now(),
 		)
 		if err := writer.write(events); err != nil {
 			return err
 		}
-		previous = state.Sessions
+		previous = currentSessions
 		return nil
 	})
 	if err != nil {
@@ -154,21 +156,22 @@ func (app *application) runFilesystemWatch(ctx context.Context, o watchOptions) 
 		if app.reportWatchResultError(result) {
 			return nil
 		}
+		currentSessions := applyConfigFilter(result.Sessions, app.cfg.Filter, o.agent)
 		if result.Initial {
-			previous = result.Sessions
+			previous = currentSessions
 			if !o.noSnapshot {
-				if e := writer.write(snapshotWatchEvents(result.Sessions, o.now())); e != nil {
+				if e := writer.write(snapshotWatchEvents(previous, o.now())); e != nil {
 					return e
 				}
 			}
 			notifyWatchReady(o.ready)
 			return nil
 		}
-		events := diffWatchEvents(watchSessionMap(previous), watchSessionMap(result.Sessions), o.now())
+		events := diffWatchEvents(watchSessionMap(previous), watchSessionMap(currentSessions), o.now())
 		if e := writer.write(events); e != nil {
 			return e
 		}
-		previous = result.Sessions
+		previous = currentSessions
 		return nil
 	})
 	if err != nil {
