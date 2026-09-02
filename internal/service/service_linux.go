@@ -12,11 +12,7 @@ import (
 	"strings"
 )
 
-const (
-	linuxUnitName       = "aht-observer.service"
-	legacyLinuxUnitName = "agent-sessions-observer.service"
-	legacyManagedMarker = "agent-sessions managed observer service"
-)
+const linuxUnitName = "aht-observer.service"
 
 type linuxBackend struct {
 	options  Options
@@ -109,47 +105,6 @@ func (b *linuxBackend) unload(ctx context.Context, executor CommandExecutor) err
 		return wrapManagerError("systemctl disable observer", output, err)
 	}
 	return nil
-}
-
-func (b *linuxBackend) migrateLegacy(ctx context.Context, executor CommandExecutor, dryRun bool) (bool, error) {
-	legacyPath := filepath.Join(filepath.Dir(b.path), legacyLinuxUnitName)
-	content, err := os.ReadFile(legacyPath)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return false, nil
-		}
-		return false, fmt.Errorf("read legacy systemd service: %w", err)
-	}
-	if !isLegacyLinuxManaged(string(content)) {
-		return false, fmt.Errorf("%w: %s", ErrForeign, legacyPath)
-	}
-	if dryRun {
-		return true, nil
-	}
-	output, disableErr := executor.Run(ctx, "systemctl", "--user", "disable", "--now", legacyLinuxUnitName)
-	if disableErr != nil && !managerMissing(output) {
-		return false, wrapManagerError("systemctl disable legacy observer", output, disableErr)
-	}
-	if err := os.Remove(legacyPath); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return false, fmt.Errorf("remove legacy systemd service: %w", err)
-	}
-	if err := b.reload(ctx, executor); err != nil {
-		return false, err
-	}
-	return true, nil
-}
-
-func isLegacyLinuxManaged(content string) bool {
-	if !strings.Contains(content, legacyManagedMarker) {
-		return false
-	}
-	for line := range strings.Lines(content) {
-		switch strings.TrimSpace(line) {
-		case "# version: 2", "# version: 3", "# version: 4":
-			return true
-		}
-	}
-	return false
 }
 
 func (b *linuxBackend) running(ctx context.Context, executor CommandExecutor) (bool, string, error) {
