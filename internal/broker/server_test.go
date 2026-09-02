@@ -4,9 +4,13 @@ package broker
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -135,6 +139,234 @@ func shortStatePath() (string, error) {
 		return "", fmt.Errorf("removing temporary state file: %w", err)
 	}
 	return path, nil
+}
+
+type brokerAdversityFixture struct {
+	path   string
+	store  *registry.MemoryStore
+	cancel context.CancelFunc
+	done   <-chan error
+}
+
+func TestServer_RejectsProtocolAdversity(t *testing.T) {
+	fixture := startBrokerAdversityFixture(t)
+	tests := []struct {
+		name        string
+		payload     []byte
+		wantCode    string
+		wantMessage string
+	}{
+		{
+			name:        "malformed JSON",
+			payload:     []byte("{not-json}\n"),
+			wantCode:    "invalid_json",
+			wantMessage: "invalid character",
+		},
+		{
+			name:        "unsupported version",
+			payload:     marshalBrokerRequest(t, brokerapi.Request{Version: brokerapi.ProtocolVersion + 1, ID: "wrong-version", Method: brokerapi.MethodPing}),
+			wantCode:    "invalid_request",
+			wantMessage: "unsupported broker protocol version",
+		},
+		{
+			name: "oversized batch",
+			payload: marshalBrokerRequest(t, brokerapi.Request{
+				Version:      brokerapi.ProtocolVersion,
+				ID:           "large-batch",
+				Method:       brokerapi.MethodObserveBatch,
+				Observations: make([]registry.Observation, maxBatchObservations+1),
+			}),
+			wantCode:    "invalid_request",
+			wantMessage: "too many observations",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			response := sendRawBrokerRequest(t, fixture.path, test.payload)
+			if response.Type != "error" || response.Error == nil || response.Error.Code != test.wantCode || !strings.Contains(response.Error.Message, test.wantMessage) {
+				t.Fatalf("response = %#v, want %q containing %q", response, test.wantCode, test.wantMessage)
+			}
+			state, err := fixture.store.State(t.Context(), registry.Filter{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if state.Revision != 1 || len(state.Sessions) != 0 {
+				t.Fatalf("invalid request mutated state: %#v", state)
+			}
+		})
+	}
+
+	if err := brokerapi.NewClient(fixture.path).Ping(t.Context()); err != nil {
+		t.Fatalf("broker did not serve a valid request after adversity: %v", err)
+	}
+	stopBrokerAdversityFixture(t, fixture)
+}
+
+func TestServer_BoundsSlowSubscriber(t *testing.T) {
+	fixture := startBrokerAdversityFixture(t)
+	connection := dialRawBroker(t, fixture.path)
+	defer func() { _ = connection.Close() }()
+	if unixConnection, ok := connection.(*net.UnixConn); ok {
+		_ = unixConnection.SetReadBuffer(1)
+	}
+	subscribe := marshalBrokerRequest(t, brokerapi.Request{
+		Version: brokerapi.ProtocolVersion,
+		ID:      "slow-subscriber",
+		Method:  brokerapi.MethodSubscribe,
+	})
+	if _, err := connection.Write(subscribe); err != nil {
+		t.Fatalf("write slow subscription: %v", err)
+	}
+
+	padding := strings.Repeat("x", 1<<20)
+	presence := registry.PresenceLive
+	for index := range 4 {
+		_, err := fixture.store.Observe(t.Context(), registry.Observation{
+			Source:      registry.ObservationSourceNative,
+			Evidence:    registry.ObservationEvidenceNativeEvent,
+			Harness:     registry.HarnessOmp,
+			Identity:    registry.ObservationIdentity{SessionID: fmt.Sprintf("slow-%d", index)},
+			Presence:    &presence,
+			NativeEvent: "agent_start",
+			Attributes:  map[string]string{"padding": padding},
+			ObservedAt:  time.Now().UTC().Add(time.Duration(index) * time.Nanosecond),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	clientContext, cancelClient := context.WithTimeout(t.Context(), time.Second)
+	defer cancelClient()
+	client := brokerapi.NewClient(fixture.path)
+	if err := client.Ping(clientContext); err != nil {
+		t.Fatalf("slow subscriber blocked another client: %v", err)
+	}
+	session, err := client.Observe(clientContext, registry.Observation{
+		Source:      registry.ObservationSourceNative,
+		Evidence:    registry.ObservationEvidenceNativeEvent,
+		Harness:     registry.HarnessOmp,
+		Identity:    registry.ObservationIdentity{SessionID: "healthy-client"},
+		Presence:    &presence,
+		NativeEvent: "agent_start",
+		ObservedAt:  time.Now().UTC(),
+	})
+	if err != nil || session.SessionID != "healthy-client" {
+		t.Fatalf("healthy client observe = %#v, %v", session, err)
+	}
+	if err := connection.Close(); err != nil {
+		t.Fatalf("disconnect slow subscriber: %v", err)
+	}
+	if err := client.Ping(clientContext); err != nil {
+		t.Fatalf("disconnected subscriber affected broker: %v", err)
+	}
+	stopBrokerAdversityFixture(t, fixture)
+}
+
+func TestServer_ShutsDownCleanly(t *testing.T) {
+	fixture := startBrokerAdversityFixture(t)
+	connection := dialRawBroker(t, fixture.path)
+	defer func() { _ = connection.Close() }()
+	if _, err := io.WriteString(connection, "{"); err != nil {
+		t.Fatalf("write partial handshake: %v", err)
+	}
+
+	fixture.cancel()
+	timer := time.NewTimer(time.Second)
+	defer timer.Stop()
+	select {
+	case err := <-fixture.done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-timer.C:
+		t.Fatal("broker did not close a partial-handshake connection during shutdown")
+	}
+	if _, err := os.Stat(brokerapi.SocketPath(fixture.path)); !os.IsNotExist(err) {
+		t.Fatalf("broker socket remains after shutdown: %v", err)
+	}
+}
+
+func startBrokerAdversityFixture(t *testing.T) brokerAdversityFixture {
+	t.Helper()
+	path, err := shortStatePath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = os.Remove(path)
+		_ = os.Remove(brokerapi.SocketPath(path))
+	})
+	store, err := registry.OpenMemoryStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	ready := make(chan struct{})
+	done := make(chan error, 1)
+	server := New(Options{Store: store, SocketPath: brokerapi.SocketPath(path), Ready: ready})
+	go func() { done <- server.Serve(ctx) }()
+	select {
+	case err := <-done:
+		t.Fatalf("server exited before readiness: %v", err)
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	case <-ready:
+	}
+	return brokerAdversityFixture{path: path, store: store, cancel: cancel, done: done}
+}
+
+func stopBrokerAdversityFixture(t *testing.T, fixture brokerAdversityFixture) {
+	t.Helper()
+	fixture.cancel()
+	timer := time.NewTimer(3 * time.Second)
+	defer timer.Stop()
+	select {
+	case err := <-fixture.done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-timer.C:
+		t.Fatal("broker did not stop within its connection deadline")
+	}
+}
+
+func marshalBrokerRequest(t *testing.T, request brokerapi.Request) []byte {
+	t.Helper()
+	//nolint:musttag // Request defines the complete public JSON protocol schema.
+	payload, err := json.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return append(payload, '\n')
+}
+
+func dialRawBroker(t *testing.T, storePath string) net.Conn {
+	t.Helper()
+	dialer := net.Dialer{Timeout: time.Second}
+	connection, err := dialer.DialContext(t.Context(), "unix", brokerapi.SocketPath(storePath))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return connection
+}
+
+func sendRawBrokerRequest(t *testing.T, storePath string, payload []byte) brokerapi.Response {
+	t.Helper()
+	connection := dialRawBroker(t, storePath)
+	defer func() { _ = connection.Close() }()
+	if err := connection.SetDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := connection.Write(payload); err != nil {
+		t.Fatal(err)
+	}
+	var response brokerapi.Response
+	if err := json.NewDecoder(connection).Decode(&response); err != nil {
+		t.Fatalf("decode broker response: %v", err)
+	}
+	return response
 }
 
 func BenchmarkBrokerObserveRoundTrip(b *testing.B) {
