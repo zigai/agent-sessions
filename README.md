@@ -1,7 +1,7 @@
 # AHT
 
 [![CI](https://github.com/zigai/aht/actions/workflows/ci.yml/badge.svg)](https://github.com/zigai/aht/actions/workflows/ci.yml)
-[![Go Reference](https://pkg.go.dev/badge/github.com/zigai/aht.svg)](https://pkg.go.dev/github.com/zigai/aht)
+[![Go Reference](https://pkg.go.dev/badge/github.com/zigai/aht/pkg/client.svg)](https://pkg.go.dev/github.com/zigai/aht/pkg/client)
 [![Go version](https://img.shields.io/github/go-mod/go-version/zigai/aht)](https://github.com/zigai/aht/blob/master/go.mod)
 [![Release](https://img.shields.io/github/v/release/zigai/aht)](https://github.com/zigai/aht/releases/latest)
 [![License: MIT](https://img.shields.io/github/license/zigai/aht)](https://github.com/zigai/aht/blob/master/LICENSE)
