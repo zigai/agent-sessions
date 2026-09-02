@@ -40,7 +40,11 @@ type systemWatchEvent struct {
 }
 
 func TestBuiltBinaryTrackingWorkflow(t *testing.T) {
-	root := t.TempDir()
+	root, err := shortSystemTestRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(root) })
 	binary := buildSystemTestBinary(t, root)
 	home := filepath.Join(root, "home")
 	configHome := filepath.Join(root, "config")
@@ -129,6 +133,10 @@ func TestBuiltBinaryTrackingWorkflow(t *testing.T) {
 	stopSystemTestCommand(t, restartedTracker)
 
 	assertSensitiveSentinelAbsent(t, root, sensitiveSentinel, transcript.Bytes())
+}
+
+func shortSystemTestRoot() (string, error) {
+	return os.MkdirTemp("/tmp", "aht-systest-")
 }
 
 func buildSystemTestBinary(t *testing.T, root string) string {

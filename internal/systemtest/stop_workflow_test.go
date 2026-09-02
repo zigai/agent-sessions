@@ -40,7 +40,11 @@ func TestStopOwnedTargets(t *testing.T) {
 }
 
 func testStopOwnedProcess(t *testing.T) {
-	root := t.TempDir()
+	root, err := shortSystemTestRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(root) })
 	binary := buildSystemTestBinary(t, root)
 	codexBinary := filepath.Join(root, "codex")
 	if err := os.Link(binary, codexBinary); err != nil {
@@ -98,7 +102,11 @@ func testStopOwnedTmuxTarget(t *testing.T) {
 	if _, err := exec.LookPath("tmux"); err != nil {
 		t.Skip("tmux is not installed")
 	}
-	root := t.TempDir()
+	root, err := shortSystemTestRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(root) })
 	binary := buildSystemTestBinary(t, root)
 	codexBinary := filepath.Join(root, "codex")
 	if err := os.Link(binary, codexBinary); err != nil {
