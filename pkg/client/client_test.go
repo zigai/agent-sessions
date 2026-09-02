@@ -3,6 +3,8 @@ package client_test
 import (
 	"context"
 	"errors"
+	"fmt"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -34,10 +36,18 @@ func TestClientListFallsBackToDurableRegistry(t *testing.T) {
 	}
 }
 
+//nolint:cyclop // Verifies broker startup, streaming updates, and cancellation in one test.
 func TestClientWatchYieldsRealtimeRevisions(t *testing.T) {
 	t.Parallel()
 
-	storePath := filepath.Join(t.TempDir(), "sessions.json")
+	storePath, err := shortStatePath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = os.Remove(storePath)
+		_ = os.Remove(brokerapi.SocketPath(storePath))
+	})
 	store, err := registry.OpenMemoryStore(storePath)
 	if err != nil {
 		t.Fatal(err)
@@ -115,4 +125,20 @@ func runningObservation(sessionID string) registry.Observation {
 		Activity:   &activity,
 		ObservedAt: time.Now().UTC(),
 	}
+}
+
+// shortStatePath keeps the derived broker socket below Darwin's Unix socket path limit.
+func shortStatePath() (string, error) {
+	stateFile, err := os.CreateTemp("", "aht-client-*.json")
+	if err != nil {
+		return "", fmt.Errorf("creating temporary state path: %w", err)
+	}
+	path := stateFile.Name()
+	if err := stateFile.Close(); err != nil {
+		return "", fmt.Errorf("closing temporary state file: %w", err)
+	}
+	if err := os.Remove(path); err != nil {
+		return "", fmt.Errorf("removing temporary state file: %w", err)
+	}
+	return path, nil
 }
