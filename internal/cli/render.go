@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	prettytable "github.com/jedib0t/go-pretty/v6/table"
@@ -186,7 +187,23 @@ func (app *application) writeHumanDetails(details []humanDetail) error {
 }
 
 func sanitizeHumanText(value string) string {
+	value = strings.Map(func(character rune) rune {
+		if unicode.IsControl(character) || isBidiControl(character) {
+			return ' '
+		}
+		return character
+	}, value)
 	return strings.Join(strings.Fields(value), " ")
+}
+
+func isBidiControl(character rune) bool {
+	switch character {
+	case '\u061c', '\u200e', '\u200f':
+		return true
+	default:
+		return character >= '\u202a' && character <= '\u202e' ||
+			character >= '\u2066' && character <= '\u2069'
+	}
 }
 
 func truncateHumanText(value string, width int) string {
