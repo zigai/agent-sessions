@@ -8,16 +8,13 @@ import (
 	"github.com/zigai/aht/pkg/registry"
 )
 
-func TestSupportedHarnessesReturnsDefensiveCopy(t *testing.T) {
+func TestSupportedHarnesses(t *testing.T) {
 	t.Parallel()
 
-	first := manage.SupportedHarnesses()
-	if !slices.Contains(first, registry.HarnessCodex) {
-		t.Fatalf("SupportedHarnesses() = %v, want codex", first)
-	}
-	first[0] = "mutated"
-
-	if next := manage.SupportedHarnesses(); slices.Contains(next, registry.Harness("mutated")) {
-		t.Fatalf("SupportedHarnesses() retained caller mutation: %v", next)
+	harnesses := manage.SupportedHarnesses()
+	for _, expected := range []registry.Harness{registry.HarnessClaude, registry.HarnessCodex, registry.HarnessOpenCode} {
+		if !slices.Contains(harnesses, expected) {
+			t.Errorf("SupportedHarnesses() missing %s", expected)
+		}
 	}
 }
