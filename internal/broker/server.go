@@ -126,6 +126,8 @@ func (s *Server) Serve(ctx context.Context) error {
 
 func (s *Server) handleConnection(ctx context.Context, connection net.Conn) {
 	defer func() { _ = connection.Close() }()
+	stopClose := context.AfterFunc(ctx, func() { _ = connection.Close() })
+	defer stopClose()
 	_ = connection.SetReadDeadline(time.Now().Add(handshakeTimeout))
 
 	scanner := bufio.NewScanner(connection)
