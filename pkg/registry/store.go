@@ -131,9 +131,6 @@ func applyObservationBatch(
 		}
 
 		observation := observations[index]
-		if observation.Harness == "" {
-			return nil, ErrHarnessRequired
-		}
 		if observation.ObservedAt.IsZero() {
 			observation.ObservedAt = receivedAt
 		}

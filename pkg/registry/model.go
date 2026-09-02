@@ -450,7 +450,7 @@ func NormalizeLifecycle(value string) (NativeLifecycle, error) {
 //nolint:gocognit,cyclop,maintidx // validation enforces source-specific evidence invariants in one place
 func ValidateObservation(observation Observation) error {
 	if observation.Harness == "" {
-		return fmt.Errorf("%w: harness is required", ErrInvalidObservation)
+		return fmt.Errorf("%w: %w", ErrInvalidObservation, ErrHarnessRequired)
 	}
 	if !validHarness(observation.Harness) {
 		return fmt.Errorf("%w: harness %q is not canonical", ErrInvalidObservation, observation.Harness)

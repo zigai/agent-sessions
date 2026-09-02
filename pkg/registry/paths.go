@@ -38,10 +38,5 @@ func DefaultStorePath() string {
 }
 
 func stringsTrimmedEnv(name string) string {
-	value, ok := os.LookupEnv(name)
-	if !ok {
-		return ""
-	}
-
-	return strings.TrimSpace(value)
+	return strings.TrimSpace(os.Getenv(name))
 }

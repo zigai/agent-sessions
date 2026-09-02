@@ -1,13 +1,14 @@
 package registry
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	rand "math/rand/v2"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/google/go-cmp/cmp"
 )
 
 func TestStoreBackendsRemainEquivalentAcrossOperationSequences(t *testing.T) {
@@ -43,7 +44,7 @@ func exerciseEquivalentStores(t *testing.T, seed uint64) {
 			t.Fatalf("step %d observation %#v: file error %v, memory error %v", step, observation, fileErr, memoryErr)
 		}
 		if fileErr == nil {
-			assertSameJSON(t, fmt.Sprintf("step %d session", step), fileSession, memorySession)
+			assertEquivalent(t, fmt.Sprintf("step %d session", step), fileSession, memorySession)
 		}
 
 		fileSessions, fileStateErr := fileStore.List(t.Context(), Filter{})
@@ -51,7 +52,7 @@ func exerciseEquivalentStores(t *testing.T, seed uint64) {
 		if fileStateErr != nil || memoryStateErr != nil {
 			t.Fatalf("step %d list errors: file %v, memory %v", step, fileStateErr, memoryStateErr)
 		}
-		assertSameJSON(t, fmt.Sprintf("step %d sessions", step), fileSessions, memorySessions)
+		assertEquivalent(t, fmt.Sprintf("step %d sessions", step), fileSessions, memorySessions)
 	}
 }
 
@@ -83,18 +84,13 @@ func sameStoreError(left error, right error) bool {
 	return (left == nil) == (right == nil)
 }
 
-func assertSameJSON(t *testing.T, label string, left any, right any) {
+func assertEquivalent(t *testing.T, label string, left any, right any) {
 	t.Helper()
 
-	leftJSON, err := json.Marshal(left)
-	if err != nil {
-		t.Fatal(err)
-	}
-	rightJSON, err := json.Marshal(right)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(leftJSON) != string(rightJSON) {
-		t.Fatalf("%s differs:\nfile:   %s\nmemory: %s", label, leftJSON, rightJSON)
+	opt := cmp.Comparer(func(x, y ProcessIdentity) bool {
+		return x == y
+	})
+	if diff := cmp.Diff(left, right, opt); diff != "" {
+		t.Fatalf("%s mismatch (-file +memory):\n%s", label, diff)
 	}
 }
