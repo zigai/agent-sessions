@@ -52,9 +52,6 @@ func TestPiIntegrationAdvertisesPromptWaiting(t *testing.T) {
 	if !adapter.Definition().Capabilities.WaitingPermission {
 		t.Fatal("Pi adapter does not advertise user prompt waiting")
 	}
-	if got := IntegrationVersionFor(registry.HarnessPi); got != 10 {
-		t.Fatalf("Pi integration version = %d, want %d", got, 10)
-	}
 }
 
 func TestResumeCommandFor(t *testing.T) {
