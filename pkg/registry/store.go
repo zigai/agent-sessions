@@ -1449,8 +1449,7 @@ func validStoredActivityDecision(decision ActivityDecision) bool {
 }
 
 func validStoredHarness(harness Harness) bool {
-	normalized, err := NormalizeHarness(string(harness))
-	return err == nil && normalized == harness
+	return validHarness(harness)
 }
 
 func validStoredPresence(presence Presence) bool {

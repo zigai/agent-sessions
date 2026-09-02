@@ -8,7 +8,8 @@ import (
 	"slices"
 	"strings"
 
-	harnesspkg "github.com/zigai/aht/pkg/harness"
+	harnesspkg "github.com/zigai/aht/internal/harness"
+	harnesscatalog "github.com/zigai/aht/internal/harness/catalog"
 	"github.com/zigai/aht/pkg/registry"
 )
 
@@ -71,41 +72,46 @@ func RunAll(options Options) ([]Result, error) {
 
 // RunAllContext installs every integration while honoring caller cancellation.
 func RunAllContext(ctx context.Context, options Options) ([]Result, error) {
+	return runAllHarnesses(ctx, options, RunContext, "install failed", errInstallFailed)
+}
+
+func runAllHarnesses(
+	ctx context.Context,
+	options Options,
+	operation func(context.Context, Options) (Result, error),
+	failureMessage string,
+	failureError error,
+) ([]Result, error) {
 	harnesses := AllHarnesses()
 	results := make([]Result, 0, len(harnesses))
 	failures := make([]string, 0)
-
-	for _, harness := range harnesses {
-		nextOptions := options
-		nextOptions.Harness = harness
-
-		result, err := RunContext(ctx, nextOptions)
+	for _, harnessID := range harnesses {
+		next := options
+		next.Harness = harnessID
+		result, err := operation(ctx, next)
 		if err != nil {
 			result = Result{
-				Harness:  string(harness),
+				Harness:  string(harnessID),
 				Path:     "",
 				Changed:  false,
-				Message:  "install failed",
+				Message:  failureMessage,
 				NextStep: "",
 				Snippet:  "",
 				Error:    err.Error(),
 			}
-			failures = append(failures, string(harness))
+			failures = append(failures, string(harnessID))
 		}
-
 		results = append(results, result)
 	}
-
 	if len(failures) > 0 {
-		return results, fmt.Errorf("%w: %s", errInstallFailed, strings.Join(failures, ", "))
+		return results, fmt.Errorf("%w: %s", failureError, strings.Join(failures, ", "))
 	}
-
 	return results, nil
 }
 
 func installableHarnesses() []registry.Harness {
-	harnesses := make([]registry.Harness, 0, len(harnesspkg.All()))
-	for _, adapter := range harnesspkg.All() {
+	harnesses := make([]registry.Harness, 0, len(harnesscatalog.All()))
+	for _, adapter := range harnesscatalog.All() {
 		if _, ok := adapter.(harnesspkg.Installable); ok {
 			harnesses = append(harnesses, adapter.Definition().ID)
 		}

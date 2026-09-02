@@ -7,7 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	harnesspkg "github.com/zigai/aht/pkg/harness"
+	harnesspkg "github.com/zigai/aht/internal/harness"
+	harnesscatalog "github.com/zigai/aht/internal/harness/catalog"
 	"github.com/zigai/aht/pkg/registry"
 )
 
@@ -22,7 +23,7 @@ func installShim(options Options, harness registry.Harness) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
-	script := shimScript(options.Binary, string(harness), target, harnesspkg.IntegrationVersionFor(harness))
+	script := shimScript(options.Binary, string(harness), target, harnesscatalog.IntegrationVersionFor(harness))
 
 	contentChanged, err := fileNeedsUpdate(path, script, options.Force)
 	if err != nil {

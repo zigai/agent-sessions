@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	harnesscatalog "github.com/zigai/aht/internal/harness/catalog"
 	"github.com/zigai/aht/pkg/registry"
 )
 
@@ -29,7 +30,7 @@ func TestGoldenScreenFixtures(t *testing.T) {
 	for _, fixture := range fixtures {
 		t.Run(fixture.Agent+"/"+fixture.Name, func(t *testing.T) {
 			t.Parallel()
-			harness, err := registry.NormalizeHarness(fixture.Agent)
+			harness, err := harnesscatalog.Normalize(fixture.Agent)
 			if err != nil {
 				t.Fatal(err)
 			}

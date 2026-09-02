@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	harnesspkg "github.com/zigai/aht/pkg/harness"
+	harnesspkg "github.com/zigai/aht/internal/harness"
 	"github.com/zigai/aht/pkg/registry"
 )
 
@@ -24,7 +24,7 @@ func TestInstallRemoveRoundTripForEveryHarness(t *testing.T) {
 	t.Setenv("CODEX_HOME", filepath.Join(home, ".codex"))
 	t.Setenv("COPILOT_HOME", filepath.Join(home, ".copilot"))
 	t.Setenv("CLINE_DIR", filepath.Join(home, ".cline"))
-	t.Setenv("KIMI_CODE_HOME", filepath.Join(home, ".kimi-code"))
+	t.Setenv("KIMI_SHARE_DIR", filepath.Join(home, ".kimi"))
 	t.Setenv("GROK_HOME", filepath.Join(home, ".grok"))
 	t.Setenv("PI_CODING_AGENT_DIR", filepath.Join(home, ".pi", "agent"))
 	t.Setenv("AGY_CONFIG_HOME", filepath.Join(home, ".gemini", "antigravity-cli"))

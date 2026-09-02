@@ -12,12 +12,13 @@ import (
 	"strings"
 	"time"
 
-	harnesspkg "github.com/zigai/aht/pkg/harness"
+	harnesspkg "github.com/zigai/aht/internal/harness"
+	harnesscatalog "github.com/zigai/aht/internal/harness/catalog"
 	"github.com/zigai/aht/pkg/registry"
 )
 
 func installHarnessAdapter(ctx context.Context, options Options) (Result, error) {
-	adapter, ok := harnesspkg.Find(options.Harness)
+	adapter, ok := harnesscatalog.Find(options.Harness)
 	if !ok {
 		return Result{}, fmt.Errorf("%w: %q", errUnsupportedHarness, options.Harness)
 	}
@@ -34,12 +35,15 @@ func installHarnessAdapter(ctx context.Context, options Options) (Result, error)
 
 	for _, action := range plan.Actions {
 		result, handled, err := installPlanAction(ctx, options, definition.ID, action)
-		if handled {
-			if err == nil && definition.ID == registry.HarnessCodex && result.Changed && !options.DryRun {
-				result.NextStep = codexHookTrustNextStep
-			}
-			return result, err
+		if !handled {
+			continue
 		}
+		if err == nil {
+			if advisor, ok := adapter.(harnesspkg.InstallAdvisor); ok {
+				result.NextStep = advisor.InstallNextStep(result.Changed, options.DryRun)
+			}
+		}
+		return result, err
 	}
 
 	return Result{}, fmt.Errorf("%w: %q", errUnsupportedHarness, options.Harness)
@@ -454,22 +458,7 @@ func renderInstallContent(content string, jsonContent any) (string, error) {
 }
 
 func renderRenderedFiles(specs []harnesspkg.RenderedFileInstallSpec) (map[string]string, error) {
-	files := make(map[string]string, len(specs))
-	for _, spec := range specs {
-		if err := validateInstallRelativePath(spec.Name); err != nil {
-			return nil, err
-		}
-		content, err := renderInstallContent(spec.Content, spec.JSONContent)
-		if err != nil {
-			return nil, fmt.Errorf("encoding rendered file %s: %w", spec.Name, err)
-		}
-		if _, exists := files[spec.Name]; exists {
-			return nil, fmt.Errorf("%w: %q", errDuplicatePluginFileName, spec.Name)
-		}
-		files[spec.Name] = content
-	}
-
-	return files, nil
+	return renderInstallFiles(specs, "rendered")
 }
 
 func renderedFilesNeedUpdate(
@@ -535,11 +524,8 @@ func installPluginDirectory(
 	if err != nil {
 		return Result{}, err
 	}
-	if plan.OpenClaw != nil {
-		return installOpenClawPlugin(ctx, options, harness, plan, plugin, pluginChanged)
-	}
-	if plan.Hermes != nil {
-		return installHermesPlugin(ctx, options, harness, plan, plugin, pluginChanged)
+	if plan.Registration != nil {
+		return installRegisteredPlugin(ctx, options, harness, plan, plugin, pluginChanged)
 	}
 
 	manifest, manifestChanged, err := plannedImportManifest(plan.ImportManifest, time.Now().UTC())
@@ -547,20 +533,20 @@ func installPluginDirectory(
 		return Result{}, err
 	}
 
-	legacyCleanup := false
-	if harness == registry.HarnessAgy {
-		legacyCleanup, err = legacyAgyNeedsCleanup(plan.Dir)
+	migrationCleanup := false
+	if plan.Migration != nil {
+		migrationCleanup, err = plan.Migration.NeedsCleanup(plan.Dir)
 		if err != nil {
-			return Result{}, err
+			return Result{}, fmt.Errorf("checking plugin migration: %w", err)
 		}
 	}
-	changed := pluginChanged || manifestChanged || legacyCleanup || len(obsoleteFiles) > 0
+	changed := pluginChanged || manifestChanged || migrationCleanup || len(obsoleteFiles) > 0
 
 	if changed && !options.DryRun {
 		var postStage func() error
-		if harness == registry.HarnessAgy && legacyCleanup {
+		if migrationCleanup {
 			postStage = func() error {
-				return cleanupLegacyAgy(plan.Dir)
+				return plan.Migration.Cleanup(plan.Dir)
 			}
 		}
 		if err := writePluginDirectoryChanges(plugin, plan.ImportManifest, manifest, pluginChanged, manifestChanged, postStage); err != nil {
@@ -880,7 +866,6 @@ func managedSource(source string, harness registry.Harness) string {
 func isManagedSourceHookCommand(source string) func(string) bool {
 	return func(command string) bool {
 		return strings.Contains(command, "aht_integration="+source) ||
-			strings.Contains(command, "agent_sessions_integration="+source) ||
 			strings.Contains(command, "--source "+source)
 	}
 }

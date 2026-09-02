@@ -1,0 +1,10 @@
+package claude
+
+import _ "embed"
+
+//go:embed assets/screen.toml
+var screenManifest string
+
+func (claudeHarness) ScreenManifest() string {
+	return screenManifest
+}

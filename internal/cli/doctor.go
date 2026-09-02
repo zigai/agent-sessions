@@ -13,11 +13,11 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/zigai/aht/internal/agentstate"
+	harness "github.com/zigai/aht/internal/harness/catalog"
 	"github.com/zigai/aht/internal/install"
 	"github.com/zigai/aht/internal/processinfo"
 	"github.com/zigai/aht/internal/reportqueue"
 	"github.com/zigai/aht/internal/service"
-	"github.com/zigai/aht/pkg/harness"
 	"github.com/zigai/aht/pkg/registry"
 )
 

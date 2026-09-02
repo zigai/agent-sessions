@@ -6,7 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	harnesspkg "github.com/zigai/aht/pkg/harness"
+	harnesspkg "github.com/zigai/aht/internal/harness"
+	harnesscatalog "github.com/zigai/aht/internal/harness/catalog"
 	"github.com/zigai/aht/pkg/registry"
 )
 
@@ -107,7 +108,7 @@ func TestHermesInstallUsesNativePluginCLIAndIsIdempotent(t *testing.T) {
 //nolint:cyclop // assertions cover each documented hook and privacy boundary independently
 func TestHermesPluginShapeUsesDocumentedHooksWithoutSensitiveContent(t *testing.T) {
 	t.Setenv("HERMES_HOME", t.TempDir())
-	adapter, ok := harnesspkg.Find(registry.HarnessHermes)
+	adapter, ok := harnesscatalog.Find(registry.HarnessHermes)
 	if !ok {
 		t.Fatal("Hermes adapter not found")
 	}
@@ -121,8 +122,8 @@ func TestHermesPluginShapeUsesDocumentedHooksWithoutSensitiveContent(t *testing.
 		t.Fatalf("unexpected Hermes install action: %T", plan.Actions[0])
 	}
 	plugin := pluginAction.Plan
-	if plugin.Hermes == nil || plugin.Hermes.PluginID != "aht-state" {
-		t.Fatalf("unexpected Hermes activation plan: %#v", plugin.Hermes)
+	if plugin.Registration == nil || plugin.Registration.ID() != "aht-state" {
+		t.Fatalf("unexpected Hermes activation plan: %#v", plugin.Registration)
 	}
 	var manifest, source string
 	for _, file := range plugin.Files {

@@ -8,7 +8,8 @@ import (
 	"path/filepath"
 	"slices"
 
-	harnesspkg "github.com/zigai/aht/pkg/harness"
+	harnesspkg "github.com/zigai/aht/internal/harness"
+	harnesscatalog "github.com/zigai/aht/internal/harness/catalog"
 	"github.com/zigai/aht/pkg/registry"
 )
 
@@ -32,7 +33,7 @@ func InspectContext(ctx context.Context, harnessID registry.Harness, binary stri
 	if err := ctx.Err(); err != nil {
 		return IntegrationStatus{}, fmt.Errorf("inspect integration context: %w", err)
 	}
-	plan, err := installPlanForHarness(harnessID, binary)
+	plan, advisor, err := installPlanForHarness(harnessID, binary)
 	if err != nil {
 		return IntegrationStatus{}, err
 	}
@@ -56,24 +57,25 @@ func InspectContext(ctx context.Context, harnessID registry.Harness, binary stri
 	if err != nil {
 		return IntegrationStatus{}, err
 	}
-	if harnessID == registry.HarnessCodex && (nativeStatus == ArtifactCurrent || nativeStatus == ArtifactStale) {
-		result.NextStep = codexHookTrustStatusNextStep(nativeStatus)
+	if advisor != nil {
+		result.NextStep = advisor.StatusNextStep(nativeStatus == ArtifactCurrent, nativeStatus == ArtifactStale)
 	}
 
 	return result, nil
 }
 
-func installPlanForHarness(harnessID registry.Harness, binary string) (harnesspkg.InstallPlan, error) {
-	adapter, ok := harnesspkg.Find(harnessID)
+func installPlanForHarness(harnessID registry.Harness, binary string) (harnesspkg.InstallPlan, harnesspkg.InstallAdvisor, error) {
+	adapter, ok := harnesscatalog.Find(harnessID)
 	if !ok {
-		return harnesspkg.InstallPlan{}, fmt.Errorf("%w: %q", errUnsupportedHarness, harnessID)
+		return harnesspkg.InstallPlan{}, nil, fmt.Errorf("%w: %q", errUnsupportedHarness, harnessID)
 	}
 	installer, ok := adapter.(harnesspkg.Installable)
 	if !ok {
-		return harnesspkg.InstallPlan{}, fmt.Errorf("%w: %q", errUnsupportedHarness, harnessID)
+		return harnesspkg.InstallPlan{}, nil, fmt.Errorf("%w: %q", errUnsupportedHarness, harnessID)
 	}
 
-	return installer.InstallPlan(binary), nil
+	advisor, _ := adapter.(harnesspkg.InstallAdvisor)
+	return installer.InstallPlan(binary), advisor, nil
 }
 
 func inspectIntegrationPlan(ctx context.Context, plan harnesspkg.InstallPlan, result *IntegrationStatus) error {
@@ -178,7 +180,7 @@ func inspectAction(ctx context.Context, action harnesspkg.InstallAction) ([]insp
 	}
 }
 
-//nolint:cyclop,gocognit // plugin status combines owned source and native/import registration state
+//nolint:cyclop // plugin status combines owned source and native/import registration state
 func inspectPluginAction(ctx context.Context, plan harnesspkg.PluginDirectoryInstallPlan) ([]inspectedArtifact, error) {
 	result, err := inspectOwnedPath(plan.Dir)
 	if err != nil {
@@ -191,38 +193,12 @@ func inspectPluginAction(ctx context.Context, plan harnesspkg.PluginDirectoryIns
 	for _, path := range obsoleteFiles {
 		result = append(result, inspectedArtifact{path: path, status: ArtifactStale})
 	}
-	if plan.OpenClaw != nil {
-		state, inspectErr := inspectOpenClawRegistration(ctx, plan)
+	if plan.Registration != nil {
+		registration, inspectErr := inspectRegistration(ctx, plan)
 		if inspectErr != nil {
 			return nil, inspectErr
 		}
-		status := ArtifactMissing
-		switch state {
-		case openClawRegistrationCurrent:
-			status = ArtifactCurrent
-		case openClawRegistrationStale:
-			status = ArtifactStale
-		case openClawRegistrationForeign:
-			status = ArtifactForeign
-		case openClawRegistrationMissing:
-		}
-		return append(result, inspectedArtifact{path: "OpenClaw plugin " + plan.OpenClaw.PluginID, status: status}), nil
-	}
-	if plan.Hermes != nil {
-		state, inspectErr := inspectHermesRegistration(ctx, plan)
-		if inspectErr != nil {
-			return nil, inspectErr
-		}
-		status := ArtifactMissing
-		switch state {
-		case hermesRegistrationCurrent:
-			status = ArtifactCurrent
-		case hermesRegistrationStale:
-			status = ArtifactStale
-		case hermesRegistrationMissing:
-		}
-
-		return append(result, inspectedArtifact{path: "Hermes plugin " + plan.Hermes.PluginID, status: status}), nil
+		return append(result, registration), nil
 	}
 	if plan.ImportManifest == nil {
 		return result, nil

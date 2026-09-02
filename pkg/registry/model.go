@@ -11,30 +11,28 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/zigai/aht/pkg/harnessmeta"
 )
 
 type Harness string
 
 const (
-	HarnessClaude   Harness = harnessmeta.IDClaude
-	HarnessCodex    Harness = harnessmeta.IDCodex
-	HarnessCursor   Harness = harnessmeta.IDCursor
-	HarnessCopilot  Harness = harnessmeta.IDCopilot
-	HarnessCline    Harness = harnessmeta.IDCline
-	HarnessKimiCode Harness = harnessmeta.IDKimiCode
-	HarnessGrok     Harness = harnessmeta.IDGrok
-	HarnessGoose    Harness = harnessmeta.IDGoose
-	HarnessPi       Harness = harnessmeta.IDPi
-	HarnessOmp      Harness = harnessmeta.IDOmp
+	HarnessClaude   Harness = "claude"
+	HarnessCodex    Harness = "codex"
+	HarnessCursor   Harness = "cursor"
+	HarnessCopilot  Harness = "copilot"
+	HarnessCline    Harness = "cline"
+	HarnessKimiCode Harness = "kimi-code"
+	HarnessGrok     Harness = "grok"
+	HarnessGoose    Harness = "goose"
+	HarnessPi       Harness = "pi"
+	HarnessOmp      Harness = "omp"
 	HarnessOhMyPi   Harness = HarnessOmp
-	HarnessOpenCode Harness = harnessmeta.IDOpenCode
-	HarnessAgy      Harness = harnessmeta.IDAgy
-	HarnessKilo     Harness = harnessmeta.IDKilo
-	HarnessDroid    Harness = harnessmeta.IDDroid
-	HarnessOpenClaw Harness = harnessmeta.IDOpenClaw
-	HarnessHermes   Harness = harnessmeta.IDHermes
+	HarnessOpenCode Harness = "opencode"
+	HarnessAgy      Harness = "agy"
+	HarnessKilo     Harness = "kilo"
+	HarnessDroid    Harness = "droid"
+	HarnessOpenClaw Harness = "openclaw"
+	HarnessHermes   Harness = "hermes"
 )
 
 var (
@@ -350,11 +348,16 @@ type Summary struct {
 
 type SummaryOptions struct{ Filter Filter }
 
-func NormalizeHarness(value string) (Harness, error) {
-	if id, ok := harnessmeta.Normalize(value); ok {
-		return Harness(id), nil
+func validHarness(harness Harness) bool {
+	switch harness {
+	case HarnessClaude, HarnessCodex, HarnessCursor, HarnessCopilot, HarnessCline,
+		HarnessKimiCode, HarnessGrok, HarnessGoose, HarnessPi, HarnessOmp,
+		HarnessOpenCode, HarnessAgy, HarnessKilo, HarnessDroid, HarnessOpenClaw,
+		HarnessHermes:
+		return true
+	default:
+		return false
 	}
-	return "", fmt.Errorf("%w: %q", ErrUnknownHarness, value)
 }
 
 func NormalizePresence(value string) (Presence, error) {
@@ -449,7 +452,7 @@ func ValidateObservation(observation Observation) error {
 	if observation.Harness == "" {
 		return fmt.Errorf("%w: harness is required", ErrInvalidObservation)
 	}
-	if normalized, err := NormalizeHarness(string(observation.Harness)); err != nil || normalized != observation.Harness {
+	if !validHarness(observation.Harness) {
 		return fmt.Errorf("%w: harness %q is not canonical", ErrInvalidObservation, observation.Harness)
 	}
 	if observation.Lifecycle != nil {

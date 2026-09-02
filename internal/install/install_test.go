@@ -10,7 +10,9 @@ import (
 	"strings"
 	"testing"
 
-	harnesspkg "github.com/zigai/aht/pkg/harness"
+	harnesspkg "github.com/zigai/aht/internal/harness"
+	harnesscatalog "github.com/zigai/aht/internal/harness/catalog"
+	codexpkg "github.com/zigai/aht/internal/harness/codex"
 	"github.com/zigai/aht/pkg/registry"
 )
 
@@ -75,7 +77,7 @@ func TestInstallCodexMergesHooks(t *testing.T) {
 	if !result.Changed {
 		t.Fatal("expected codex install to report changed")
 	}
-	if result.NextStep != codexHookTrustNextStep {
+	if result.NextStep != codexpkg.HookTrustNextStep {
 		t.Fatalf("Codex install next step = %q", result.NextStep)
 	}
 
@@ -137,16 +139,16 @@ func TestInstallCodexReplacesManagedHooks(t *testing.T) {
 		RequiredText:         []string{"--raw-stdin", "--quiet"},
 		FirstChangeMessage:   "expected codex install to replace old managed hook",
 		SecondChangedMessage: "expected second codex install to be idempotent",
-		ExpectedNextStep:     codexHookTrustNextStep,
+		ExpectedNextStep:     codexpkg.HookTrustNextStep,
 	})
 }
 
-func TestInstallCodexReplacesLegacyAgentSessionsHooksAndPreservesSymlinks(t *testing.T) {
+func TestInstallCodexReplacesStaleHooksAndPreservesSymlinks(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("CODEX_HOME", dir)
 	targetDir := t.TempDir()
 	targetPath := filepath.Join(targetDir, "hooks.json")
-	oldConfig := `{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"plannotator","timeout":345600}]},{"hooks":[{"type":"command","command":"agent-sessions report codex --activity idle --event Stop --attribute agent_sessions_integration_version=4 --attribute agent_sessions_integration=codex-hook --queue --raw-stdin --quiet"}]}]}}`
+	oldConfig := `{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"plannotator","timeout":345600}]},{"hooks":[{"type":"command","command":"aht report codex --activity idle --event Stop --attribute aht_integration_version=4 --attribute aht_integration=codex-hook --queue --raw-stdin --quiet"}]}]}}`
 	if err := os.WriteFile(targetPath, []byte(oldConfig), 0o600); err != nil {
 		t.Fatalf("writing target hooks: %v", err)
 	}
@@ -184,8 +186,8 @@ func TestInstallCodexReplacesLegacyAgentSessionsHooksAndPreservesSymlinks(t *tes
 	if !strings.Contains(content, "plannotator") {
 		t.Fatalf("expected user plannotator hook to be preserved: %s", content)
 	}
-	if strings.Contains(content, "agent-sessions") {
-		t.Fatalf("expected legacy agent-sessions hook to be removed: %s", content)
+	if strings.Contains(content, "aht_integration_version=4") {
+		t.Fatalf("expected stale aht hook to be removed: %s", content)
 	}
 	if !strings.Contains(content, "/bin/aht-test report codex") || !strings.Contains(content, "aht_integration=codex-hook") {
 		t.Fatalf("expected new aht hook in target: %s", content)
@@ -1358,7 +1360,7 @@ func TestInstallDroidWritesHooks(t *testing.T) {
 
 func TestInstallKimiCodeWritesHooks(t *testing.T) {
 	dir := t.TempDir()
-	t.Setenv("KIMI_CODE_HOME", dir)
+	t.Setenv("KIMI_SHARE_DIR", dir)
 
 	result, err := Run(Options{
 		Harness:      registry.HarnessKimiCode,
@@ -1389,11 +1391,8 @@ func TestInstallKimiCodeWritesHooks(t *testing.T) {
 		"PreToolUse",
 		"PostToolUse",
 		"PostToolUseFailure",
-		"PermissionRequest",
-		"PermissionResult",
 		hookEventStop,
 		"StopFailure",
-		"Interrupt",
 		"SubagentStart",
 		"SubagentStop",
 		"PreCompact",
@@ -1407,7 +1406,7 @@ func TestInstallKimiCodeWritesHooks(t *testing.T) {
 	}
 	for _, want := range []string{
 		`matcher = "startup|resume"`,
-		`matcher = "task\\.completed"`,
+		`matcher = "permission_prompt"`,
 		`event = "SessionEnd"` + "\nmatcher = \"exit\"",
 		"--raw-stdin",
 		"--quiet",
@@ -1417,11 +1416,8 @@ func TestInstallKimiCodeWritesHooks(t *testing.T) {
 		"--activity idle --event SessionStart",
 		"--activity running --event UserPromptSubmit",
 		"--activity running --event PreToolUse",
-		"--activity waiting --event PermissionRequest",
-		"--activity running --event PermissionResult",
-		"--activity idle --event Notification",
+		"--activity waiting --event Notification",
 		"--activity failed --event StopFailure",
-		"--activity interrupted --event Interrupt",
 		"--presence gone --event SessionEnd",
 	} {
 		if !strings.Contains(text, want) {
@@ -1437,7 +1433,7 @@ func TestInstallKimiCodeWritesHooks(t *testing.T) {
 
 func TestInstallKimiCodeReplacesManagedBlockAndPreservesConfig(t *testing.T) {
 	dir := t.TempDir()
-	t.Setenv("KIMI_CODE_HOME", dir)
+	t.Setenv("KIMI_SHARE_DIR", dir)
 	path := filepath.Join(dir, "config.toml")
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatalf("creating kimi-code dir: %v", err)
@@ -1506,7 +1502,7 @@ func TestInstallKimiCodeReplacesManagedBlockAndPreservesConfig(t *testing.T) {
 
 func TestInstallKimiCodeDryRunDoesNotWrite(t *testing.T) {
 	dir := t.TempDir()
-	t.Setenv("KIMI_CODE_HOME", dir)
+	t.Setenv("KIMI_SHARE_DIR", dir)
 
 	result, err := Run(Options{
 		Harness:      registry.HarnessKimiCode,
@@ -1652,7 +1648,7 @@ func TestRunAllInstallsEveryHarness(t *testing.T) {
 	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
 	t.Setenv("CODEX_HOME", t.TempDir())
 	t.Setenv("GROK_HOME", t.TempDir())
-	t.Setenv("KIMI_CODE_HOME", t.TempDir())
+	t.Setenv("KIMI_SHARE_DIR", t.TempDir())
 	t.Setenv("PI_CODING_AGENT_DIR", "")
 	t.Setenv(registry.StateDirEnv, t.TempDir())
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
@@ -1687,14 +1683,14 @@ func TestRunAllInstallsEveryHarness(t *testing.T) {
 func TestInstallPlansMatchHarnessCatalog(t *testing.T) {
 	t.Parallel()
 
-	for _, adapter := range harnesspkg.All() {
+	for _, adapter := range harnesscatalog.All() {
 		if _, ok := adapter.(harnesspkg.Installable); !ok {
 			t.Fatalf("harness %q has no install plan", adapter.Definition().ID)
 		}
 	}
 
 	for _, harness := range AllHarnesses() {
-		adapter, ok := harnesspkg.Find(harness)
+		adapter, ok := harnesscatalog.Find(harness)
 		if !ok {
 			t.Fatalf("AllHarnesses contains unknown harness %q", harness)
 		}

@@ -16,8 +16,8 @@ import (
 	"time"
 
 	"github.com/zigai/aht/internal/agentstate"
+	harness "github.com/zigai/aht/internal/harness/catalog"
 	"github.com/zigai/aht/internal/processinfo"
-	"github.com/zigai/aht/pkg/harness"
 	"github.com/zigai/aht/pkg/muxctx"
 	"github.com/zigai/aht/pkg/registry"
 	"github.com/zigai/aht/pkg/tmuxctx"
@@ -503,7 +503,7 @@ func joinObserverHealthError(primary, healthErr error) error {
 
 func resolveHarness(process processinfo.Process) (registry.Harness, bool) {
 	if process.AgentHint != "" {
-		if harnessID, err := registry.NormalizeHarness(process.AgentHint); err == nil {
+		if harnessID, err := harness.Normalize(process.AgentHint); err == nil {
 			return observableHarness(process, harnessID)
 		}
 	}

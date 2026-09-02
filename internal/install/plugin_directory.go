@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	harnesspkg "github.com/zigai/aht/pkg/harness"
+	harnesspkg "github.com/zigai/aht/internal/harness"
 )
 
 var (
@@ -16,7 +16,11 @@ var (
 	errStalePluginFile         = errors.New("stale plugin file")
 )
 
-func renderPluginFiles(specs []harnesspkg.PluginFileInstallSpec) (map[string]string, error) {
+func renderPluginFiles(specs []harnesspkg.RenderedFileInstallSpec) (map[string]string, error) {
+	return renderInstallFiles(specs, "plugin")
+}
+
+func renderInstallFiles(specs []harnesspkg.RenderedFileInstallSpec, kind string) (map[string]string, error) {
 	files := make(map[string]string, len(specs))
 	for _, spec := range specs {
 		if err := validateInstallRelativePath(spec.Name); err != nil {
@@ -24,7 +28,7 @@ func renderPluginFiles(specs []harnesspkg.PluginFileInstallSpec) (map[string]str
 		}
 		content, err := renderInstallContent(spec.Content, spec.JSONContent)
 		if err != nil {
-			return nil, fmt.Errorf("encoding plugin file %s: %w", spec.Name, err)
+			return nil, fmt.Errorf("encoding %s file %s: %w", kind, spec.Name, err)
 		}
 		if _, exists := files[spec.Name]; exists {
 			return nil, fmt.Errorf("%w: %q", errDuplicatePluginFileName, spec.Name)

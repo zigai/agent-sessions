@@ -276,51 +276,31 @@ func TestPrepareReportAddsNativeResumeCommand(t *testing.T) {
 	}
 }
 
+type lifecycleReportCase struct {
+	name         string
+	lifecycle    string
+	presence     string
+	activity     string
+	wantPresence registry.Presence
+	wantActivity *registry.Activity
+}
+
 func TestOpenClawLifecycleReportsDriveDocumentedStateTransitions(t *testing.T) {
 	t.Parallel()
 
-	store := registry.NewFileStore(filepath.Join(t.TempDir(), "sessions.json"))
-	app := &application{}
-	base := time.Date(2026, 7, 18, 12, 0, 0, 0, time.UTC)
-	tests := []struct {
-		name, lifecycle, presence, activity string
-		wantPresence                        registry.Presence
-		wantActivity                        *registry.Activity
-	}{
+	tests := []lifecycleReportCase{
 		{name: "session_start", lifecycle: "start", presence: "live", activity: "idle", wantPresence: registry.PresenceLive, wantActivity: new(registry.ActivityIdle)},
 		{name: "before_agent_run", lifecycle: "", presence: "live", activity: "running", wantPresence: registry.PresenceLive, wantActivity: new(registry.ActivityRunning)},
 		{name: "agent_end", lifecycle: "", presence: "live", activity: "idle", wantPresence: registry.PresenceLive, wantActivity: new(registry.ActivityIdle)},
 		{name: "session_end", lifecycle: "end", presence: "gone", activity: "", wantPresence: registry.PresenceGone, wantActivity: nil},
 	}
-	for index, test := range tests {
-		prepared, err := app.prepareReport(nil, reportOptions{
-			harness: "openclaw", lifecycle: test.lifecycle, presence: test.presence, activity: test.activity,
-			sessionID: "openclaw-session", event: test.name,
-		}, reportRuntimeContext{defaultObservedAt: base.Add(time.Duration(index) * time.Second)})
-		if err != nil {
-			t.Fatalf("preparing %s report: %v", test.name, err)
-		}
-		session, err := store.Observe(context.Background(), prepared.observation)
-		if err != nil {
-			t.Fatalf("recording %s report: %v", test.name, err)
-		}
-		if session.Presence != test.wantPresence || !equalActivity(session.Activity, test.wantActivity) {
-			t.Fatalf("%s state = presence %q activity %#v", test.name, session.Presence, session.Activity)
-		}
-	}
+	testLifecycleReports(t, "openclaw", time.Date(2026, 7, 18, 12, 0, 0, 0, time.UTC), tests)
 }
 
 func TestHermesLifecycleReportsDriveDocumentedStateTransitions(t *testing.T) {
 	t.Parallel()
 
-	store := registry.NewFileStore(filepath.Join(t.TempDir(), "sessions.json"))
-	app := &application{}
-	base := time.Date(2026, 7, 18, 13, 0, 0, 0, time.UTC)
-	tests := []struct {
-		name, lifecycle, presence, activity string
-		wantPresence                        registry.Presence
-		wantActivity                        *registry.Activity
-	}{
+	tests := []lifecycleReportCase{
 		{name: "on_session_start", lifecycle: "start", presence: "live", activity: "idle", wantPresence: registry.PresenceLive, wantActivity: new(registry.ActivityIdle)},
 		{name: "pre_llm_call", lifecycle: "", presence: "live", activity: "running", wantPresence: registry.PresenceLive, wantActivity: new(registry.ActivityRunning)},
 		{name: "pre_approval_request", lifecycle: "", presence: "live", activity: "waiting", wantPresence: registry.PresenceLive, wantActivity: new(registry.ActivityWaiting)},
@@ -328,10 +308,18 @@ func TestHermesLifecycleReportsDriveDocumentedStateTransitions(t *testing.T) {
 		{name: "on_session_end", lifecycle: "", presence: "live", activity: "idle", wantPresence: registry.PresenceLive, wantActivity: new(registry.ActivityIdle)},
 		{name: "on_session_finalize", lifecycle: "end", presence: "gone", activity: "", wantPresence: registry.PresenceGone, wantActivity: nil},
 	}
+	testLifecycleReports(t, "hermes", time.Date(2026, 7, 18, 13, 0, 0, 0, time.UTC), tests)
+}
+
+func testLifecycleReports(t *testing.T, harness string, base time.Time, tests []lifecycleReportCase) {
+	t.Helper()
+
+	store := registry.NewFileStore(filepath.Join(t.TempDir(), "sessions.json"))
+	app := &application{}
 	for index, test := range tests {
 		prepared, err := app.prepareReport(nil, reportOptions{
-			harness: "hermes", lifecycle: test.lifecycle, presence: test.presence, activity: test.activity,
-			sessionID: "hermes-session", event: test.name,
+			harness: harness, lifecycle: test.lifecycle, presence: test.presence, activity: test.activity,
+			sessionID: harness + "-session", event: test.name,
 		}, reportRuntimeContext{defaultObservedAt: base.Add(time.Duration(index) * time.Second)})
 		if err != nil {
 			t.Fatalf("preparing %s report: %v", test.name, err)

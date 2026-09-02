@@ -3,7 +3,6 @@ package agentstate
 import (
 	"bytes"
 	"cmp"
-	"embed"
 	"errors"
 	"fmt"
 	"io"
@@ -17,6 +16,8 @@ import (
 
 	"github.com/pelletier/go-toml/v2"
 
+	"github.com/zigai/aht/internal/harness"
+	harnesscatalog "github.com/zigai/aht/internal/harness/catalog"
 	"github.com/zigai/aht/pkg/registry"
 )
 
@@ -26,11 +27,10 @@ const (
 )
 
 var (
-	//go:embed manifests/*.toml
-	bundledManifests    embed.FS
-	errManifestInvalid  = errors.New("invalid detection manifest")
-	errInvalidRegion    = errors.New("invalid manifest region")
-	errManifestTooLarge = errors.New("detection manifest exceeds 1 MiB")
+	errManifestInvalid         = errors.New("invalid detection manifest")
+	errInvalidRegion           = errors.New("invalid manifest region")
+	errManifestTooLarge        = errors.New("detection manifest exceeds 1 MiB")
+	errBundledManifestNotFound = errors.New("bundled detection manifest not found")
 )
 
 type Manifest struct {
@@ -253,17 +253,20 @@ func compileRuleExpressions(expressions []string, caseSensitive bool) ([]*regexp
 	return compiled, nil
 }
 
-func loadBundled(harness registry.Harness) (Manifest, error) {
-	path := "manifests/" + string(harness) + ".toml"
-	data, err := bundledManifests.ReadFile(path)
-	if err != nil {
-		return Manifest{}, fmt.Errorf("reading bundled manifest %s: %w", path, err)
+func loadBundled(harnessID registry.Harness) (Manifest, error) {
+	adapter, ok := harnesscatalog.Find(harnessID)
+	if !ok {
+		return Manifest{}, fmt.Errorf("reading bundled manifest for %s: %w", harnessID, errBundledManifestNotFound)
 	}
-	manifest, err := ParseManifest(data, harness)
-	if err != nil {
-		return Manifest{}, fmt.Errorf("loading bundled manifest %s: %w", path, err)
+	provider, ok := adapter.(harness.ScreenManifestProvider)
+	if !ok {
+		return Manifest{}, fmt.Errorf("reading bundled manifest for %s: %w", harnessID, errBundledManifestNotFound)
 	}
-	manifest.Source = "bundled:" + path
+	manifest, err := ParseManifest([]byte(provider.ScreenManifest()), harnessID)
+	if err != nil {
+		return Manifest{}, fmt.Errorf("loading bundled manifest for %s: %w", harnessID, err)
+	}
+	manifest.Source = "bundled:" + string(harnessID)
 	return manifest, nil
 }
 

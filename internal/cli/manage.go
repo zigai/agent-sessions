@@ -16,8 +16,8 @@ import (
 
 	"github.com/spf13/cobra"
 
+	harnesspkg "github.com/zigai/aht/internal/harness/catalog"
 	"github.com/zigai/aht/internal/processinfo"
-	harnesspkg "github.com/zigai/aht/pkg/harness"
 	"github.com/zigai/aht/pkg/registry"
 	"github.com/zigai/aht/pkg/tmuxctx"
 )

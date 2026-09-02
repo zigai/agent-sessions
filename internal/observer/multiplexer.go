@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	harness "github.com/zigai/aht/internal/harness/catalog"
 	"github.com/zigai/aht/internal/processinfo"
-	"github.com/zigai/aht/pkg/harness"
 	"github.com/zigai/aht/pkg/herdrctx"
 	"github.com/zigai/aht/pkg/muxctx"
 	"github.com/zigai/aht/pkg/registry"

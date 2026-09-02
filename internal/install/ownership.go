@@ -9,7 +9,8 @@ import (
 	"strconv"
 	"strings"
 
-	harnesspkg "github.com/zigai/aht/pkg/harness"
+	harnesspkg "github.com/zigai/aht/internal/harness"
+	harnesscatalog "github.com/zigai/aht/internal/harness/catalog"
 	"github.com/zigai/aht/pkg/registry"
 )
 
@@ -30,9 +31,9 @@ const (
 )
 
 var (
-	integrationVersionPattern = regexp.MustCompile(`(?i)(?:(?:aht|agent[_-]?sessions)[_-]?integration[_-]?version|AHT_INTEGRATION_VERSION)\s*[=:]\s*["']?([0-9]+)`)
-	integrationSourcePattern  = regexp.MustCompile(`(?i)(?:aht|agent[_-]?sessions)[_-]?integration\s*[=:]`)
-	integrationIDPattern      = regexp.MustCompile(`(?i)(?:AHT|AGENT_SESSIONS)_INTEGRATION_ID\s*=\s*["']?([a-z0-9_-]+)`)
+	integrationVersionPattern = regexp.MustCompile(`(?i)aht[_-]?integration[_-]?version\s*[=:]\s*["']?([0-9]+)`)
+	integrationSourcePattern  = regexp.MustCompile(`(?i)aht[_-]?integration\s*[=:]`)
+	integrationIDPattern      = regexp.MustCompile(`(?i)AHT_INTEGRATION_ID\s*=\s*["']?([a-z0-9_-]+)`)
 )
 
 // ClassifyArtifact inspects a generated artifact without modifying it. It is
@@ -87,11 +88,11 @@ func expectedIntegrationVersion(content string) int {
 	if len(match) != integrationCaptureGroups {
 		return managedIntegrationVersion
 	}
-	id, err := harnesspkg.Normalize(match[1])
+	id, err := harnesscatalog.Normalize(match[1])
 	if err != nil {
 		return managedIntegrationVersion
 	}
-	return harnesspkg.IntegrationVersionFor(id)
+	return harnesscatalog.IntegrationVersionFor(id)
 }
 
 func integrationIDFromContent(content string) string {
@@ -99,7 +100,7 @@ func integrationIDFromContent(content string) string {
 	if len(match) != integrationCaptureGroups {
 		return ""
 	}
-	id, err := harnesspkg.Normalize(match[1])
+	id, err := harnesscatalog.Normalize(match[1])
 	if err != nil {
 		return strings.ToLower(match[1])
 	}

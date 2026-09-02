@@ -3,10 +3,12 @@ package install
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
-	harnesspkg "github.com/zigai/aht/pkg/harness"
+	harnesspkg "github.com/zigai/aht/internal/harness"
+	harnesscatalog "github.com/zigai/aht/internal/harness/catalog"
 	"github.com/zigai/aht/pkg/registry"
 )
 
@@ -84,7 +86,7 @@ func TestOpenClawInstallUsesNativePluginCLIAndIsIdempotent(t *testing.T) {
 	calls := string(readTestFile(t, filepath.Join(state, "calls"), "reading fake OpenClaw calls"))
 	for _, call := range []string{
 		"plugins inspect --all --json",
-		"plugins install " + first.Path + " --link --force",
+		"plugins install " + first.Path + " --link --force --accept-capabilities",
 		"config set plugins.entries.aht-state.hooks.allowConversationAccess true --strict-json",
 	} {
 		if !strings.Contains(calls, call) {
@@ -101,9 +103,9 @@ func TestOpenClawInstallUsesNativePluginCLIAndIsIdempotent(t *testing.T) {
 	}
 }
 
-func TestOpenClawPluginShapeUsesDocumentedTypedHooksWithoutConversationContent(t *testing.T) {
+func TestOpenClawPluginShapeUsesDocumentedTypedHooksWithoutConversationContent(t *testing.T) { //nolint:cyclop // One shape test validates the complete generated native plugin contract.
 	t.Setenv(registry.StateDirEnv, t.TempDir())
-	adapter, ok := harnesspkg.Find(registry.HarnessOpenClaw)
+	adapter, ok := harnesscatalog.Find(registry.HarnessOpenClaw)
 	if !ok {
 		t.Fatal("OpenClaw adapter not found")
 	}
@@ -117,14 +119,22 @@ func TestOpenClawPluginShapeUsesDocumentedTypedHooksWithoutConversationContent(t
 		t.Fatalf("unexpected OpenClaw install action: %T", plan.Actions[0])
 	}
 	plugin := pluginAction.Plan
-	if plugin.OpenClaw == nil || !plugin.OpenClaw.AllowConversationAccess {
-		t.Fatalf("unexpected OpenClaw registration plan: %#v", plugin.OpenClaw)
+	if plugin.Registration == nil || plugin.Registration.ID() != "aht-state" {
+		t.Fatalf("unexpected OpenClaw registration plan: %#v", plugin.Registration)
 	}
 	var source string
+	var manifest map[string]any
 	for _, file := range plugin.Files {
 		if file.Name == "index.js" {
 			source = file.Content
 		}
+		if file.Name == "openclaw.plugin.json" {
+			manifest, _ = file.JSONContent.(map[string]any)
+		}
+	}
+	activation, ok := manifest["activation"].(map[string]any)
+	if !ok || !reflect.DeepEqual(activation["onCapabilities"], []string{"hook"}) {
+		t.Fatalf("unexpected OpenClaw hook activation: %#v", activation)
 	}
 	for _, required := range []string{
 		`api.on("session_start"`, `api.on("before_agent_run"`, `api.on("agent_end"`, `api.on("session_end"`,

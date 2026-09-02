@@ -4,7 +4,7 @@ package cli
 // request/response hooks. These hooks must write protocol JSON such as
 // {"decision":"allow"} while recording session state, so they cannot use the
 // one-way `aht report` command directly. Keep this file as CLI
-// transport glue; harness protocol rules belong in pkg/harness.
+// transport glue; harness protocol rules belong in internal/harness packages.
 //
 import (
 	"context"
@@ -16,7 +16,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	harnesspkg "github.com/zigai/aht/pkg/harness"
+	"github.com/zigai/aht/internal/harness"
+	harnesspkg "github.com/zigai/aht/internal/harness/catalog"
 	"github.com/zigai/aht/pkg/registry"
 	"github.com/zigai/aht/pkg/tmuxctx"
 )
@@ -83,7 +84,7 @@ func (app *application) runManagedHook(
 	return app.writeJSON(result.Response)
 }
 
-func reportManagedHook(ctx context.Context, store registry.Store, result harnesspkg.HookResult) error {
+func reportManagedHook(ctx context.Context, store registry.Store, result harness.HookResult) error {
 	if !result.ReportOK {
 		return nil
 	}

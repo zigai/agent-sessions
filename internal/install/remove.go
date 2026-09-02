@@ -7,9 +7,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
-	harnesspkg "github.com/zigai/aht/pkg/harness"
+	harnesspkg "github.com/zigai/aht/internal/harness"
+	harnesscatalog "github.com/zigai/aht/internal/harness/catalog"
 	"github.com/zigai/aht/pkg/registry"
 )
 
@@ -25,7 +25,7 @@ func RemoveContext(ctx context.Context, options Options) (Result, error) {
 	if err := ctx.Err(); err != nil {
 		return Result{}, fmt.Errorf("remove integration context: %w", err)
 	}
-	adapter, ok := harnesspkg.Find(options.Harness)
+	adapter, ok := harnesscatalog.Find(options.Harness)
 	if !ok {
 		return Result{}, fmt.Errorf("%w: %q", errUnsupportedHarness, options.Harness)
 	}
@@ -92,23 +92,7 @@ func RemoveAll(options Options) ([]Result, error) {
 
 // RemoveAllContext removes every integration while honoring caller cancellation.
 func RemoveAllContext(ctx context.Context, options Options) ([]Result, error) {
-	harnesses := AllHarnesses()
-	results := make([]Result, 0, len(harnesses))
-	failures := make([]string, 0)
-	for _, harnessID := range harnesses {
-		next := options
-		next.Harness = harnessID
-		result, err := RemoveContext(ctx, next)
-		if err != nil {
-			result = Result{Harness: string(harnessID), Path: "", Changed: false, Message: "remove failed", NextStep: "", Snippet: "", Error: err.Error()}
-			failures = append(failures, string(harnessID))
-		}
-		results = append(results, result)
-	}
-	if len(failures) > 0 {
-		return results, fmt.Errorf("%w: %s", errRemoveFailed, strings.Join(failures, ", "))
-	}
-	return results, nil
+	return runAllHarnesses(ctx, options, RemoveContext, "remove failed", errRemoveFailed)
 }
 
 func removePlanAction(ctx context.Context, options Options, harnessID registry.Harness, action harnesspkg.InstallAction) (Result, bool, error) {
@@ -151,20 +135,7 @@ func removeJSONCommandHooks(options Options, harnessID registry.Harness, plan ha
 		isManaged := isManagedSourceHookCommand(managedSource(plan.Source, harnessID))
 		changed := false
 		for _, spec := range plan.Hooks {
-			groups, ok := hooks[spec.Event].([]any)
-			if !ok {
-				continue
-			}
-			cleaned, removed := removeManagedCommandHookGroups(groups, isManaged)
-			if !removed {
-				continue
-			}
-			changed = true
-			if len(cleaned) == 0 {
-				delete(hooks, spec.Event)
-			} else {
-				hooks[spec.Event] = cleaned
-			}
+			changed = removeManagedJSONHookEvent(hooks, spec.Event, isManaged, removeManagedCommandHookGroups) || changed
 		}
 		return changed
 	})
@@ -179,23 +150,32 @@ func removeCursorJSONHooks(options Options, harnessID registry.Harness, plan har
 		isManaged := isManagedSourceHookCommand(managedSource(plan.Source, harnessID))
 		changed := false
 		for _, spec := range plan.Hooks {
-			definitions, ok := hooks[spec.Event].([]any)
-			if !ok {
-				continue
-			}
-			cleaned, removed := removeManagedCursorHooks(definitions, isManaged)
-			if !removed {
-				continue
-			}
-			changed = true
-			if len(cleaned) == 0 {
-				delete(hooks, spec.Event)
-			} else {
-				hooks[spec.Event] = cleaned
-			}
+			changed = removeManagedJSONHookEvent(hooks, spec.Event, isManaged, removeManagedCursorHooks) || changed
 		}
 		return changed
 	})
+}
+
+func removeManagedJSONHookEvent(
+	hooks map[string]any,
+	event string,
+	isManaged func(string) bool,
+	removeGroups func([]any, func(string) bool) ([]any, bool),
+) bool {
+	groups, ok := hooks[event].([]any)
+	if !ok {
+		return false
+	}
+	cleaned, removed := removeGroups(groups, isManaged)
+	if !removed {
+		return false
+	}
+	if len(cleaned) == 0 {
+		delete(hooks, event)
+		return true
+	}
+	hooks[event] = cleaned
+	return true
 }
 
 func removeJSONHooks(options Options, harnessID registry.Harness, path string, apply func(map[string]any) bool) (Result, error) {
@@ -281,11 +261,8 @@ func removePluginDirectory(ctx context.Context, options Options, harnessID regis
 	if err != nil {
 		return Result{}, err
 	}
-	if plan.OpenClaw != nil {
-		return removeOpenClawPlugin(ctx, options, harnessID, plan, exists)
-	}
-	if plan.Hermes != nil {
-		return removeHermesPlugin(ctx, options, harnessID, plan, exists)
+	if plan.Registration != nil {
+		return removeRegisteredPlugin(ctx, options, harnessID, plan, exists)
 	}
 	manifestChanged := false
 	var manifest importManifest

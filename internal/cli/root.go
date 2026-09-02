@@ -22,9 +22,10 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/zigai/aht/internal/agentstate"
+	"github.com/zigai/aht/internal/harness"
+	harnesspkg "github.com/zigai/aht/internal/harness/catalog"
 	"github.com/zigai/aht/internal/processinfo"
 	"github.com/zigai/aht/pkg/brokerapi"
-	harnesspkg "github.com/zigai/aht/pkg/harness"
 	"github.com/zigai/aht/pkg/herdrctx"
 	"github.com/zigai/aht/pkg/registry"
 	"github.com/zigai/aht/pkg/tmuxctx"
@@ -300,7 +301,7 @@ func (app *application) newReportCommand() *cobra.Command {
 }
 
 func defaultReportOptionsFromEnv() reportOptions {
-	return reportOptions{harness: firstEnv("AHT_HARNESS", "AGENT_HARNESS"), sessionID: firstEnv(harnesspkg.EnvNames(harnesspkg.EnvSessionID)...), sessionPath: firstEnv(harnesspkg.EnvNames(harnesspkg.EnvSessionPath)...), cwdAuto: true, projectRoot: firstEnv(harnesspkg.EnvNames(harnesspkg.EnvProjectRoot)...), pid: firstEnvInt(harnesspkg.EnvNames(harnesspkg.EnvPID)...), ppid: firstEnvInt("AHT_PPID", "AGENT_PPID"), tty: firstEnv("AHT_TTY", "TTY"), event: firstEnv(harnesspkg.EnvNames(harnesspkg.EnvEvent)...), sequence: firstEnv("AHT_SEQUENCE")}
+	return reportOptions{harness: firstEnv("AHT_HARNESS", "AGENT_HARNESS"), sessionID: firstEnv(harnesspkg.EnvNames(harness.EnvSessionID)...), sessionPath: firstEnv(harnesspkg.EnvNames(harness.EnvSessionPath)...), cwdAuto: true, projectRoot: firstEnv(harnesspkg.EnvNames(harness.EnvProjectRoot)...), pid: firstEnvInt(harnesspkg.EnvNames(harness.EnvPID)...), ppid: firstEnvInt("AHT_PPID", "AGENT_PPID"), tty: firstEnv("AHT_TTY", "TTY"), event: firstEnv(harnesspkg.EnvNames(harness.EnvEvent)...), sequence: firstEnv("AHT_SEQUENCE")}
 }
 
 func parseObservedAt(value string) (time.Time, error) {
@@ -1366,7 +1367,7 @@ func readStdinPayloadData(stdin io.Reader, storeRaw, defaultsOnly bool) (json.Ra
 	return nil, p, nil
 }
 
-func applyPayloadDefaults(o *reportOptions, a map[string]string, d harnesspkg.PayloadDefaults) {
+func applyPayloadDefaults(o *reportOptions, a map[string]string, d harness.PayloadDefaults) {
 	applyStringDefault(&o.sessionID, d.SessionID)
 	applyStringDefault(&o.sessionPath, d.SessionPath)
 	applyStringDefault(&o.event, d.Event)

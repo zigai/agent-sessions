@@ -7,12 +7,13 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/zigai/aht/pkg/harness"
+	"github.com/zigai/aht/internal/harness"
+	harnesscatalog "github.com/zigai/aht/internal/harness/catalog"
 )
 
 func TestIntegrationManagedArtifactsUseV2Reports(t *testing.T) {
 	t.Parallel()
-	for _, adapter := range harness.All() {
+	for _, adapter := range harnesscatalog.All() {
 		definition := adapter.Definition()
 		installable, ok := adapter.(harness.Installable)
 		if !ok {

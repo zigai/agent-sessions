@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/zigai/aht/pkg/registry"
+	harnesscatalog "github.com/zigai/aht/internal/harness/catalog"
 )
 
 const (
@@ -47,7 +47,7 @@ func DefaultCatalogList(ctx context.Context) ([]CatalogEntry, error) {
 		if entries[index].Harness == "" {
 			return nil, fmt.Errorf("catalog entry %d: %w", index, errCatalogEntryHarness)
 		}
-		normalized, err := registry.NormalizeHarness(string(entries[index].Harness))
+		normalized, err := harnesscatalog.Normalize(string(entries[index].Harness))
 		if err != nil {
 			return nil, fmt.Errorf("catalog entry %d: %w", index, err)
 		}

@@ -10,9 +10,9 @@ import (
 
 	"github.com/spf13/cobra"
 
+	harnesspkg "github.com/zigai/aht/internal/harness/catalog"
 	"github.com/zigai/aht/internal/install"
 	"github.com/zigai/aht/internal/service"
-	harnesspkg "github.com/zigai/aht/pkg/harness"
 	"github.com/zigai/aht/pkg/registry"
 )
 
