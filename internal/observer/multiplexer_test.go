@@ -31,10 +31,10 @@ func TestObserverCorrelatesZellijEnvironmentIdentityAndDetectsScreen(t *testing.
 		ProcessList: func(context.Context) ([]processinfo.Process, error) {
 			return []processinfo.Process{process}, nil
 		},
-		MultiplexerPaneList: func(context.Context) ([]muxctx.Pane, error) {
+		PaneList: func(context.Context) ([]muxctx.Pane, error) {
 			return []muxctx.Pane{pane}, nil
 		},
-		MultiplexerScreenCapture: func(context.Context, muxctx.Pane) (muxctx.ScreenSnapshot, error) {
+		ScreenCapture: func(context.Context, muxctx.Pane) (muxctx.ScreenSnapshot, error) {
 			return muxctx.ScreenSnapshot{Text: "› next task\nContext 63% used", Title: "Codex"}, nil
 		},
 		CatalogList: func(context.Context) ([]CatalogEntry, error) { return nil, nil },
@@ -77,10 +77,10 @@ func TestObserverUsesHerdrForegroundProcessAndSemanticState(t *testing.T) {
 		ProcessList: func(context.Context) ([]processinfo.Process, error) {
 			return []processinfo.Process{process}, nil
 		},
-		MultiplexerPaneList: func(context.Context) ([]muxctx.Pane, error) {
+		PaneList: func(context.Context) ([]muxctx.Pane, error) {
 			return []muxctx.Pane{pane}, nil
 		},
-		MultiplexerScreenCapture: func(context.Context, muxctx.Pane) (muxctx.ScreenSnapshot, error) {
+		ScreenCapture: func(context.Context, muxctx.Pane) (muxctx.ScreenSnapshot, error) {
 			captureCalled = true
 			return muxctx.ScreenSnapshot{}, nil
 		},
@@ -127,8 +127,8 @@ func TestObserverPrefersRicherNestedMultiplexerLocation(t *testing.T) {
 		ProcessList: func(context.Context) ([]processinfo.Process, error) {
 			return []processinfo.Process{process}, nil
 		},
-		MultiplexerPaneList: func(context.Context) ([]muxctx.Pane, error) { return panes, nil },
-		MultiplexerScreenCapture: func(context.Context, muxctx.Pane) (muxctx.ScreenSnapshot, error) {
+		PaneList: func(context.Context) ([]muxctx.Pane, error) { return panes, nil },
+		ScreenCapture: func(context.Context, muxctx.Pane) (muxctx.ScreenSnapshot, error) {
 			return muxctx.ScreenSnapshot{Text: "› next task"}, nil
 		},
 		CatalogList: func(context.Context) ([]CatalogEntry, error) { return nil, nil },

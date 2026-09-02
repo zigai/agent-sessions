@@ -13,7 +13,6 @@ import (
 
 	"github.com/zigai/aht/internal/muxctx"
 	"github.com/zigai/aht/internal/processinfo"
-	"github.com/zigai/aht/internal/tmuxctx"
 	"github.com/zigai/aht/pkg/registry"
 )
 
@@ -112,7 +111,7 @@ func TestObserverDefaultMissingRequiresTwoSnapshots(t *testing.T) {
 	at := time.Now().UTC().Add(-time.Minute)
 	process := processinfo.Process{PID: 1234, PPID: 1, ProcessGroupID: 1234, StartIdentity: "boot:A", Executable: "/usr/bin/codex", CWD: "/work", TTY: "/dev/pts/1"}
 	processes := []processinfo.Process{process}
-	watcher := New(Options{StorePath: path, Now: func() time.Time { return at }, ProcessList: func(context.Context) ([]processinfo.Process, error) { return processes, nil }, PaneList: func(context.Context) ([]tmuxctx.Pane, error) { return nil, nil }, HealthPath: path + ".health"})
+	watcher := New(Options{StorePath: path, Now: func() time.Time { return at }, ProcessList: func(context.Context) ([]processinfo.Process, error) { return processes, nil }, PaneList: func(context.Context) ([]muxctx.Pane, error) { return nil, nil }, HealthPath: path + ".health"})
 	first, err := watcher.RunOnce(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -169,7 +168,7 @@ func TestObserverRetriesFailedGoneObservationAndEvictsTrackedProcess(t *testing.
 		ProcessList: func(context.Context) ([]processinfo.Process, error) {
 			return processes, nil
 		},
-		PaneList:    func(context.Context) ([]tmuxctx.Pane, error) { return nil, nil },
+		PaneList:    func(context.Context) ([]muxctx.Pane, error) { return nil, nil },
 		CatalogList: func(context.Context) ([]CatalogEntry, error) { return nil, nil },
 	})
 	if _, err := watcher.RunOnce(context.Background()); err != nil {
@@ -220,7 +219,7 @@ func TestObserverConflictDoesNotBlockIndependentObservation(t *testing.T) {
 		Store:       store,
 		Now:         func() time.Time { return at },
 		ProcessList: func(context.Context) ([]processinfo.Process, error) { return processes, nil },
-		PaneList:    func(context.Context) ([]tmuxctx.Pane, error) { return nil, nil },
+		PaneList:    func(context.Context) ([]muxctx.Pane, error) { return nil, nil },
 		CatalogList: func(context.Context) ([]CatalogEntry, error) { return nil, nil },
 	})
 
@@ -261,7 +260,7 @@ func TestObserverPreservesAtomicConflictAfterSuccessfulIndividualRetries(t *test
 				Executable: "/usr/bin/codex", CWD: "/work", TTY: "/dev/pts/1",
 			}}, nil
 		},
-		PaneList:    func(context.Context) ([]tmuxctx.Pane, error) { return nil, nil },
+		PaneList:    func(context.Context) ([]muxctx.Pane, error) { return nil, nil },
 		CatalogList: func(context.Context) ([]CatalogEntry, error) { return nil, nil },
 	})
 
@@ -288,7 +287,7 @@ func TestObserverTracksProcessesCommittedDuringConflictRecovery(t *testing.T) {
 		Store:       store,
 		Now:         func() time.Time { return at },
 		ProcessList: func(context.Context) ([]processinfo.Process, error) { return processes, nil },
-		PaneList:    func(context.Context) ([]tmuxctx.Pane, error) { return nil, nil },
+		PaneList:    func(context.Context) ([]muxctx.Pane, error) { return nil, nil },
 		CatalogList: func(context.Context) ([]CatalogEntry, error) { return nil, nil },
 	})
 	if _, err := watcher.RunOnce(context.Background()); !errors.Is(err, registry.ErrObservationConflict) {
@@ -331,7 +330,7 @@ func TestObserverRetriesConflictingAbsenceWithoutAdvancingTracker(t *testing.T) 
 		Store:       store,
 		Now:         func() time.Time { return at },
 		ProcessList: func(context.Context) ([]processinfo.Process, error) { return processes, nil },
-		PaneList:    func(context.Context) ([]tmuxctx.Pane, error) { return nil, nil },
+		PaneList:    func(context.Context) ([]muxctx.Pane, error) { return nil, nil },
 		CatalogList: func(context.Context) ([]CatalogEntry, error) { return nil, nil },
 	})
 	if _, err := watcher.RunOnce(context.Background()); err != nil {
@@ -378,7 +377,7 @@ func TestObserverRejectsConcurrentRunsOnOneInstance(t *testing.T) {
 			<-release
 			return nil, nil
 		},
-		PaneList:    func(context.Context) ([]tmuxctx.Pane, error) { return nil, nil },
+		PaneList:    func(context.Context) ([]muxctx.Pane, error) { return nil, nil },
 		CatalogList: func(context.Context) ([]CatalogEntry, error) { return nil, nil },
 	})
 	firstDone := make(chan error, 1)
@@ -411,7 +410,7 @@ func TestObserverRetriesHealthWriteAfterPersistenceFailure(t *testing.T) {
 		HealthPath:  healthPath,
 		Now:         func() time.Time { return at },
 		ProcessList: func(context.Context) ([]processinfo.Process, error) { return nil, nil },
-		PaneList:    func(context.Context) ([]tmuxctx.Pane, error) { return nil, nil },
+		PaneList:    func(context.Context) ([]muxctx.Pane, error) { return nil, nil },
 		CatalogList: func(context.Context) ([]CatalogEntry, error) { return nil, nil },
 	})
 	if _, err := watcher.RunOnce(context.Background()); err == nil {
@@ -444,7 +443,7 @@ func TestObserverRestartMarksMissingStoredProcessGone(t *testing.T) {
 		ProcessList: func(context.Context) ([]processinfo.Process, error) {
 			return processes, nil
 		},
-		PaneList:    func(context.Context) ([]tmuxctx.Pane, error) { return nil, nil },
+		PaneList:    func(context.Context) ([]muxctx.Pane, error) { return nil, nil },
 		CatalogList: func(context.Context) ([]CatalogEntry, error) { return nil, nil },
 		HealthPath:  path + ".health",
 	}
@@ -507,7 +506,7 @@ func TestObserverMarksHookCreatedDeadProcessGoneInOneCycle(t *testing.T) {
 		ProcessList: func(context.Context) ([]processinfo.Process, error) {
 			return nil, nil
 		},
-		PaneList:    func(context.Context) ([]tmuxctx.Pane, error) { return nil, nil },
+		PaneList:    func(context.Context) ([]muxctx.Pane, error) { return nil, nil },
 		CatalogList: func(context.Context) ([]CatalogEntry, error) { return nil, nil },
 		HealthPath:  path + ".health",
 	}
@@ -541,7 +540,7 @@ func TestObserverKeepsHookCreatedLiveProcessAndRetiresReusedPid(t *testing.T) {
 			ProcessList: func(context.Context) ([]processinfo.Process, error) {
 				return processes, nil
 			},
-			PaneList:    func(context.Context) ([]tmuxctx.Pane, error) { return nil, nil },
+			PaneList:    func(context.Context) ([]muxctx.Pane, error) { return nil, nil },
 			CatalogList: func(context.Context) ([]CatalogEntry, error) { return nil, nil },
 			HealthPath:  path + ".health",
 		}
@@ -596,7 +595,7 @@ func TestObserverMarksHookCreatedSessionWithDeadPanePIDGone(t *testing.T) {
 			// Process 1392 has died, only unrelated process exists
 			return []processinfo.Process{{PID: 99999, StartIdentity: "boot:99999"}}, nil
 		},
-		PaneList:    func(context.Context) ([]tmuxctx.Pane, error) { return nil, nil },
+		PaneList:    func(context.Context) ([]muxctx.Pane, error) { return nil, nil },
 		CatalogList: func(context.Context) ([]CatalogEntry, error) { return nil, nil },
 		HealthPath:  path + ".health",
 	}
@@ -634,7 +633,7 @@ func TestObserverCatalogCorrelatesCurrentClaudeProcess(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "sessions.json")
 	at := time.Now().UTC().Add(-time.Minute)
 	process := processinfo.Process{PID: 42, PPID: 1, ProcessGroupID: 42, StartIdentity: "boot:A", Executable: "/usr/bin/claude"}
-	watcher := New(Options{StorePath: path, Now: func() time.Time { return at }, ProcessList: func(context.Context) ([]processinfo.Process, error) { return []processinfo.Process{process}, nil }, PaneList: func(context.Context) ([]tmuxctx.Pane, error) { return nil, nil }, CatalogList: func(context.Context) ([]CatalogEntry, error) {
+	watcher := New(Options{StorePath: path, Now: func() time.Time { return at }, ProcessList: func(context.Context) ([]processinfo.Process, error) { return []processinfo.Process{process}, nil }, PaneList: func(context.Context) ([]muxctx.Pane, error) { return nil, nil }, CatalogList: func(context.Context) ([]CatalogEntry, error) {
 		return []CatalogEntry{{Harness: registry.HarnessClaude, SessionID: "agent-1", ProcessPID: 42, Current: true}}, nil
 	}})
 	if _, err := watcher.RunOnce(context.Background()); err != nil {
@@ -674,10 +673,10 @@ func TestObserverCorrelatesAgentAcrossIntermediateShells(t *testing.T) {
 		ProcessList: func(context.Context) ([]processinfo.Process, error) {
 			return processes, nil
 		},
-		MultiplexerPaneList: func(context.Context) ([]muxctx.Pane, error) {
+		PaneList: func(context.Context) ([]muxctx.Pane, error) {
 			return []muxctx.Pane{pane}, nil
 		},
-		MultiplexerScreenCapture: func(context.Context, muxctx.Pane) (muxctx.ScreenSnapshot, error) {
+		ScreenCapture: func(context.Context, muxctx.Pane) (muxctx.ScreenSnapshot, error) {
 			return muxctx.ScreenSnapshot{Text: "› ready"}, nil
 		},
 		CatalogList: func(context.Context) ([]CatalogEntry, error) { return nil, nil },
@@ -713,7 +712,7 @@ func TestObserverSuppressesWrapperWhenDirectAgentChildExists(t *testing.T) {
 		ProcessList: func(context.Context) ([]processinfo.Process, error) {
 			return processes, nil
 		},
-		PaneList:    func(context.Context) ([]tmuxctx.Pane, error) { return nil, nil },
+		PaneList:    func(context.Context) ([]muxctx.Pane, error) { return nil, nil },
 		CatalogList: func(context.Context) ([]CatalogEntry, error) { return nil, nil },
 	})
 	result, err := watcher.RunOnce(context.Background())
@@ -739,7 +738,7 @@ func TestRunWithResultsStreamsEveryCycle(t *testing.T) {
 			cancel()
 			return nil, nil
 		},
-		PaneList:    func(context.Context) ([]tmuxctx.Pane, error) { return nil, nil },
+		PaneList:    func(context.Context) ([]muxctx.Pane, error) { return nil, nil },
 		CatalogList: func(context.Context) ([]CatalogEntry, error) { return nil, nil },
 	})
 	if err := watcher.RunWithResults(ctx, func(result Result) error {

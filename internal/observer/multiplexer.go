@@ -67,13 +67,6 @@ func multiplexerPanesFromTmux(panes []tmuxctx.Pane) []muxctx.Pane {
 	return result
 }
 
-func legacyTmuxPaneLister(list PaneLister) muxctx.PaneLister {
-	return func(ctx context.Context) ([]muxctx.Pane, error) {
-		panes, err := list(ctx)
-		return multiplexerPanesFromTmux(panes), err
-	}
-}
-
 func captureMultiplexerPane(ctx context.Context, pane muxctx.Pane) (muxctx.ScreenSnapshot, error) {
 	switch pane.Location.Kind {
 	case registry.MultiplexerTmux:
@@ -100,17 +93,6 @@ func captureMultiplexerPane(ctx context.Context, pane muxctx.Pane) (muxctx.Scree
 		return snapshot, nil
 	default:
 		return muxctx.ScreenSnapshot{}, errUnsupportedMultiplexerPane
-	}
-}
-
-func legacyTmuxScreenCapturer(capture ScreenCapturer) muxctx.ScreenCapturer {
-	return func(ctx context.Context, pane muxctx.Pane) (muxctx.ScreenSnapshot, error) {
-		tmuxPane := tmuxctx.Pane{
-			Tmux: pane.Location.TmuxContext(), ServerIdentity: pane.Location.ServerID,
-			PanePID: pane.Location.PanePID, PaneTTY: pane.Location.PaneTTY,
-		}
-		snapshot, err := capture(ctx, tmuxPane)
-		return muxctx.ScreenSnapshot{Text: snapshot.Text, Title: snapshot.Title}, err
 	}
 }
 

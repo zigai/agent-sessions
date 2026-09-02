@@ -36,11 +36,7 @@ var (
 	ErrAlreadyRunning           = errors.New("observer is already running")
 )
 
-type (
-	ProcessLister  func(context.Context) ([]processinfo.Process, error)
-	PaneLister     func(context.Context) ([]tmuxctx.Pane, error)
-	ScreenCapturer func(context.Context, tmuxctx.Pane) (tmuxctx.ScreenSnapshot, error)
-)
+type ProcessLister func(context.Context) ([]processinfo.Process, error)
 
 type CatalogEntry struct {
 	Harness       registry.Harness `json:"harness"`
@@ -55,21 +51,19 @@ type CatalogEntry struct {
 type CatalogLister func(context.Context) ([]CatalogEntry, error)
 
 type Options struct {
-	Store                    registry.Store
-	StorePath                string
-	Interval                 time.Duration
-	GracePeriod              time.Duration
-	HealthPath               string
-	ProcessList              ProcessLister
-	PaneList                 PaneLister
-	CatalogList              CatalogLister
-	ScreenCapture            ScreenCapturer
-	MultiplexerPaneList      muxctx.PaneLister
-	MultiplexerScreenCapture muxctx.ScreenCapturer
-	DetectionConfigDir       string
-	Now                      func() time.Time
-	ErrorWriter              io.Writer
-	Quiet                    bool
+	Store              registry.Store
+	StorePath          string
+	Interval           time.Duration
+	GracePeriod        time.Duration
+	HealthPath         string
+	ProcessList        ProcessLister
+	PaneList           muxctx.PaneLister
+	CatalogList        CatalogLister
+	ScreenCapture      muxctx.ScreenCapturer
+	DetectionConfigDir string
+	Now                func() time.Time
+	ErrorWriter        io.Writer
+	Quiet              bool
 }
 
 type Result struct {
@@ -131,7 +125,6 @@ type Observer struct {
 	paneList       muxctx.PaneLister
 	catalogList    CatalogLister
 	screenCapture  muxctx.ScreenCapturer
-	tmuxOnly       bool
 	manifestLoader agentstate.Loader
 	now            func() time.Time
 	errorWriter    io.Writer
@@ -167,15 +160,9 @@ func New(options Options) *Observer {
 	if processList == nil {
 		processList = processinfo.List
 	}
-	paneList := options.MultiplexerPaneList
-	tmuxOnly := false
+	paneList := options.PaneList
 	if paneList == nil {
-		if options.PaneList != nil {
-			paneList = legacyTmuxPaneLister(options.PaneList)
-			tmuxOnly = true
-		} else {
-			paneList = listMultiplexerPanes
-		}
+		paneList = listMultiplexerPanes
 	}
 	now := options.Now
 	if now == nil {
@@ -201,18 +188,14 @@ func New(options Options) *Observer {
 	if catalogList == nil {
 		catalogList = DefaultCatalogList
 	}
-	screenCapture := options.MultiplexerScreenCapture
+	screenCapture := options.ScreenCapture
 	if screenCapture == nil {
-		if options.ScreenCapture != nil {
-			screenCapture = legacyTmuxScreenCapturer(options.ScreenCapture)
-		} else {
-			screenCapture = captureMultiplexerPane
-		}
+		screenCapture = captureMultiplexerPane
 	}
 	return &Observer{
 		store: store, storePath: storePath, interval: interval, grace: options.GracePeriod,
 		healthPath: healthPath, processList: processList, paneList: paneList, catalogList: catalogList,
-		screenCapture: screenCapture, tmuxOnly: tmuxOnly, manifestLoader: agentstate.Loader{ConfigDir: options.DetectionConfigDir},
+		screenCapture: screenCapture, manifestLoader: agentstate.Loader{ConfigDir: options.DetectionConfigDir},
 		now: now, errorWriter: errorWriter, quiet: options.Quiet,
 		tracked: make(map[processKey]trackedProcess), screenPending: make(map[processKey]pendingScreenDecision),
 		mu: sync.Mutex{}, startedAt: time.Time{}, initialized: false, health: Health{PID: 0, StartIdentity: "", Interval: 0, GracePeriod: 0, StartedAt: time.Time{}, LastAttemptAt: time.Time{}, LastSuccessAt: time.Time{}, LastEnumerationErrorCategory: "", LastEnumerationError: "", Cycles: 0, Observations: 0, Sessions: 0, Degraded: false},
@@ -410,7 +393,7 @@ func (o *Observer) runCycle(ctx context.Context) (Result, error) {
 		locationPIDs[process.PID] = true
 	}
 	if paneErr == nil {
-		observations = append(observations, observationsForUnlocatedProcesses(o.manifestLoader, knownSessions, processByPID, harnessByPID, locationPIDs, o.tmuxOnly, at)...)
+		observations = append(observations, observationsForUnlocatedProcesses(o.manifestLoader, knownSessions, processByPID, harnessByPID, locationPIDs, at)...)
 	}
 	for _, entry := range catalog {
 		if entry.Harness == "" || entry.SessionID == "" {
@@ -550,7 +533,7 @@ func isAgentWrapper(process processinfo.Process) bool {
 	}
 }
 
-func observationsForUnlocatedProcesses(manifestLoader agentstate.Loader, sessions []registry.Session, processByPID map[int]processinfo.Process, harnessByPID map[int]registry.Harness, locationPIDs map[int]bool, tmuxOnly bool, at time.Time) []registry.Observation {
+func observationsForUnlocatedProcesses(manifestLoader agentstate.Loader, sessions []registry.Session, processByPID map[int]processinfo.Process, harnessByPID map[int]registry.Harness, locationPIDs map[int]bool, at time.Time) []registry.Observation {
 	observations := make([]registry.Observation, 0, len(harnessByPID))
 	for pid, harnessID := range harnessByPID {
 		if locationPIDs[pid] {
@@ -560,24 +543,12 @@ func observationsForUnlocatedProcesses(manifestLoader agentstate.Loader, session
 		if !ok {
 			continue
 		}
-		if tmuxOnly {
-			emptyContext := registry.TmuxContext{}                    //nolint:exhaustruct // zero-value tmux context represents no pane location
-			observations = append(observations, registry.Observation{ //nolint:exhaustruct // tmux observations intentionally omit unrelated evidence dimensions
-				Source: registry.ObservationSourceTmux, Evidence: registry.ObservationEvidenceTmuxLocation,
-				Harness: harnessID, Process: processIdentity(process), Tmux: &emptyContext, ObservedAt: at,
-			})
-		} else {
-			emptyContext := registry.MultiplexerContext{}             //nolint:exhaustruct // zero-value context represents no supported multiplexer pane
-			observations = append(observations, registry.Observation{ //nolint:exhaustruct // location observations intentionally omit unrelated evidence dimensions
-				Source: registry.ObservationSourceMultiplexer, Evidence: registry.ObservationEvidenceMultiplexerLocation,
-				Harness: harnessID, Process: processIdentity(process), Multiplexer: &emptyContext, ObservedAt: at,
-			})
-		}
-		unavailableReason := "screen_not_in_supported_multiplexer"
-		if tmuxOnly {
-			unavailableReason = "screen_not_in_tmux"
-		}
-		if screenObservation, detected := unavailableScreenState(manifestLoader, sessions, harnessID, process, at, unavailableReason); detected {
+		emptyContext := registry.MultiplexerContext{}             //nolint:exhaustruct // zero-value context represents no supported multiplexer pane
+		observations = append(observations, registry.Observation{ //nolint:exhaustruct // location observations intentionally omit unrelated evidence dimensions
+			Source: registry.ObservationSourceMultiplexer, Evidence: registry.ObservationEvidenceMultiplexerLocation,
+			Harness: harnessID, Process: processIdentity(process), Multiplexer: &emptyContext, ObservedAt: at,
+		})
+		if screenObservation, detected := unavailableScreenState(manifestLoader, sessions, harnessID, process, at, "screen_not_in_supported_multiplexer"); detected {
 			observations = append(observations, screenObservation)
 		}
 	}

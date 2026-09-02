@@ -113,7 +113,7 @@ func TestCurrentHerdrDiscoveryAndCapture(t *testing.T) {
 		_ = logFile.Close()
 	})
 
-	waitForCommandSuccess(t, 10*time.Second, herdr, "status", "server")
+	waitForCommandSuccess(t, 10*time.Second, herdr, "api", "snapshot")
 	workspace := exec.Command(herdr, "workspace", "create", "--cwd", t.TempDir(), "--label", "aht-test", "--no-focus")
 	workspace.Env = os.Environ()
 	output, err := workspace.CombinedOutput()
