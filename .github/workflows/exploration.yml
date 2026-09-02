@@ -1,0 +1,63 @@
+name: Exploration
+
+on:
+  schedule:
+    - cron: "41 7 * * 3"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: exploration-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fuzz:
+    name: Fuzz ${{ matrix.target }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - package: ./internal/agentstate
+            target: FuzzNormalizeSnapshotBounded
+          - package: ./internal/agentstate
+            target: FuzzParseManifest
+          - package: ./internal/processinfo
+            target: FuzzParseLinuxStat
+          - package: ./internal/harness/catalog
+            target: FuzzPayloadAdapters
+          - package: ./pkg/tmuxctx
+            target: FuzzParseCurrent
+          - package: ./pkg/tmuxctx
+            target: FuzzParseListPanes
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Run bounded fuzz target
+        run: go test "${{ matrix.package }}" -run '^$' -fuzz "^${{ matrix.target }}$" -fuzztime 2m -timeout 3m
+
+  vulnerabilities:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Scan reachable vulnerabilities
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...

@@ -28,6 +28,11 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
       - name: Set up Just
         uses: extractions/setup-just@v3
 
@@ -49,6 +54,11 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
 
       - name: Set up Just
         uses: extractions/setup-just@v3

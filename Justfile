@@ -25,6 +25,10 @@ integration:
     fi
     go test -count=1 -v -tags=integration ./...
 
+# Exercise one installed current harness against an isolated local provider
+compatibility harness:
+    AHT_COMPAT_HARNESS="{{ harness }}" go test -count=1 -v -tags=compatibility ./internal/hostcompat -run '^TestCurrentHarnessLifecycle$' -timeout 90s
+
 # Validate built release artifacts and optional published copies
 artifacts artifact_dir="dist" published_dir="":
     AHT_ARTIFACT_DIR="{{ artifact_dir }}" AHT_PUBLISHED_ARTIFACT_DIR="{{ published_dir }}" go test -count=1 -tags=integration ./internal/systemtest -run '^TestReleaseArtifacts$'
@@ -53,12 +57,15 @@ fix:
 lint:
     {{ golangci_lint }} run
 
+# Scan reachable dependencies for known vulnerabilities
+vuln:
+    go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
 # Run all required non-mutating verification
 check: lint test race integration
     go mod tidy -diff
     go build -o /dev/null .
     just --fmt --check
-    {{ actionlint }} .github/workflows/ci.yml .github/workflows/release.yml
+    {{ actionlint }} .github/workflows/ci.yml .github/workflows/compatibility.yml .github/workflows/exploration.yml .github/workflows/release.yml
 
 # Build the project
 build:
