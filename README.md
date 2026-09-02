@@ -53,64 +53,11 @@ Check the installation:
 aht manage doctor
 ```
 
-Run `aht --help` or `aht <command> --help` for all
-commands and options.
+## Documentation
 
-## Go library
-
-AHT provides four public Go packages:
-
-- [`client`](https://pkg.go.dev/github.com/zigai/aht/pkg/client) reads and watches agent-harness state through the local realtime broker, falling back to the durable registry file when the broker is not running.
-- [`registry`](https://pkg.go.dev/github.com/zigai/aht/pkg/registry) defines the core domain model (`Session`, `Presence`, `Activity`), state reducer, and storage engines (`FileStore` and `MemoryStore`).
-- [`manage`](https://pkg.go.dev/github.com/zigai/aht/pkg/manage) programmatically installs harness integrations and manages the platform-native background tracker service (`systemd` on Linux, `launchd` on macOS).
-- [`harness`](https://pkg.go.dev/github.com/zigai/aht/pkg/harness) provides the supported harness catalog, alias normalization, and executable command matching.
-
-### Reading sessions
-
-```go
-package main
-
-import (
-	"context"
-	"fmt"
-
-	"github.com/zigai/aht/pkg/client"
-	"github.com/zigai/aht/pkg/registry"
-)
-
-func main() {
-	ctx := context.Background()
-
-	// Connects to the realtime broker, falling back to the local sessions.json registry.
-	aht := client.New(client.Config{})
-
-	sessions, err := aht.List(ctx, registry.Filter{
-		Presence: registry.PresenceLive,
-	})
-	if err != nil {
-		panic(err)
-	}
-
-	for _, session := range sessions {
-		activity := "unknown"
-		if session.Activity != nil {
-			activity = string(*session.Activity)
-		}
-		fmt.Printf("%s (%s): %s\n", session.Harness, session.SessionID, activity)
-	}
-}
-```
-
-### Watching realtime updates
-
-```go
-err := aht.Watch(ctx, registry.Filter{}, func(snapshot registry.StateSnapshot) error {
-	for _, session := range snapshot.Sessions {
-		fmt.Printf("revision %d: %s (%s) is %s\n", snapshot.Revision, session.Harness, session.ID, session.Presence)
-	}
-	return nil
-})
-```
+- [Configuration](docs/configuration.md) — Configuration file (`config.toml`), options reference, and environment overrides
+- [CLI Reference](docs/cli.md) — Command-line interface usage, commands, and flags
+- [Go Library](docs/library.md) — Package guide, client API, and Go integration examples
 
 ## Hook Installation
 
@@ -121,37 +68,6 @@ aht manage integrations install codex --dry-run --show-content
 ```
 
 `<harness>` is a supported harness name from the list above.
-
-## Full Usage
-
-```text
-aht --help
-```
-
-```text
-Track local coding-agent sessions and where they are running
-
-Usage:
-  aht [flags]
-  aht [command]
-
-Available Commands:
-  list        Show known sessions
-  watch       Stream session changes
-  info        Show session details and optionally explain activity
-  stop        Gracefully stop sessions
-  manage      Manage setup, integrations, tracking, and state
-  hook        Integration protocol endpoint; not intended for manual use
-  help        Help about any command
-
-Flags:
-  -h, --help           help for aht
-      --json           emit JSON (JSON Lines for streams)
-      --store string   registry state file path
-  -v, --version        print version
-
-Use "aht [command] --help" for more information about a command.
-```
 
 ## License
 
