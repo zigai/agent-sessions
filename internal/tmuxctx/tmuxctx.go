@@ -263,7 +263,7 @@ func ParseCurrent(output string) (registry.TmuxContext, error) {
 		return registry.TmuxContext{}, err
 	}
 	if len(fields) != expectedFields {
-		return registry.TmuxContext{}, invalidFieldCountError(expectedFields, len(fields))
+		return registry.TmuxContext{}, fmt.Errorf("%w: expected %d, got %d", ErrInvalidFieldCount, expectedFields, len(fields))
 	}
 
 	return registry.TmuxContext{
@@ -304,7 +304,7 @@ func panesFromFields(fields []string) ([]Pane, error) {
 	fieldCount := listPaneFieldCount
 	if len(fields)%fieldCount != 0 {
 		if len(fields)%legacyListPaneFieldCount != 0 {
-			return nil, invalidFieldCountError(fieldCount, len(fields))
+			return nil, fmt.Errorf("%w: expected %d, got %d", ErrInvalidFieldCount, fieldCount, len(fields))
 		}
 		fieldCount = legacyListPaneFieldCount
 	}
@@ -369,7 +369,7 @@ func parseLegacyListPanes(output string) ([]Pane, error) {
 			}
 		}
 		if len(lineFields) != listPaneFieldCount {
-			return nil, invalidFieldCountError(listPaneFieldCount, len(lineFields))
+			return nil, fmt.Errorf("%w: expected %d, got %d", ErrInvalidFieldCount, listPaneFieldCount, len(lineFields))
 		}
 		fields = append(fields, lineFields...)
 	}
@@ -512,10 +512,6 @@ func splitLegacyFields(output string, expectedFields int) []string {
 	}
 
 	return fields
-}
-
-func invalidFieldCountError(expected int, got int) error {
-	return fmt.Errorf("%w: expected %d, got %d", ErrInvalidFieldCount, expected, got)
 }
 
 func parsePositiveInt(value string) int {
