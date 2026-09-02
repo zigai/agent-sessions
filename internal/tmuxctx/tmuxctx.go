@@ -9,25 +9,24 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/google/shlex"
+
 	"github.com/zigai/aht/pkg/registry"
 )
 
 const (
-	fieldSeparator            = "\t"
-	escapedFieldPrefix        = "tmuxctx:"
-	listPaneFieldCount        = 11
-	legacyListPaneFieldCount  = 10
-	singleQuoteDelimiterWidth = 2
+	fieldSeparator           = "\t"
+	escapedFieldPrefix       = "tmuxctx:"
+	listPaneFieldCount       = 11
+	legacyListPaneFieldCount = 10
 )
 
 var (
 	// ErrNoTmuxContext is returned when no tmux environment is available.
 	ErrNoTmuxContext = errors.New("not inside tmux")
 	// ErrInvalidFieldCount is returned when tmux output does not match the requested format.
-	ErrInvalidFieldCount             = errors.New("invalid tmux field count")
-	errMissingTmuxPaneID             = errors.New("missing tmux pane id")
-	errUnterminatedSingleQuotedField = errors.New("unterminated tmux single-quoted field")
-	errUnterminatedDoubleQuotedField = errors.New("unterminated tmux double-quoted field")
+	ErrInvalidFieldCount = errors.New("invalid tmux field count")
+	errMissingTmuxPaneID = errors.New("missing tmux pane id")
 )
 
 type Pane struct {
@@ -419,10 +418,10 @@ func parseEscapedFields(output string) ([]string, bool, error) {
 	if !strings.Contains(output, escapedFieldPrefix) {
 		return nil, false, nil
 	}
-
-	words, err := shellWords(normalizeLegacyTmuxDollarEscapes(output))
+	normalized := escapeUnquotedTabs(normalizeLegacyTmuxDollarEscapes(output))
+	words, err := shlex.Split(normalized)
 	if err != nil {
-		return nil, false, err
+		return nil, false, fmt.Errorf("parsing tmux fields: %w", err)
 	}
 	if len(words) == 0 {
 		return nil, false, nil
@@ -472,82 +471,32 @@ func normalizeLegacyTmuxDollarEscapes(output string) string {
 	return normalized.String()
 }
 
-func shellWords(input string) ([]string, error) {
-	var words []string
-	var current strings.Builder
-	inWord := false
-	for index := 0; index < len(input); {
-		char := input[index]
+func escapeUnquotedTabs(s string) string {
+	if !strings.ContainsRune(s, '\t') {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	inSingle, inDouble := false, false
+	for i := 0; i < len(s); i++ {
+		c := s[i]
 		switch {
-		case isShellWhitespace(char):
-			if inWord {
-				words = append(words, current.String())
-				current.Reset()
-				inWord = false
+		case c == '\'' && !inDouble:
+			inSingle = !inSingle
+		case c == '"' && !inSingle:
+			inDouble = !inDouble
+		case c == '\\':
+			b.WriteByte(c)
+			if i+1 < len(s) {
+				i++
+				c = s[i]
 			}
-			index++
-		case char == '\'':
-			inWord = true
-			next := strings.IndexByte(input[index+1:], '\'')
-			if next < 0 {
-				return nil, errUnterminatedSingleQuotedField
-			}
-			current.WriteString(input[index+1 : index+1+next])
-			index += next + singleQuoteDelimiterWidth
-		case char == '"':
-			inWord = true
-			nextIndex, err := appendDoubleQuotedShellWord(&current, input, index+1)
-			if err != nil {
-				return nil, err
-			}
-			index = nextIndex
-		case char == '\\':
-			inWord = true
-			if index+1 >= len(input) {
-				current.WriteByte(char)
-				index++
-				continue
-			}
-			current.WriteByte(input[index+1])
-			index += 2
-		default:
-			inWord = true
-			current.WriteByte(char)
-			index++
+		case c == '\t' && !inSingle && !inDouble:
+			b.WriteByte('\\')
 		}
+		b.WriteByte(c)
 	}
-	if inWord {
-		words = append(words, current.String())
-	}
-
-	return words, nil
-}
-
-func appendDoubleQuotedShellWord(current *strings.Builder, input string, index int) (int, error) {
-	for index < len(input) {
-		char := input[index]
-		switch char {
-		case '"':
-			return index + 1, nil
-		case '\\':
-			if index+1 >= len(input) {
-				current.WriteByte(char)
-				index++
-				continue
-			}
-			current.WriteByte(input[index+1])
-			index += 2
-		default:
-			current.WriteByte(char)
-			index++
-		}
-	}
-
-	return index, errUnterminatedDoubleQuotedField
-}
-
-func isShellWhitespace(char byte) bool {
-	return char == ' ' || char == '\n' || char == '\r'
+	return b.String()
 }
 
 func splitLegacyFields(output string, expectedFields int) []string {

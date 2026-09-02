@@ -110,6 +110,22 @@ func TestParseCurrentEscapedFields(t *testing.T) {
 	}
 }
 
+func TestParseCurrentUnquotedTabInField(t *testing.T) {
+	t.Parallel()
+
+	// Real tmux #{q:...} leaves raw tabs unquoted and unescaped
+	output := "tmuxctx:\\$1 tmuxctx:work tmuxctx:@2 tmuxctx:3 tmuxctx:api " +
+		"tmuxctx:%4 tmuxctx:1 tmuxctx:/home/me/dir\twith-tab " +
+		"tmuxctx:1234 tmuxctx:/dev/pts/5 tmuxctx:/dev/pts/1\n"
+	ctx, err := ParseCurrent(output)
+	if err != nil {
+		t.Fatalf("ParseCurrent returned error: %v", err)
+	}
+	if ctx.PaneCurrentPath != "/home/me/dir\twith-tab" {
+		t.Fatalf("unexpected unquoted tab path: %#v", ctx.PaneCurrentPath)
+	}
+}
+
 func TestParseTmuxFieldsHandlesCurrentAndLegacyDollarQuoting(t *testing.T) {
 	t.Parallel()
 
