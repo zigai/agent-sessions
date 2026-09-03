@@ -1,13 +1,14 @@
 package registry
 
 import (
+	"cmp"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -621,29 +622,19 @@ func filterSessions(sessions []Session, filter Filter) []Session {
 }
 
 func sortSessions(sessions []Session) {
-	sort.Slice(sessions, func(i, j int) bool {
-		left, right := sessions[i], sessions[j]
-		if left.Multiplexer.Kind != right.Multiplexer.Kind {
-			return left.Multiplexer.Kind < right.Multiplexer.Kind
-		}
-		if left.Multiplexer.SessionName != right.Multiplexer.SessionName {
-			return left.Multiplexer.SessionName < right.Multiplexer.SessionName
-		}
-		leftContainerIndex := firstNonEmptyString(left.Multiplexer.WindowIndex, left.Multiplexer.TabIndex)
-		rightContainerIndex := firstNonEmptyString(right.Multiplexer.WindowIndex, right.Multiplexer.TabIndex)
-		if cmp := compareNumericStrings(leftContainerIndex, rightContainerIndex); cmp != 0 {
-			return cmp < 0
-		}
-		if cmp := compareNumericStrings(left.Multiplexer.PaneIndex, right.Multiplexer.PaneIndex); cmp != 0 {
-			return cmp < 0
-		}
-		if left.Harness != right.Harness {
-			return left.Harness < right.Harness
-		}
-		if left.ID != right.ID {
-			return left.ID < right.ID
-		}
-		return left.UpdatedAt.Before(right.UpdatedAt)
+	slices.SortFunc(sessions, func(left, right Session) int {
+		return cmp.Or(
+			cmp.Compare(left.Multiplexer.Kind, right.Multiplexer.Kind),
+			cmp.Compare(left.Multiplexer.SessionName, right.Multiplexer.SessionName),
+			compareNumericStrings(
+				firstNonEmptyString(left.Multiplexer.WindowIndex, left.Multiplexer.TabIndex),
+				firstNonEmptyString(right.Multiplexer.WindowIndex, right.Multiplexer.TabIndex),
+			),
+			compareNumericStrings(left.Multiplexer.PaneIndex, right.Multiplexer.PaneIndex),
+			cmp.Compare(left.Harness, right.Harness),
+			cmp.Compare(left.ID, right.ID),
+			left.UpdatedAt.Compare(right.UpdatedAt),
+		)
 	})
 }
 
@@ -660,13 +651,7 @@ func compareNumericStrings(left, right string) int {
 	leftNumber, leftErr := strconv.Atoi(left)
 	rightNumber, rightErr := strconv.Atoi(right)
 	if leftErr == nil && rightErr == nil {
-		if leftNumber < rightNumber {
-			return -1
-		}
-		if leftNumber > rightNumber {
-			return 1
-		}
-		return 0
+		return cmp.Compare(leftNumber, rightNumber)
 	}
 	return strings.Compare(left, right)
 }

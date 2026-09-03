@@ -16,7 +16,6 @@ import (
 
 const (
 	storeSchemaVersion      = 2
-	storeVersion            = storeSchemaVersion
 	maxObservedAtFutureSkew = 5 * time.Minute
 	automaticGoneRetention  = 5 * time.Minute
 )
@@ -48,7 +47,7 @@ func (e *UnsupportedSchemaError) Error() string {
 
 type snapshot struct {
 	SchemaVersion int                `json:"schema_version"`
-	Version       int                `json:"-"`
+	LegacyVersion *int               `json:"version,omitempty"`
 	UpdatedAt     time.Time          `json:"updated_at"`
 	Sessions      map[string]Session `json:"sessions"`
 }
@@ -425,7 +424,7 @@ func storeNativeObservation(session *Session, observation Observation, at time.T
 	if observation.Process != nil {
 		process = *observation.Process
 	}
-	session.Observations.Native = &NativeObservation{Event: observation.NativeEvent, Lifecycle: cloneLifecycle(observation.Lifecycle), Presence: clonePresence(observation.Presence), Activity: cloneActivity(observation.Activity), ActivityAuthoritative: cloneBool(observation.ActivityAuthoritative), Sequence: cloneUint64(observation.Sequence), SessionID: observation.Identity.SessionID, SessionPath: observation.Identity.SessionPath, ObservedAt: at, Attributes: cloneAttributes(observation.Attributes), RawPayload: cloneRaw(observation.RawPayload), Process: process}
+	session.Observations.Native = &NativeObservation{Event: observation.NativeEvent, Lifecycle: clonePtr(observation.Lifecycle), Presence: clonePtr(observation.Presence), Activity: clonePtr(observation.Activity), ActivityAuthoritative: clonePtr(observation.ActivityAuthoritative), Sequence: clonePtr(observation.Sequence), SessionID: observation.Identity.SessionID, SessionPath: observation.Identity.SessionPath, ObservedAt: at, Attributes: cloneAttributes(observation.Attributes), RawPayload: cloneRaw(observation.RawPayload), Process: process}
 }
 
 func storeProcessObservation(session *Session, observation Observation, at time.Time) {
@@ -580,7 +579,7 @@ func applyPresenceAndActivity(session *Session, observation Observation, at time
 			}
 		}
 		if native.Activity != nil && activityIsAuthoritative(observation) && session.Presence != PresenceGone && at.After(session.PresenceChangedAt) && (session.ActivityDecision == nil || !at.Before(session.ActivityDecision.ObservedAt)) {
-			session.Activity = cloneActivity(native.Activity)
+			session.Activity = clonePtr(native.Activity)
 			session.ActivityDecision = &ActivityDecision{Authority: "hook", Reason: native.Event, RuleID: "", ManifestSource: "", ManifestVersion: 0, FallbackReason: "", Process: native.Process, ObservedAt: at}
 		}
 	case ObservationSourceProcess:
@@ -899,7 +898,7 @@ func mergeProvisionalSession(target Session, provisional Session) Session {
 		target.PresenceChangedAt = provisional.PresenceChangedAt
 	}
 	if activityUnknown(target.Activity) && !activityUnknown(provisional.Activity) {
-		target.Activity = cloneActivity(provisional.Activity)
+		target.Activity = clonePtr(provisional.Activity)
 		target.ActivityChangedAt = provisional.ActivityChangedAt
 		target.ActivityDecision = provisional.ActivityDecision
 	}
@@ -938,40 +937,7 @@ func mergeObservations(target Observations, provisional Observations) Observatio
 	return target
 }
 
-func cloneLifecycle(value *NativeLifecycle) *NativeLifecycle {
-	if value == nil {
-		return nil
-	}
-	clone := *value
-	return &clone
-}
-
-func clonePresence(value *Presence) *Presence {
-	if value == nil {
-		return nil
-	}
-	clone := *value
-	return &clone
-}
-
-func cloneBool(value *bool) *bool {
-	if value == nil {
-		return nil
-	}
-	clone := *value
-	return &clone
-}
-
-func cloneUint64(value *uint64) *uint64 {
-	if value == nil {
-		return nil
-	}
-	clone := *value
-
-	return &clone
-}
-
-func cloneActivity(value *Activity) *Activity {
+func clonePtr[T any](value *T) *T {
 	if value == nil {
 		return nil
 	}
@@ -1253,26 +1219,16 @@ func (s *FileStore) load() (snapshot, error) {
 		}
 		return snapshot{}, fmt.Errorf("reading store: %w", err)
 	}
-	var header struct {
-		SchemaVersion *int `json:"schema_version"`
-		Version       *int `json:"version"`
-	}
-	if err := json.Unmarshal(data, &header); err != nil {
-		return snapshot{}, fmt.Errorf("parsing store %s: %w", s.path, err)
-	}
-	if header.SchemaVersion == nil {
-		version := 0
-		if header.Version != nil {
-			version = *header.Version
-		}
-		return snapshot{}, &UnsupportedSchemaError{Path: s.path, Version: version}
-	}
-	if *header.SchemaVersion != storeSchemaVersion {
-		return snapshot{}, &UnsupportedSchemaError{Path: s.path, Version: *header.SchemaVersion}
-	}
 	var snap snapshot
 	if err := json.Unmarshal(data, &snap); err != nil {
 		return snapshot{}, fmt.Errorf("parsing store %s: %w", s.path, err)
+	}
+	if snap.SchemaVersion != storeSchemaVersion {
+		version := snap.SchemaVersion
+		if version == 0 && snap.LegacyVersion != nil {
+			version = *snap.LegacyVersion
+		}
+		return snapshot{}, &UnsupportedSchemaError{Path: s.path, Version: version}
 	}
 	if snap.Sessions == nil {
 		snap.Sessions = make(map[string]Session)
@@ -1340,7 +1296,7 @@ func storedSessionIdentityCorruption(id string, session Session) string {
 		return "map key and session id differ"
 	case session.SchemaVersion != storeSchemaVersion:
 		return "invalid session schema version"
-	case !validStoredHarness(session.Harness):
+	case !validHarness(session.Harness):
 		return "invalid harness"
 	case session.CreatedAt.IsZero() || session.UpdatedAt.IsZero() || session.UpdatedAt.Before(session.CreatedAt):
 		return "invalid session timestamps"
@@ -1446,10 +1402,6 @@ func validStoredActivityDecision(decision ActivityDecision) bool {
 	return !decision.ObservedAt.IsZero() && validStoredProcess(decision.Process, true) && decision.ManifestVersion >= 0
 }
 
-func validStoredHarness(harness Harness) bool {
-	return validHarness(harness)
-}
-
 func validStoredPresence(presence Presence) bool {
 	normalized, err := NormalizePresence(string(presence))
 	return err == nil && normalized != "" && normalized == presence
@@ -1485,7 +1437,7 @@ func validStoredProcess(process ProcessIdentity, allowZero bool) bool {
 }
 
 func newSnapshot() snapshot {
-	return snapshot{SchemaVersion: storeSchemaVersion, Version: 0, UpdatedAt: time.Time{}, Sessions: make(map[string]Session)}
+	return snapshot{SchemaVersion: storeSchemaVersion, LegacyVersion: nil, UpdatedAt: time.Time{}, Sessions: make(map[string]Session)}
 }
 
 func writeSnapshotAtomic(path string, snap snapshot) error {

@@ -71,7 +71,7 @@ func (s *MemoryStore) Observe(ctx context.Context, observation Observation) (Ses
 		return Session{}, err
 	}
 	if len(sessions) > 0 {
-		return cloneSessionValue(sessions[0]), nil
+		return sessions[0], nil
 	}
 
 	s.mu.RLock()
@@ -103,9 +103,11 @@ func (s *MemoryStore) ObserveBatch(ctx context.Context, observations []Observati
 		s.mu.Unlock()
 		return nil, err
 	}
-	if err := validateSnapshot(candidate); err != nil {
-		s.mu.Unlock()
-		return nil, fmt.Errorf("validating updated store: %w", err)
+	for _, session := range saved {
+		if reason := storedSessionCorruption(session.ID, session); reason != "" {
+			s.mu.Unlock()
+			return nil, fmt.Errorf("%w: session %q: %s", ErrCorruptStore, session.ID, reason)
+		}
 	}
 
 	stateChanged := !materialSnapshotsEqual(s.snapshot, candidate)
@@ -386,7 +388,7 @@ func stopAndDrainTimer(timer *time.Timer) {
 func cloneRegistrySnapshotForMutation(source snapshot) snapshot {
 	return snapshot{
 		SchemaVersion: source.SchemaVersion,
-		Version:       source.Version,
+		LegacyVersion: nil,
 		UpdatedAt:     source.UpdatedAt,
 		// The reducer treats Session values as copy-on-write and replaces every
 		// nested pointer or slice it changes, so cloning the map is sufficient
@@ -398,7 +400,7 @@ func cloneRegistrySnapshotForMutation(source snapshot) snapshot {
 func cloneRegistrySnapshot(source snapshot) snapshot {
 	cloned := snapshot{
 		SchemaVersion: source.SchemaVersion,
-		Version:       source.Version,
+		LegacyVersion: nil,
 		UpdatedAt:     source.UpdatedAt,
 		Sessions:      make(map[string]Session, len(source.Sessions)),
 	}
@@ -411,7 +413,7 @@ func cloneRegistrySnapshot(source snapshot) snapshot {
 
 func cloneSessionValue(source Session) Session {
 	cloned := source
-	cloned.Activity = cloneActivity(source.Activity)
+	cloned.Activity = clonePtr(source.Activity)
 	cloned.ResumeCommand = append([]string(nil), source.ResumeCommand...)
 	if source.Process != nil {
 		process := *source.Process
@@ -430,11 +432,11 @@ func cloneObservations(source Observations) Observations {
 	var cloned Observations
 	if source.Native != nil {
 		native := *source.Native
-		native.Lifecycle = cloneLifecycle(source.Native.Lifecycle)
-		native.Presence = clonePresence(source.Native.Presence)
-		native.Activity = cloneActivity(source.Native.Activity)
-		native.ActivityAuthoritative = cloneBool(source.Native.ActivityAuthoritative)
-		native.Sequence = cloneUint64(source.Native.Sequence)
+		native.Lifecycle = clonePtr(source.Native.Lifecycle)
+		native.Presence = clonePtr(source.Native.Presence)
+		native.Activity = clonePtr(source.Native.Activity)
+		native.ActivityAuthoritative = clonePtr(source.Native.ActivityAuthoritative)
+		native.Sequence = clonePtr(source.Native.Sequence)
 		native.Attributes = cloneAttributes(source.Native.Attributes)
 		native.RawPayload = cloneRaw(source.Native.RawPayload)
 		cloned.Native = &native

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"maps"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -301,78 +300,8 @@ func cloneWatchSessions(sessions []Session) []Session {
 	}
 	cloned := make([]Session, len(sessions))
 	for index := range sessions {
-		cloned[index] = cloneWatchSession(sessions[index])
+		cloned[index] = cloneSessionValue(sessions[index])
 	}
-	return cloned
-}
-
-func cloneWatchSession(session Session) Session {
-	cloned := session
-	cloned.Activity = cloneActivity(session.Activity)
-	cloned.ResumeCommand = cloneWatchSlice(session.ResumeCommand)
-	if session.Process != nil {
-		process := *session.Process
-		cloned.Process = &process
-	}
-	cloned.Observations = cloneWatchObservations(session.Observations)
-	if session.ActivityDecision != nil {
-		decision := *session.ActivityDecision
-		cloned.ActivityDecision = &decision
-	}
-	return cloned
-}
-
-func cloneWatchObservations(observations Observations) Observations {
-	cloned := observations
-	if observations.Native != nil {
-		native := *observations.Native
-		native.Lifecycle = cloneLifecycle(observations.Native.Lifecycle)
-		native.Presence = clonePresence(observations.Native.Presence)
-		native.Activity = cloneActivity(observations.Native.Activity)
-		native.ActivityAuthoritative = cloneBool(observations.Native.ActivityAuthoritative)
-		native.Attributes = cloneWatchAttributes(observations.Native.Attributes)
-		native.RawPayload = cloneWatchSlice(observations.Native.RawPayload)
-		cloned.Native = &native
-	}
-	if observations.Process != nil {
-		process := *observations.Process
-		cloned.Process = &process
-	}
-	if observations.Tmux != nil {
-		tmux := *observations.Tmux
-		cloned.Tmux = &tmux
-	}
-	if observations.Multiplexer != nil {
-		multiplexer := *observations.Multiplexer
-		cloned.Multiplexer = &multiplexer
-	}
-	if observations.Catalog != nil {
-		catalog := *observations.Catalog
-		catalog.ResumeCommand = cloneWatchSlice(observations.Catalog.ResumeCommand)
-		cloned.Catalog = &catalog
-	}
-	if observations.Screen != nil {
-		screen := *observations.Screen
-		cloned.Screen = &screen
-	}
-	return cloned
-}
-
-func cloneWatchSlice[T any](values []T) []T {
-	if values == nil {
-		return nil
-	}
-	cloned := make([]T, len(values))
-	copy(cloned, values)
-	return cloned
-}
-
-func cloneWatchAttributes(attributes map[string]string) map[string]string {
-	if attributes == nil {
-		return nil
-	}
-	cloned := make(map[string]string, len(attributes))
-	maps.Copy(cloned, attributes)
 	return cloned
 }
 
