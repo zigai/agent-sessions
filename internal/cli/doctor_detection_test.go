@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/zigai/aht/internal/agentstate"
 )
 
 func TestDoctorHandlesInvalidDetectionManifests(t *testing.T) {
@@ -18,9 +20,13 @@ func TestDoctorHandlesInvalidDetectionManifests(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			configHome := t.TempDir()
-			t.Setenv("XDG_CONFIG_HOME", configHome)
-			detectionDir := filepath.Join(configHome, "aht", "detection")
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+			detectionDir := agentstate.DefaultConfigDir()
+			if detectionDir == "" {
+				t.Fatal("empty detection dir")
+			}
 			if err := os.MkdirAll(detectionDir, 0o700); err != nil {
 				t.Fatal(err)
 			}
