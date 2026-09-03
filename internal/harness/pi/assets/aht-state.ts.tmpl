@@ -7,12 +7,28 @@ import { spawn } from "node:child_process";
 
 const ahtBin = {{BINARY}};
 const currentSessionSource = {{SOURCE}};
-
+const heartbeatIntervalMs = 10000;
 let currentSessionId: string | undefined;
 let currentSessionPath: string | undefined;
 let currentCwd: string | undefined;
 
 let lastTurnActivity: string | undefined;
+let heartbeatTimer: any;
+
+function startHeartbeat(ctx?: any): void {
+  stopHeartbeat();
+  heartbeatTimer = setInterval(() => {
+    report("running", ctx);
+  }, heartbeatIntervalMs);
+  heartbeatTimer.unref?.();
+}
+
+function stopHeartbeat(): void {
+  if (heartbeatTimer) {
+    clearInterval(heartbeatTimer);
+    heartbeatTimer = undefined;
+  }
+}
 
 function updateSessionRef(ctx: any): void {
   try {
@@ -112,6 +128,7 @@ function report(transition: string, ctx?: any, event?: any): void {
 }
 export default function (pi: any) {
   pi.on("session_start", (event: any, ctx: any) => {
+    stopHeartbeat();
     lastTurnActivity = undefined;
     report("idle", ctx, event);
   });
@@ -119,21 +136,30 @@ export default function (pi: any) {
   pi.on("before_agent_start", (event: any, ctx: any) => {
     lastTurnActivity = undefined;
     report("running", ctx, event);
+    startHeartbeat(ctx);
   });
 
   pi.on("agent_start", (event: any, ctx: any) => {
     lastTurnActivity = undefined;
     report("running", ctx, event);
+    startHeartbeat(ctx);
   });
 
   pi.on("ui_prompt_start", (event: any, ctx: any) => {
+    stopHeartbeat();
     report("waiting", ctx, event);
   });
   pi.on("ui_prompt_end", (event: any, ctx: any) => {
+    if (ctx.isIdle()) {
+      stopHeartbeat();
+    } else {
+      startHeartbeat(ctx);
+    }
     report(ctx.isIdle() ? "idle" : "running", ctx, event);
   });
 
   pi.on("agent_settled", (event: any, ctx: any) => {
+    stopHeartbeat();
     if (lastTurnActivity === "interrupted" || lastTurnActivity === "failed") {
       report(lastTurnActivity, ctx, event);
       return;
@@ -144,10 +170,14 @@ export default function (pi: any) {
   pi.on("agent_end", (event: any, ctx: any) => {
     const activity = resolveActivity(event, event?.willContinue === true);
     lastTurnActivity = activity;
+    if (activity !== "running") {
+      stopHeartbeat();
+    }
     report(activity, ctx, event);
   });
 
   pi.on("session_shutdown", (event: any, ctx: any) => {
+    stopHeartbeat();
     report("gone", ctx, event);
   });
 }

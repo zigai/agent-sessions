@@ -10,6 +10,7 @@ const currentSessionSource = {{SOURCE}};
 const idleDebounceMs = 150;
 const retryGraceMs = 2500;
 const commandTimeoutMs = 3000;
+const heartbeatIntervalMs = 10000;
 const retryableErrorPattern =
   /overloaded|provider.?returned.?error|rate.?limit|too many requests|429|500|502|503|504|service.?unavailable|server.?error|internal.?error|network.?error|connection.?error|connection.?refused|connection.?lost|websocket.?closed|websocket.?error|other side closed|fetch failed|upstream.?connect|reset before headers|socket hang up|ended without|http2 request did not get a response|timed? out|timeout|terminated|retry delay/i;
 
@@ -198,6 +199,7 @@ export default function (pi: any) {
   let retryTimer: ReturnType<typeof setTimeout> | undefined;
   let stateSendInFlight = false;
   let pendingState: PendingState | undefined;
+  let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
 
   function clearTimer(timer: ReturnType<typeof setTimeout> | undefined): void {
     if (timer) clearTimeout(timer);
@@ -206,8 +208,28 @@ export default function (pi: any) {
   function clearTimers(): void {
     clearTimer(idleTimer);
     clearTimer(retryTimer);
+    stopHeartbeat();
     idleTimer = undefined;
     retryTimer = undefined;
+  }
+
+  function startHeartbeat(): void {
+    stopHeartbeat();
+    heartbeatTimer = setInterval(() => {
+      if (!rootSession || !agentActive) {
+        stopHeartbeat();
+        return;
+      }
+      publishDesired(undefined, true);
+    }, heartbeatIntervalMs);
+    heartbeatTimer.unref?.();
+  }
+
+  function stopHeartbeat(): void {
+    if (heartbeatTimer) {
+      clearInterval(heartbeatTimer);
+      heartbeatTimer = undefined;
+    }
   }
 
   function desiredState(): { activity: Activity; message?: string } {
@@ -334,6 +356,7 @@ export default function (pi: any) {
       failureMessage = undefined;
       agentActive = true;
       publishDesired(event);
+      startHeartbeat();
     });
   }
 
@@ -367,6 +390,7 @@ export default function (pi: any) {
     if (!rootSession || !agentActive || event?.willContinue === true) return;
     currentContext = ctx ?? currentContext;
     agentActive = false;
+    stopHeartbeat();
     const retryable = retryableErrorMessage(event);
     if (retryable) {
       holdRetry(retryable, event);
@@ -402,6 +426,7 @@ export default function (pi: any) {
     if (!rootSession && !activateRoot(ctx)) return;
     currentContext = ctx;
     agentActive = false;
+    stopHeartbeat();
     const retryable = retryableErrorMessage(event);
     if (retryable) {
       holdRetry(retryable, event);

@@ -129,6 +129,21 @@ func TestBundledManifestScenarioBoundaries(t *testing.T) {
 			name: "pi exact historical working text", harness: registry.HarnessPi,
 			screen: "Working...\n" + piFooter, want: registry.ActivityIdle, rule: "custom_input_prompt",
 		},
+		{
+			name: "omp custom working with trailing action text", harness: registry.HarnessOmp,
+			screen: "  ⠋ Working... (2m 9s) Running build\n" + piFooter,
+			want:   registry.ActivityRunning, rule: "custom_working",
+		},
+		{
+			name: "omp custom working suppresses custom footer idle", harness: registry.HarnessOmp,
+			screen: "  ⠹ Working... (16m 30s) Running test suite\n" + piFooter,
+			want:   registry.ActivityRunning, rule: "custom_working",
+		},
+		{
+			name: "pi custom working with trailing action text", harness: registry.HarnessPi,
+			screen: "  ⠋ Working... (40s) Running tests\n" + piFooter,
+			want:   registry.ActivityRunning, rule: "custom_working",
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
