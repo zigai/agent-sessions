@@ -1,20 +1,23 @@
 package herdrctx
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
-	"strconv"
 	"strings"
 
 	"github.com/zigai/aht/internal/muxctx"
 	"github.com/zigai/aht/pkg/registry"
 )
 
-var errPaneRequired = errors.New("herdr pane is required")
+var (
+	errPaneRequired          = errors.New("herdr pane is required")
+	errInvalidSessionsOutput = errors.New("invalid herdr sessions output")
+)
 
 type Env struct {
 	Enabled     string
@@ -149,120 +152,300 @@ func CapturePaneWithOptions(ctx context.Context, pane muxctx.Pane, options Captu
 	return muxctx.ScreenSnapshot{Text: parseReadOutput(output), Title: pane.Title}, nil
 }
 
+type herdrNamedItem struct {
+	ID    string `json:"id"`
+	WsID  string `json:"workspace_id"`
+	TabID string `json:"tab_id"`
+	Name  string `json:"name"`
+	Label string `json:"label"`
+	Title string `json:"title"`
+}
+
+func (n herdrNamedItem) Key() string {
+	return cmp.Or(n.WsID, n.TabID, n.ID)
+}
+
+func (n herdrNamedItem) DisplayName() string {
+	return cmp.Or(n.Label, n.Name, n.Title)
+}
+
+type herdrPaneItem struct {
+	PaneID        string `json:"pane_id"`
+	ID            string `json:"id"`
+	WorkspaceID   string `json:"workspace_id"`
+	TabID         string `json:"tab_id"`
+	ForegroundCWD string `json:"foreground_cwd"`
+	CWD           string `json:"cwd"`
+	Title         string `json:"terminal_title_stripped"`
+	PaneTitle     string `json:"title"`
+	Label         string `json:"label"`
+	AgentStatus   string `json:"agent_status"`
+	Status        string `json:"status"`
+	AgentName     string `json:"agent_name"`
+	Agent         string `json:"agent"`
+	Exited        bool   `json:"exited"`
+	Closed        bool   `json:"closed"`
+}
+
+type herdrAgentItem struct {
+	PaneID      string `json:"pane_id"`
+	Agent       string `json:"agent"`
+	Name        string `json:"name"`
+	Label       string `json:"label"`
+	AgentStatus string `json:"agent_status"`
+	Status      string `json:"status"`
+	State       string `json:"state"`
+}
+
+type herdrSnapshotData struct {
+	Workspaces []herdrNamedItem `json:"workspaces"`
+	Tabs       []herdrNamedItem `json:"tabs"`
+	Panes      []herdrPaneItem  `json:"panes"`
+	Agents     []herdrAgentItem `json:"agents"`
+}
+
+type herdrProcessItem struct {
+	PID     int      `json:"pid"`
+	Cmdline string   `json:"cmdline"`
+	Command string   `json:"command"`
+	Name    string   `json:"name"`
+	Argv    []string `json:"argv"`
+	Args    []string `json:"args"`
+	CWD     string   `json:"cwd"`
+}
+
+type herdrProcessInfoData struct {
+	ShellPID            int                `json:"shell_pid"`
+	ProcessGroupID      int                `json:"foreground_process_group_id"`
+	ForegroundPgid      int                `json:"foreground_pgid"`
+	ForegroundProcesses []herdrProcessItem `json:"foreground_processes"`
+}
+
+type herdrSessionItem struct {
+	Name        string `json:"name"`
+	SessionName string `json:"session_name"`
+	ID          string `json:"id"`
+	Running     *bool  `json:"running"`
+	Exited      bool   `json:"exited"`
+	Dead        bool   `json:"dead"`
+}
+
 func parseSessions(output string) ([]string, error) {
-	root, err := decodeJSON(output)
-	if err != nil {
-		return nil, fmt.Errorf("parse herdr sessions: %w", err)
+	if sessions, ok := parseContainerSessions(output); ok {
+		return sessions, nil
 	}
-	records := findArray(root, "sessions")
-	if records == nil {
-		if direct, ok := root.([]any); ok {
-			records = direct
-		}
+	if sessions, ok := parseListSessions(output); ok {
+		return sessions, nil
+	}
+	return nil, fmt.Errorf("parse herdr sessions: %w", errInvalidSessionsOutput)
+}
+
+func parseContainerSessions(output string) ([]string, bool) {
+	var container struct {
+		Result *struct {
+			Sessions []herdrSessionItem `json:"sessions"`
+		} `json:"result"`
+		Sessions []herdrSessionItem `json:"sessions"`
+	}
+	if err := json.Unmarshal([]byte(output), &container); err != nil {
+		return nil, false
+	}
+	list := container.Sessions
+	if container.Result != nil {
+		list = container.Result.Sessions
+	}
+	if len(list) == 0 {
+		return nil, false
 	}
 	var sessions []string
-	for _, item := range records {
-		if name, ok := item.(string); ok && strings.TrimSpace(name) != "" {
-			sessions = append(sessions, name)
+	for _, s := range list {
+		if s.Exited || s.Dead || (s.Running != nil && !*s.Running) {
 			continue
 		}
-		record, ok := item.(map[string]any)
-		if !ok || boolField(record, "exited", "dead") || explicitlyNotRunning(record) {
-			continue
-		}
-		name := stringField(record, "name", "session_name", "id")
+		name := cmp.Or(s.Name, s.SessionName, s.ID)
 		if name != "" {
 			sessions = append(sessions, name)
 		}
 	}
-	return sessions, nil
+	return sessions, true
 }
 
-func parseSnapshot(session string, output string) ([]muxctx.Pane, error) {
-	root, err := decodeJSON(output)
-	if err != nil {
-		return nil, fmt.Errorf("parse herdr snapshot: %w", err)
+func parseListSessions(output string) ([]string, bool) {
+	var rawList []json.RawMessage
+	if err := json.Unmarshal([]byte(output), &rawList); err != nil {
+		return nil, false
 	}
-	agentsByPane := make(map[string]map[string]any)
-	for _, item := range findArray(root, "agents") {
-		if agent, ok := item.(map[string]any); ok {
-			if paneID := stringField(agent, "pane_id"); paneID != "" {
-				agentsByPane[paneID] = agent
+	var sessions []string
+	for _, item := range rawList {
+		var str string
+		if err := json.Unmarshal(item, &str); err == nil && strings.TrimSpace(str) != "" {
+			sessions = append(sessions, strings.TrimSpace(str))
+			continue
+		}
+		var obj herdrSessionItem
+		if err := json.Unmarshal(item, &obj); err == nil {
+			if obj.Exited || obj.Dead || (obj.Running != nil && !*obj.Running) {
+				continue
+			}
+			name := cmp.Or(obj.Name, obj.SessionName, obj.ID)
+			if name != "" {
+				sessions = append(sessions, name)
 			}
 		}
 	}
-	workspaceNames := namesByID(findArray(root, "workspaces"), "workspace_id")
-	tabNames := namesByID(findArray(root, "tabs"), "tab_id")
-	records := findArray(root, "panes")
-	panes := make([]muxctx.Pane, 0, len(records))
-	for _, item := range records {
-		record, ok := item.(map[string]any)
-		if !ok || boolField(record, "exited", "closed") {
+	return sessions, true
+}
+
+//nolint:cyclop // pane location and metadata mapping evaluates multiple herdr attributes
+func parseSnapshot(session string, output string) ([]muxctx.Pane, error) {
+	var resp struct {
+		herdrSnapshotData
+
+		Result struct {
+			herdrSnapshotData
+
+			Snapshot *herdrSnapshotData `json:"snapshot"`
+		} `json:"result"`
+		Snapshot *herdrSnapshotData `json:"snapshot"`
+	}
+	if err := json.Unmarshal([]byte(output), &resp); err != nil {
+		return nil, fmt.Errorf("parse herdr snapshot: %w", err)
+	}
+	data := resp.herdrSnapshotData
+	switch {
+	case resp.Snapshot != nil:
+		data = *resp.Snapshot
+	case resp.Result.Snapshot != nil:
+		data = *resp.Result.Snapshot
+	case len(resp.Result.Panes) > 0 || len(resp.Result.Workspaces) > 0:
+		data = resp.Result.herdrSnapshotData
+	}
+	agentsByPane := make(map[string]herdrAgentItem, len(data.Agents))
+	for _, agent := range data.Agents {
+		if agent.PaneID != "" {
+			agentsByPane[agent.PaneID] = agent
+		}
+	}
+
+	workspaceNames := make(map[string]string, len(data.Workspaces))
+	for _, ws := range data.Workspaces {
+		if key := ws.Key(); key != "" {
+			workspaceNames[key] = ws.DisplayName()
+		}
+	}
+
+	tabNames := make(map[string]string, len(data.Tabs))
+	for _, tab := range data.Tabs {
+		if key := tab.Key(); key != "" {
+			tabNames[key] = tab.DisplayName()
+		}
+	}
+
+	panes := make([]muxctx.Pane, 0, len(data.Panes))
+	for _, item := range data.Panes {
+		if item.Exited || item.Closed {
 			continue
 		}
-		paneID := stringField(record, "pane_id", "id")
+		paneID := cmp.Or(item.PaneID, item.ID)
 		if paneID == "" {
 			continue
 		}
 		agent := agentsByPane[paneID]
-		status := firstNonEmpty(stringField(record, "agent_status", "status"), stringField(agent, "agent_status", "status", "state"))
+		status := cmp.Or(item.AgentStatus, item.Status, agent.AgentStatus, agent.Status, agent.State)
 		activity := herdrActivity(status)
-		workspaceID := stringField(record, "workspace_id")
-		tabID := stringField(record, "tab_id")
-		cwd := firstNonEmpty(stringField(record, "foreground_cwd"), stringField(record, "cwd"))
-		label := firstNonEmpty(stringField(agent, "agent", "name", "label"), stringField(record, "agent", "agent_name"))
+		cwd := cmp.Or(item.ForegroundCWD, item.CWD)
+		label := cmp.Or(agent.Agent, agent.Name, agent.Label, item.Agent, item.AgentName)
+		title := cmp.Or(item.Title, item.PaneTitle, item.Label, label)
+
 		location := registry.MultiplexerContext{ //nolint:exhaustruct // snapshot omits server, window, TTY, and process fields
-			Kind: registry.MultiplexerHerdr, SessionName: session,
-			WorkspaceID: workspaceID, WorkspaceName: workspaceNames[workspaceID],
-			TabID: tabID, TabName: tabNames[tabID], PaneID: paneID, PaneCurrentPath: cwd,
+			Kind:            registry.MultiplexerHerdr,
+			SessionName:     session,
+			WorkspaceID:     item.WorkspaceID,
+			WorkspaceName:   workspaceNames[item.WorkspaceID],
+			TabID:           item.TabID,
+			TabName:         tabNames[item.TabID],
+			PaneID:          paneID,
+			PaneCurrentPath: cwd,
 		}
 		panes = append(panes, muxctx.Pane{ //nolint:exhaustruct // process references are enriched by pane process-info below
-			Location: location, CWD: cwd, Command: label,
-			Title:    firstNonEmpty(stringField(record, "terminal_title_stripped", "title", "label"), label),
-			Activity: activity, StateReason: "herdr_agent_status",
+			Location:    location,
+			CWD:         cwd,
+			Command:     label,
+			Title:       title,
+			Activity:    activity,
+			StateReason: "herdr_agent_status",
 		})
 	}
 	return panes, nil
 }
 
 func parseProcessInfo(output string) ([]muxctx.ProcessRef, int, error) {
-	root, err := decodeJSON(output)
-	if err != nil {
+	var resp struct {
+		herdrProcessInfoData
+
+		Result struct {
+			herdrProcessInfoData
+
+			ProcessInfo *herdrProcessInfoData `json:"process_info"`
+		} `json:"result"`
+		ProcessInfo *herdrProcessInfoData `json:"process_info"`
+	}
+	if err := json.Unmarshal([]byte(output), &resp); err != nil {
 		return nil, 0, fmt.Errorf("parse herdr process info: %w", err)
 	}
-	processGroupID := findInt(root, "foreground_process_group_id", "foreground_pgid")
-	records := findArray(root, "foreground_processes")
-	refs := make([]muxctx.ProcessRef, 0, len(records)+1)
-	for _, item := range records {
-		record, ok := item.(map[string]any)
-		if !ok {
+	data := resp.herdrProcessInfoData
+	switch {
+	case resp.ProcessInfo != nil:
+		data = *resp.ProcessInfo
+	case resp.Result.ProcessInfo != nil:
+		data = *resp.Result.ProcessInfo
+	case len(resp.Result.ForegroundProcesses) > 0 || resp.Result.ShellPID > 0:
+		data = resp.Result.herdrProcessInfoData
+	}
+	processGroupID := cmp.Or(data.ProcessGroupID, data.ForegroundPgid)
+	refs := make([]muxctx.ProcessRef, 0, len(data.ForegroundProcesses)+1)
+	for _, item := range data.ForegroundProcesses {
+		if item.PID <= 0 {
 			continue
 		}
-		pid := intField(record, "pid")
-		if pid <= 0 {
-			continue
-		}
-		command := stringField(record, "cmdline", "command", "name")
+		command := cmp.Or(item.Cmdline, item.Command, item.Name)
 		if command == "" {
-			if argv := stringSliceField(record, "argv", "args"); len(argv) > 0 {
+			argv := item.Argv
+			if len(argv) == 0 {
+				argv = item.Args
+			}
+			if len(argv) > 0 {
 				command = strings.Join(argv, " ")
 			}
 		}
-		refs = append(refs, muxctx.ProcessRef{PID: pid, ProcessGroupID: processGroupID, Command: command, CWD: stringField(record, "cwd")})
+		refs = append(refs, muxctx.ProcessRef{
+			PID:            item.PID,
+			ProcessGroupID: processGroupID,
+			Command:        command,
+			CWD:            item.CWD,
+		})
 	}
-	if shellPID := findInt(root, "shell_pid"); shellPID > 0 {
-		refs = append(refs, muxctx.ProcessRef{PID: shellPID, ProcessGroupID: 0, Command: "", CWD: ""})
+	if data.ShellPID > 0 {
+		refs = append(refs, muxctx.ProcessRef{PID: data.ShellPID, ProcessGroupID: 0, Command: "", CWD: ""})
 	}
 	return refs, processGroupID, nil
 }
 
 func parseReadOutput(output string) string {
-	root, err := decodeJSON(output)
-	if err != nil {
-		return output
+	var resp struct {
+		Result struct {
+			Text    string `json:"text"`
+			Content string `json:"content"`
+			Output  string `json:"output"`
+		} `json:"result"`
+		Text    string `json:"text"`
+		Content string `json:"content"`
+		Output  string `json:"output"`
 	}
-	if text := findString(root, "text", "content", "output"); text != "" {
-		return text
+	if err := json.Unmarshal([]byte(output), &resp); err == nil {
+		if text := cmp.Or(resp.Result.Text, resp.Result.Content, resp.Result.Output, resp.Text, resp.Content, resp.Output); text != "" {
+			return text
+		}
 	}
 	return output
 }
@@ -282,166 +465,6 @@ func herdrActivity(status string) *registry.Activity {
 		return nil
 	}
 	return &activity
-}
-
-func decodeJSON(output string) (any, error) {
-	var value any
-	if err := json.Unmarshal([]byte(output), &value); err != nil {
-		return nil, fmt.Errorf("decode herdr JSON: %w", err)
-	}
-	return value, nil
-}
-
-func findArray(value any, key string) []any {
-	switch typed := value.(type) {
-	case map[string]any:
-		if array, ok := typed[key].([]any); ok {
-			return array
-		}
-		for _, nested := range typed {
-			if array := findArray(nested, key); array != nil {
-				return array
-			}
-		}
-	case []any:
-		for _, nested := range typed {
-			if array := findArray(nested, key); array != nil {
-				return array
-			}
-		}
-	}
-	return nil
-}
-
-func findInt(value any, keys ...string) int {
-	switch typed := value.(type) {
-	case map[string]any:
-		if result := intField(typed, keys...); result != 0 {
-			return result
-		}
-		for _, nested := range typed {
-			if result := findInt(nested, keys...); result != 0 {
-				return result
-			}
-		}
-	case []any:
-		for _, nested := range typed {
-			if result := findInt(nested, keys...); result != 0 {
-				return result
-			}
-		}
-	}
-	return 0
-}
-
-func findString(value any, keys ...string) string {
-	switch typed := value.(type) {
-	case map[string]any:
-		if result := stringField(typed, keys...); result != "" {
-			return result
-		}
-		for _, nested := range typed {
-			if result := findString(nested, keys...); result != "" {
-				return result
-			}
-		}
-	case []any:
-		for _, nested := range typed {
-			if result := findString(nested, keys...); result != "" {
-				return result
-			}
-		}
-	}
-	return ""
-}
-
-func stringField(record map[string]any, keys ...string) string {
-	for _, key := range keys {
-		switch value := record[key].(type) {
-		case string:
-			if strings.TrimSpace(value) != "" {
-				return value
-			}
-		case json.Number:
-			return value.String()
-		case float64:
-			return strconv.FormatInt(int64(value), 10)
-		}
-	}
-	return ""
-}
-
-func intField(record map[string]any, keys ...string) int {
-	for _, key := range keys {
-		switch value := record[key].(type) {
-		case float64:
-			return int(value)
-		case json.Number:
-			parsed, _ := strconv.Atoi(value.String())
-			return parsed
-		case string:
-			parsed, _ := strconv.Atoi(value)
-			return parsed
-		}
-	}
-	return 0
-}
-
-func boolField(record map[string]any, keys ...string) bool {
-	for _, key := range keys {
-		if value, ok := record[key].(bool); ok && value {
-			return true
-		}
-	}
-	return false
-}
-
-func explicitlyNotRunning(record map[string]any) bool {
-	running, present := record["running"]
-	if !present {
-		return false
-	}
-	value, valid := running.(bool)
-	return valid && !value
-}
-
-func stringSliceField(record map[string]any, keys ...string) []string {
-	for _, key := range keys {
-		values, ok := record[key].([]any)
-		if !ok {
-			continue
-		}
-		result := make([]string, 0, len(values))
-		for _, value := range values {
-			if text, ok := value.(string); ok {
-				result = append(result, text)
-			}
-		}
-		return result
-	}
-	return nil
-}
-
-func namesByID(records []any, idKey string) map[string]string {
-	result := make(map[string]string)
-	for _, item := range records {
-		if record, ok := item.(map[string]any); ok {
-			id := stringField(record, idKey, "id")
-			if id != "" {
-				result[id] = stringField(record, "name", "label", "title")
-			}
-		}
-	}
-	return result
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if value != "" {
-			return value
-		}
-	}
-	return ""
 }
 
 func herdrUnavailable(output string) bool {
