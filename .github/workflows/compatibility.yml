@@ -41,6 +41,8 @@ jobs:
           echo "$RUNNER_TEMP/aht-compat/bin" >> "$GITHUB_PATH"
 
       - name: Probe current multiplexer discovery and capture
+        env:
+          AHT_REQUIRE_MULTIPLEXERS: "1"
         run: go test -count=1 -tags=integration ./internal/observer -run '^TestCurrent(Zellij|Herdr)DiscoveryAndCapture$' -timeout 60s
 
   current-hosts:
