@@ -2,6 +2,7 @@ package muxctx
 
 import (
 	"context"
+	"strings"
 
 	"github.com/zigai/aht/pkg/registry"
 )
@@ -36,3 +37,17 @@ type (
 	PaneLister     func(context.Context) ([]Pane, error)
 	ScreenCapturer func(context.Context, Pane) (ScreenSnapshot, error)
 )
+
+// BoundBottomLines normalizes line endings, strips any trailing empty line, and returns at most limit bottom lines.
+func BoundBottomLines(text string, limit int) []string {
+	text = strings.ReplaceAll(text, "\r\n", "\n")
+	text = strings.ReplaceAll(text, "\r", "\n")
+	lines := strings.Split(text, "\n")
+	if len(lines) > 0 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+	if limit > 0 && len(lines) > limit {
+		lines = lines[len(lines)-limit:]
+	}
+	return lines
+}

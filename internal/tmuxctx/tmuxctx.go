@@ -519,7 +519,6 @@ func parsePositiveInt(value string) int {
 	if err != nil || parsed <= 0 {
 		return 0
 	}
-
 	return parsed
 }
 

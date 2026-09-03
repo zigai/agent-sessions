@@ -54,10 +54,10 @@ func (app *application) newTrackerRunCommand() *cobra.Command {
 			}
 			if o.once {
 				watcher := observer.New(observer.Options{
-					StorePath:          app.store().Path(),
+					StorePath:          app.resolvedStorePath(),
 					Interval:           o.interval,
 					GracePeriod:        o.grace,
-					HealthPath:         app.store().Path() + ".observer-health.json",
+					HealthPath:         app.resolvedStorePath() + ".observer-health.json",
 					Quiet:              o.quiet,
 					DetectionConfigDir: cfg.Detection.ManifestsDir,
 				})
@@ -65,7 +65,7 @@ func (app *application) newTrackerRunCommand() *cobra.Command {
 				return app.runObserver(cmd.Context(), o, watcher)
 			}
 
-			store, err := registry.OpenMemoryStore(app.store().Path())
+			store, err := registry.OpenMemoryStore(app.resolvedStorePath())
 			if err != nil {
 				return fmt.Errorf("opening in-memory registry: %w", err)
 			}
@@ -300,5 +300,5 @@ func (app *application) parseServiceOptions(options serviceOptions) (service.Opt
 	if options.grace < 0 {
 		return service.Options{}, errInvalidObserveGracePeriod
 	}
-	return service.Options{Binary: options.binary, StorePath: app.store().Path(), Interval: options.interval, GracePeriod: options.grace, DryRun: options.dryRun}, nil
+	return service.Options{Binary: options.binary, StorePath: app.resolvedStorePath(), Interval: options.interval, GracePeriod: options.grace, DryRun: options.dryRun}, nil
 }

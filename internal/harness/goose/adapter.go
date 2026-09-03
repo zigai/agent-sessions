@@ -99,7 +99,7 @@ func (gooseHarness) ResumeCommand(sessionID string, _ string) []string {
 }
 
 func (gooseHarness) PayloadCompatible(rawPayload json.RawMessage) bool {
-	return goosePayloadValidator(rawPayload)
+	return harness.PayloadValidator[goosePayload]()(rawPayload)
 }
 
 func (gooseHarness) PayloadDefaults(payload map[string]any) harness.PayloadDefaults {
@@ -220,13 +220,8 @@ func goosePayloadDefaults(payload map[string]any) harness.PayloadDefaults {
 	}
 }
 
-func goosePayloadValidator(rawPayload json.RawMessage) bool {
-	payload, ok := harness.PayloadObject(rawPayload)
-	if !ok {
-		return false
-	}
-
-	return harness.PayloadString(payload, "session_id") != ""
+type goosePayload struct {
+	SessionID string `json:"session_id" validate:"notblank"`
 }
 
 func goosePluginsDir() string {

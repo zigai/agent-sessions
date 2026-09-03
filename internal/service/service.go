@@ -14,8 +14,6 @@ import (
 const (
 	ManagedVersion       = 7
 	ManagedMarker        = "aht managed observer service"
-	managedVersion       = ManagedVersion
-	managedMarker        = ManagedMarker
 	defaultInterval      = 300 * time.Millisecond
 	serviceDirectoryMode = 0o755
 	serviceRollbackTime  = 10 * time.Second
@@ -346,7 +344,7 @@ func syncDirectory(path string) error {
 }
 
 func isManaged(content string) bool {
-	if !strings.Contains(content, managedMarker) {
+	if !strings.Contains(content, ManagedMarker) {
 		return false
 	}
 	for line := range strings.Lines(content) {

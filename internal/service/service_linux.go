@@ -43,8 +43,8 @@ func RenderSystemdUnit(options Options) (string, error) {
 		return "", err
 	}
 	return strings.Join([]string{
-		"# " + managedMarker,
-		"# version: " + strconv.Itoa(managedVersion),
+		"# " + ManagedMarker,
+		"# version: " + strconv.Itoa(ManagedVersion),
 		"[Unit]",
 		"Description=AHT observer",
 		"",
@@ -70,7 +70,7 @@ func systemdUnitPath() (string, error) {
 }
 
 func (b *linuxBackend) describe() Result {
-	return Result{Platform: "linux", Manager: "systemd", ManagedPath: b.path, ManagedVersion: managedVersion, Path: b.path, Version: managedVersion, Installed: false, Current: false, Running: false, Changed: false, Message: ""}
+	return Result{Platform: "linux", Manager: "systemd", ManagedPath: b.path, ManagedVersion: ManagedVersion, Path: b.path, Version: ManagedVersion, Installed: false, Current: false, Running: false, Changed: false, Message: ""}
 }
 func (b *linuxBackend) content() string { return b.rendered }
 

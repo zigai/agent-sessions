@@ -49,7 +49,7 @@ func RenderLaunchAgent(options Options) (string, error) {
 	args := []string{normalized.Binary, "--store", normalized.StorePath, "manage", "tracker", "run", "--interval", normalized.Interval.String(), "--grace-period", normalized.GracePeriod.String(), "--quiet"}
 	var b strings.Builder
 	b.WriteString("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n")
-	b.WriteString("<!-- " + managedMarker + " -->\n<!-- version: " + strconv.Itoa(managedVersion) + " -->\n")
+	b.WriteString("<!-- " + ManagedMarker + " -->\n<!-- version: " + strconv.Itoa(ManagedVersion) + " -->\n")
 	b.WriteString("<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n")
 	b.WriteString("<plist version=\"1.0\"><dict>\n")
 	b.WriteString("<key>Label</key><string>" + xmlEscape(darwinLabel) + "</string>\n")
@@ -75,7 +75,7 @@ func launchAgentPath() (string, error) {
 }
 
 func (b *darwinBackend) describe() Result {
-	return Result{Platform: "darwin", Manager: "launchctl", ManagedPath: b.path, ManagedVersion: managedVersion, Path: b.path, Version: managedVersion, Installed: false, Current: false, Running: false, Changed: false, Message: ""}
+	return Result{Platform: "darwin", Manager: "launchctl", ManagedPath: b.path, ManagedVersion: ManagedVersion, Path: b.path, Version: ManagedVersion, Installed: false, Current: false, Running: false, Changed: false, Message: ""}
 }
 func (b *darwinBackend) content() string                               { return b.rendered }
 func (b *darwinBackend) reload(context.Context, CommandExecutor) error { return nil }

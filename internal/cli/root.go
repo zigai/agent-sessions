@@ -181,9 +181,19 @@ func executeCLI(ctx context.Context, args []string, stdin io.Reader, stdout, std
 	return 0
 }
 
-func (app *application) store() *registry.FileStore { return registry.NewFileStore(app.storePath) }
+func (app *application) resolvedStorePath() string {
+	if app.storePath != "" {
+		return app.storePath
+	}
+	return registry.DefaultStorePath()
+}
+
+func (app *application) store() *registry.FileStore {
+	return registry.NewFileStore(app.resolvedStorePath())
+}
+
 func (app *application) registryStore() registry.Store {
-	return client.New(client.Config{StorePath: app.storePath})
+	return client.New(client.Config{StorePath: app.resolvedStorePath()})
 }
 
 func (app *application) writeJSON(value any) error {
@@ -226,9 +236,9 @@ func (app *application) warnf(format string, args ...any) {
 func (app *application) newRegistryPathCommand() *cobra.Command {
 	return &cobra.Command{Use: "path", Short: "Print the registry state file path", RunE: func(_ *cobra.Command, _ []string) error {
 		if app.outputJSON {
-			return app.writeJSON(map[string]string{"path": app.store().Path()})
+			return app.writeJSON(map[string]string{"path": app.resolvedStorePath()})
 		}
-		return app.writeln(app.store().Path())
+		return app.writeln(app.resolvedStorePath())
 	}}
 }
 

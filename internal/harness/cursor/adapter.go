@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 
 	"github.com/zigai/aht/internal/harness"
@@ -110,10 +109,10 @@ func cursorPayloadDefaults(payload map[string]any) harness.PayloadDefaults {
 	harness.AddAttributeString(attributes, "cursor_session_end_reason", harness.PayloadString(payload, "reason"))
 	harness.AddAttributeString(attributes, "cursor_final_status", harness.PayloadString(payload, "final_status"))
 	harness.AddAttributeString(attributes, "cursor_stop_status", harness.PayloadString(payload, "status"))
-	addAttributeBool(attributes, "cursor_is_background_agent", payload, "is_background_agent")
-	addAttributeBool(attributes, "cursor_sandbox", payload, "sandbox")
+	harness.AddAttributeString(attributes, "cursor_is_background_agent", harness.PayloadBoolString(payload, "is_background_agent"))
+	harness.AddAttributeString(attributes, "cursor_sandbox", harness.PayloadBoolString(payload, "sandbox"))
 
-	projectRoot := firstPayloadString(payload, "workspace_roots")
+	projectRoot := harness.FirstArrayString(payload, "workspace_roots")
 	cwd := harness.PayloadString(payload, "cwd")
 	if cwd == "" {
 		cwd = projectRoot
@@ -127,34 +126,6 @@ func cursorPayloadDefaults(payload map[string]any) harness.PayloadDefaults {
 		Event:       harness.PayloadString(payload, "hook_event_name"),
 		Attributes:  attributes,
 	}
-}
-
-func firstPayloadString(payload map[string]any, key string) string {
-	value, ok := payload[key]
-	if !ok {
-		return ""
-	}
-
-	items, ok := value.([]any)
-	if !ok || len(items) == 0 {
-		return ""
-	}
-
-	text, ok := items[0].(string)
-	if !ok {
-		return ""
-	}
-
-	return strings.TrimSpace(text)
-}
-
-func addAttributeBool(attributes map[string]string, attributeKey string, payload map[string]any, payloadKey string) {
-	value, ok := payload[payloadKey].(bool)
-	if !ok {
-		return
-	}
-
-	attributes[attributeKey] = strconv.FormatBool(value)
 }
 
 func cursorHome() string {

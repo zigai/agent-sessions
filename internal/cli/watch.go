@@ -91,7 +91,7 @@ func (app *application) runWatch(ctx context.Context, o watchOptions) error {
 		return fmt.Errorf("%w: %q", errInvalidWatchFormat, o.format)
 	}
 
-	ahtClient := client.New(client.Config{StorePath: app.store().Path()})
+	ahtClient := client.New(client.Config{StorePath: app.resolvedStorePath()})
 	err := app.runBrokerWatch(ctx, o, ahtClient)
 	if err == nil {
 		return nil

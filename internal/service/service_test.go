@@ -174,7 +174,7 @@ func TestStatusReportsRunningStaleService(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(path, []byte("# "+managedMarker+"\n# version: 2\nstale"), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte("# "+ManagedMarker+"\n# version: 2\nstale"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	result, err := New(&recordingExecutor{}).Status(context.Background(), options)
@@ -194,7 +194,7 @@ func TestUpdateRestartsManagedService(t *testing.T) {
 		t.Fatal(err)
 	}
 	path := filepath.Join(config, "systemd", "user", linuxUnitName)
-	if err := os.WriteFile(path, []byte("# "+managedMarker+"\n# version: 5\nstale"), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte("# "+ManagedMarker+"\n# version: 5\nstale"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	executor := &recordingExecutor{}
@@ -212,7 +212,7 @@ func TestUpdateRestartsManagedService(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(content), "# "+managedMarker) || !strings.Contains(string(content), "# version: 7") || !strings.Contains(string(content), " manage tracker run ") {
+	if !strings.Contains(string(content), "# "+ManagedMarker) || !strings.Contains(string(content), "# version: 7") || !strings.Contains(string(content), " manage tracker run ") {
 		t.Fatalf("updated service did not migrate command surface: %s", content)
 	}
 }
@@ -258,7 +258,7 @@ func requireRetryableUpdateAfterManagerFailure(t *testing.T, failAt int) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	previous := []byte("# " + managedMarker + "\n# version: 2\nstale\n")
+	previous := []byte("# " + ManagedMarker + "\n# version: 2\nstale\n")
 	//nolint:gosec // The fixture mirrors systemd's intentionally world-readable user-unit mode.
 	if err := os.WriteFile(path, previous, 0o644); err != nil {
 		t.Fatal(err)

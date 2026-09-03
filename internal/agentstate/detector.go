@@ -4,6 +4,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/zigai/aht/internal/muxctx"
 	"github.com/zigai/aht/pkg/registry"
 )
 
@@ -32,16 +33,8 @@ type Decision struct {
 }
 
 func NormalizeSnapshot(text string, title string) Snapshot {
-	text = strings.ReplaceAll(text, "\r\n", "\n")
-	text = strings.ReplaceAll(text, "\r", "\n")
 	text = ansiEscapePattern.ReplaceAllString(text, "")
-	lines := strings.Split(text, "\n")
-	if len(lines) > 0 && lines[len(lines)-1] == "" {
-		lines = lines[:len(lines)-1]
-	}
-	if len(lines) > maxSnapshotLines {
-		lines = lines[len(lines)-maxSnapshotLines:]
-	}
+	lines := muxctx.BoundBottomLines(text, maxSnapshotLines)
 	return Snapshot{Lines: lines, Title: ansiEscapePattern.ReplaceAllString(title, "")}
 }
 
