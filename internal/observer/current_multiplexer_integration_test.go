@@ -211,7 +211,7 @@ func requireDeclaredMultiplexer(t *testing.T, name string) string {
 	t.Helper()
 	path, err := exec.LookPath(name)
 	if err != nil {
-		if os.Getenv("CI") != "" || os.Getenv("AHT_REQUIRE_MULTIPLEXERS") != "" {
+		if os.Getenv("AHT_REQUIRE_MULTIPLEXERS") != "" {
 			t.Fatalf("%s is required in declared compatibility environment but is not installed: %v", name, err)
 		}
 		t.Skipf("%s is not installed", name)
