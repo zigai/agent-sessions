@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -341,8 +342,18 @@ func TestQueueRecoversLeaseAfterWorkerIsKilled(t *testing.T) { //nolint:cyclop /
 	if err := command.Process.Kill(); err != nil {
 		t.Fatal(err)
 	}
-	if err := command.Wait(); err == nil {
+	waitErr := command.Wait()
+	if waitErr == nil {
 		t.Fatal("killed child exited successfully")
+	}
+	var exitError *exec.ExitError
+	if !errors.As(waitErr, &exitError) {
+		t.Fatalf("wait error = %v, want *exec.ExitError", waitErr)
+	}
+	if status, ok := exitError.Sys().(syscall.WaitStatus); ok {
+		if !status.Signaled() || status.Signal() != syscall.SIGKILL {
+			t.Fatalf("child exit = %#v, want SIGKILL", status)
+		}
 	}
 	processing, err = filepath.Glob(filepath.Join(queue.processingDir(), "*.json"))
 	if err != nil || len(processing) != 1 {
@@ -378,7 +389,8 @@ func TestQueueKilledWorkerHelper(t *testing.T) {
 		Now:          time.Now,
 		Processor: func(context.Context, Envelope) error {
 			fmt.Printf("claimed %s\n", queue.Root())
-			select {}
+			time.Sleep(10 * time.Minute)
+			return nil
 		},
 	})
 	t.Fatalf("child drain returned: %v", err)

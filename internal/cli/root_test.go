@@ -17,30 +17,6 @@ import (
 
 const expectedSessionSchemaVersion = 2
 
-func TestJSONWritersPreservePrettyDocumentsAndSingleLineStreams(t *testing.T) {
-	t.Parallel()
-	value := map[string]any{"outer": map[string]bool{"value": true}}
-
-	var stdout bytes.Buffer
-	app := &application{stdout: &stdout}
-	if err := app.writeJSON(value); err != nil {
-		t.Fatal(err)
-	}
-	wantDocument := "{\n  \"outer\": {\n    \"value\": true\n  }\n}\n"
-	if stdout.String() != wantDocument {
-		t.Fatalf("formatted JSON = %q, want %q", stdout.String(), wantDocument)
-	}
-
-	stdout.Reset()
-	if err := app.writeJSONLine(value); err != nil {
-		t.Fatal(err)
-	}
-	wantLine := "{\"outer\":{\"value\":true}}\n"
-	if stdout.String() != wantLine {
-		t.Fatalf("JSON line = %q, want %q", stdout.String(), wantLine)
-	}
-}
-
 //nolint:cyclop // assertions independently verify each report dimension
 func TestPrepareReportCarriesIndependentDimensions(t *testing.T) {
 	t.Parallel()

@@ -19,10 +19,7 @@ import (
 )
 
 func TestCurrentZellijDiscoveryAndCapture(t *testing.T) {
-	zellij, err := exec.LookPath("zellij")
-	if err != nil {
-		t.Skip("Zellij is not installed")
-	}
+	zellij := requireDeclaredMultiplexer(t, "zellij")
 	script, err := exec.LookPath("script")
 	if err != nil {
 		t.Skip("script is required to allocate Zellij's controlling terminal")
@@ -75,10 +72,7 @@ func TestCurrentZellijDiscoveryAndCapture(t *testing.T) {
 }
 
 func TestCurrentHerdrDiscoveryAndCapture(t *testing.T) {
-	herdr, err := exec.LookPath("herdr")
-	if err != nil {
-		t.Skip("Herdr is not installed")
-	}
+	herdr := requireDeclaredMultiplexer(t, "herdr")
 
 	session := fmt.Sprintf("aht-herdr-%d", time.Now().UnixNano())
 	home, err := os.MkdirTemp("/tmp", "aht-herdr-home-")
@@ -211,4 +205,16 @@ func readProbeLog(path string) string {
 		return err.Error()
 	}
 	return string(data)
+}
+
+func requireDeclaredMultiplexer(t *testing.T, name string) string {
+	t.Helper()
+	path, err := exec.LookPath(name)
+	if err != nil {
+		if os.Getenv("CI") != "" || os.Getenv("AHT_REQUIRE_MULTIPLEXERS") != "" {
+			t.Fatalf("%s is required in declared compatibility environment but is not installed: %v", name, err)
+		}
+		t.Skipf("%s is not installed", name)
+	}
+	return path
 }

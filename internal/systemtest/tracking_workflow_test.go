@@ -239,7 +239,13 @@ func waitForBrokerSocket(t *testing.T, tracker *runningTestCommand, storePath st
 	}
 }
 
-func startJSONWatch(t *testing.T, binary string, directory string, environment []string, storePath string) (*runningTestCommand, <-chan systemWatchEvent) {
+type watchResult struct {
+	event systemWatchEvent
+	raw   []byte
+	err   error
+}
+
+func startJSONWatch(t *testing.T, binary string, directory string, environment []string, storePath string) (*runningTestCommand, <-chan watchResult) {
 	t.Helper()
 	process := &runningTestCommand{command: exec.Command(binary, "--store", storePath, "--json", "watch"), done: make(chan error, 1)}
 	process.command.Dir = directory
@@ -255,38 +261,50 @@ func startJSONWatch(t *testing.T, binary string, directory string, environment [
 	go func() {
 		process.done <- process.command.Wait()
 	}()
-	events := make(chan systemWatchEvent, 16)
-	go decodeWatchEvents(stdout, events)
+	results := make(chan watchResult, 16)
+	go decodeWatchEvents(stdout, results)
 	t.Cleanup(func() {
 		if process.command.ProcessState == nil {
 			_ = process.command.Process.Kill()
 			<-process.done
 		}
 	})
-	return process, events
+	return process, results
 }
 
-func decodeWatchEvents(reader io.Reader, events chan<- systemWatchEvent) {
-	defer close(events)
+func decodeWatchEvents(reader io.Reader, results chan<- watchResult) {
+	defer close(results)
 	scanner := bufio.NewScanner(reader)
 	for scanner.Scan() {
-		var event systemWatchEvent
-		if json.Unmarshal(scanner.Bytes(), &event) == nil {
-			events <- event
+		line := scanner.Bytes()
+		if len(bytes.TrimSpace(line)) == 0 {
+			continue
 		}
+		var event systemWatchEvent
+		if err := json.Unmarshal(line, &event); err != nil {
+			results <- watchResult{raw: append([]byte(nil), line...), err: fmt.Errorf("malformed watch JSON line %q: %w", string(line), err)}
+			return
+		}
+		results <- watchResult{event: event, raw: append([]byte(nil), line...), err: nil}
+	}
+	if err := scanner.Err(); err != nil {
+		results <- watchResult{err: fmt.Errorf("reading watch output: %w", err)}
 	}
 }
 
-func receiveWatchEvent(t *testing.T, process *runningTestCommand, events <-chan systemWatchEvent) systemWatchEvent {
+func receiveWatchEvent(t *testing.T, process *runningTestCommand, results <-chan watchResult) systemWatchEvent {
 	t.Helper()
 	timer := time.NewTimer(5 * time.Second)
 	defer timer.Stop()
 	select {
-	case event, ok := <-events:
+	case res, ok := <-results:
 		if !ok {
 			t.Fatalf("watch output closed; stderr=%q", process.stderr.String())
 		}
-		return event
+		if res.err != nil {
+			t.Fatalf("watch output error: %v; raw=%q stderr=%q", res.err, string(res.raw), process.stderr.String())
+		}
+		return res.event
 	case err := <-process.done:
 		t.Fatalf("watch exited before event: %v; stderr=%q", err, process.stderr.String())
 	case <-timer.C:
@@ -295,15 +313,16 @@ func receiveWatchEvent(t *testing.T, process *runningTestCommand, events <-chan 
 	return systemWatchEvent{}
 }
 
-func receiveSessionWatchEvent(t *testing.T, process *runningTestCommand, events <-chan systemWatchEvent, sessionID string) systemWatchEvent {
+func receiveSessionWatchEvent(t *testing.T, process *runningTestCommand, results <-chan watchResult, sessionID string) systemWatchEvent {
 	t.Helper()
 	for {
-		event := receiveWatchEvent(t, process, events)
+		event := receiveWatchEvent(t, process, results)
 		if event.SessionID == sessionID {
 			return event
 		}
 	}
 }
+
 
 func runSystemTestCommand(t *testing.T, binary string, directory string, environment []string, stdin io.Reader, args ...string) []byte {
 	t.Helper()

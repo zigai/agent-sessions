@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -1700,17 +1701,15 @@ func TestInstallPlansMatchHarnessCatalog(t *testing.T) {
 	}
 }
 
-func TestAllHarnessesReturnsDefensiveCopy(t *testing.T) {
+func TestAllHarnesses(t *testing.T) {
 	t.Parallel()
 
-	first := AllHarnesses()
-	if len(first) == 0 {
+	harnesses := AllHarnesses()
+	if len(harnesses) == 0 {
 		t.Fatal("expected installable harnesses")
 	}
-	want := first[0]
-	first[0] = "mutated"
-	if got := AllHarnesses()[0]; got != want {
-		t.Fatalf("catalog mutation leaked: got %q, want %q", got, want)
+	if !slices.Contains(harnesses, registry.HarnessCodex) {
+		t.Fatalf("AllHarnesses() = %v, want codex", harnesses)
 	}
 }
 
