@@ -66,7 +66,6 @@ func RunContext(ctx context.Context, options Options) (Result, error) {
 	return installHarnessAdapter(ctx, options)
 }
 
-
 func installableHarnesses() []registry.Harness {
 	harnesses := make([]registry.Harness, 0, len(harnesscatalog.All()))
 	for _, adapter := range harnesscatalog.All() {

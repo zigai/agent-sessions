@@ -57,7 +57,6 @@ type CommandExecutor interface {
 	Run(ctx context.Context, name string, args ...string) ([]byte, error)
 }
 
-
 // Service manages the platform-native observer service.
 type Service struct {
 	executor CommandExecutor

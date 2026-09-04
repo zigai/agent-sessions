@@ -16,7 +16,6 @@ var (
 	errStalePluginFile         = errors.New("stale plugin file")
 )
 
-
 func renderInstallFiles(specs []harnesspkg.RenderedFileInstallSpec, kind string) (map[string]string, error) {
 	files := make(map[string]string, len(specs))
 	for _, spec := range specs {

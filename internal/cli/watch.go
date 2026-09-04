@@ -349,7 +349,6 @@ func sortWatchEvents(e []watchEvent) {
 	})
 }
 
-
 func watchTmuxLabel(c registry.TmuxContext) string {
 	p := []string{}
 	if x := tmuxSessionLabel(c); x != "-" {
@@ -426,7 +425,6 @@ func formatWatchPlainEvent(e watchEvent) string {
 	}
 	return truncateHumanText(strings.Join([]string{e.Time.UTC().Format(time.RFC3339), e.Action, string(e.Harness), string(e.Presence), appReportActivity(registry.Session{Activity: e.Activity}), "session=" + e.Label}, " "), humanLineWidth)
 }
-
 
 func formatWatchTableEvent(e watchEvent) string {
 	if e.Action == watchActionSnapshotEmpty {

@@ -85,7 +85,6 @@ func removeOwnedShim(path string, dryRun bool, status ArtifactStatus) (bool, err
 	return true, nil
 }
 
-
 func removePlanAction(ctx context.Context, options Options, harnessID registry.Harness, action harnesspkg.InstallAction) (Result, bool, error) {
 	switch typed := action.(type) {
 	case harnesspkg.JSONCommandHooksAction:

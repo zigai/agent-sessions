@@ -58,7 +58,6 @@ func RenderSystemdUnit(options Options) (string, error) {
 	}, "\n"), nil
 }
 
-
 func systemdUnitPath() (string, error) {
 	base, err := os.UserConfigDir()
 	if err != nil {

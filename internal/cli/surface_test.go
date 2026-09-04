@@ -106,7 +106,6 @@ func TestMachineFacingCommandsAndDestructiveResetAreExplicit(t *testing.T) {
 	}
 }
 
-
 func TestEveryHiddenInternalCommandHasCallableHelp(t *testing.T) {
 	commands := []string{"report"}
 	for _, command := range commands {
@@ -178,7 +177,6 @@ func TestJSONInvocationFailureLeavesStdoutEmpty(t *testing.T) {
 		}
 	}
 }
-
 
 func TestListRejectsModeSpecificFlags(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "sessions.json")

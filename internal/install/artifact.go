@@ -92,7 +92,6 @@ func installJSONHookFile(options Options, file jsonHookFileInstall) (Result, err
 	}, nil
 }
 
-
 func writeInstallFile(path string, data []byte, changed bool, dryRun bool, createDirError string, writeError string) error {
 	if !changed || dryRun {
 		return nil

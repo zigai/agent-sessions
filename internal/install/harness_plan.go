@@ -457,7 +457,6 @@ func renderInstallContent(content string, jsonContent any) (string, error) {
 	return string(append(data, '\n')), nil
 }
 
-
 func renderedFilesNeedUpdate(
 	dir string,
 	files map[string]string,

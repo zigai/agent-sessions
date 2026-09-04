@@ -7,7 +7,6 @@ import (
 	harnesspkg "github.com/zigai/aht/internal/harness"
 )
 
-
 func commandHookGroup(command string, matcher string, statusMessage string, timeoutSeconds int) map[string]any {
 	if timeoutSeconds <= 0 {
 		timeoutSeconds = harnesspkg.HookTimeoutSeconds
