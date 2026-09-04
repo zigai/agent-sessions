@@ -104,10 +104,13 @@ func TestClientWatchYieldsRealtimeRevisions(t *testing.T) {
 func receiveSnapshot(t *testing.T, snapshots <-chan registry.StateSnapshot) registry.StateSnapshot {
 	t.Helper()
 
+	timer := time.NewTimer(5 * time.Second)
+	defer timer.Stop()
+
 	select {
 	case snapshot := <-snapshots:
 		return snapshot
-	case <-time.After(5 * time.Second):
+	case <-timer.C:
 		t.Fatal("timed out waiting for state snapshot")
 		return registry.StateSnapshot{}
 	}
