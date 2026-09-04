@@ -17,7 +17,6 @@ import (
 	harness "github.com/zigai/aht/internal/harness/catalog"
 	"github.com/zigai/aht/internal/install"
 	"github.com/zigai/aht/internal/processinfo"
-	"github.com/zigai/aht/internal/reportqueue"
 	"github.com/zigai/aht/internal/service"
 	"github.com/zigai/aht/pkg/registry"
 )
@@ -172,35 +171,6 @@ func (app *application) runDoctor(ctx context.Context, includeAll bool) doctorRe
 	app.addDetectionManifestCheck(&result)
 	app.addConfigFileCheck(&result)
 
-	queue := reportqueue.New(store.Path())
-	queueStatus, queueErr := queue.Status(ctx)
-	if queueErr != nil {
-		add("queue.backlog", doctorError, queueErr.Error())
-		add("queue.retries", doctorError, queueErr.Error())
-		add("queue.leases", doctorError, queueErr.Error())
-		add("queue.dead-letters", doctorError, queueErr.Error())
-	} else {
-		if queueStatus.Ready+queueStatus.Deferred+queueStatus.Processing == 0 {
-			add("queue.backlog", doctorOK, "queue is empty")
-		} else {
-			add("queue.backlog", doctorWarning, fmt.Sprintf("%d queued observations (%d ready, %d deferred, %d processing)", queueStatus.Pending+queueStatus.Processing, queueStatus.Ready, queueStatus.Deferred, queueStatus.Processing))
-		}
-		if queueStatus.Retries == 0 {
-			add("queue.retries", doctorOK, "no retries pending")
-		} else {
-			add("queue.retries", doctorWarning, fmt.Sprintf("%d queued observations have retries", queueStatus.Retries))
-		}
-		if queueStatus.StaleLeases == 0 {
-			add("queue.leases", doctorOK, "no stale leases")
-		} else {
-			add("queue.leases", doctorError, fmt.Sprintf("%d stale queue leases require recovery", queueStatus.StaleLeases))
-		}
-		if queueStatus.Dead == 0 {
-			add("queue.dead-letters", doctorOK, "no dead letters")
-		} else {
-			add("queue.dead-letters", doctorError, fmt.Sprintf("%d dead letters (%d invalid envelopes)", queueStatus.Dead, queueStatus.Invalid))
-		}
-	}
 	for _, adapter := range harness.All() {
 		definition := adapter.Definition()
 		if includeAll {
