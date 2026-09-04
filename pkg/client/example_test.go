@@ -39,7 +39,7 @@ func ExampleClient_List() {
 	})
 	sessions, err := aht.List(
 		context.Background(),
-		registry.Filter{Presence: registry.PresenceLive},
+		client.Filter{Presence: client.PresenceLive},
 	)
 	if err != nil {
 		panic(err)

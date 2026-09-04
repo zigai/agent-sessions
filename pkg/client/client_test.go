@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/zigai/aht/internal/broker"
-	"github.com/zigai/aht/internal/brokerapi"
+	"github.com/zigai/aht/internal/brokerserver"
+	"github.com/zigai/aht/pkg/broker"
 	"github.com/zigai/aht/pkg/client"
 	"github.com/zigai/aht/pkg/registry"
 )
@@ -36,6 +36,67 @@ func TestClientListFallsBackToDurableRegistry(t *testing.T) {
 	}
 }
 
+func TestClientRealtimeOnlyFailsWhenOffline(t *testing.T) {
+	t.Parallel()
+
+	storePath := filepath.Join(t.TempDir(), "sessions.json")
+	store := registry.NewFileStore(storePath)
+	if _, err := store.Observe(t.Context(), runningObservation("fallback")); err != nil {
+		t.Fatal(err)
+	}
+
+	c := client.New(client.Config{
+		StorePath:  storePath,
+		SocketPath: filepath.Join(t.TempDir(), "nonexistent.sock"),
+		Mode:       client.ModeRealtimeOnly,
+	})
+
+	if c.Mode() != client.ModeRealtimeOnly {
+		t.Fatalf("Mode() = %q, want %q", c.Mode(), client.ModeRealtimeOnly)
+	}
+	if c.Realtime() == nil {
+		t.Fatal("Realtime() returned nil")
+	}
+
+	_, err := c.List(t.Context(), registry.Filter{Presence: registry.PresenceLive})
+	if !client.IsUnavailable(err) {
+		t.Fatalf("List() err = %v, want ErrUnavailable", err)
+	}
+}
+
+func TestClientDurableOnlyBypassesBroker(t *testing.T) {
+	t.Parallel()
+
+	storePath := filepath.Join(t.TempDir(), "sessions.json")
+	store := registry.NewFileStore(storePath)
+	if _, err := store.Observe(t.Context(), runningObservation("durable-session")); err != nil {
+		t.Fatal(err)
+	}
+
+	c := client.New(client.Config{
+		StorePath:  storePath,
+		SocketPath: filepath.Join(t.TempDir(), "nonexistent.sock"),
+		Mode:       client.ModeDurableOnly,
+	})
+
+	if c.Mode() != client.ModeDurableOnly {
+		t.Fatalf("Mode() = %q, want %q", c.Mode(), client.ModeDurableOnly)
+	}
+
+	sessions, err := c.List(t.Context(), registry.Filter{Presence: registry.PresenceLive})
+	if err != nil {
+		t.Fatalf("List() err = %v", err)
+	}
+	if len(sessions) != 1 || sessions[0].SessionID != "durable-session" {
+		t.Fatalf("List() = %#v, want durable-session", sessions)
+	}
+
+	_, err = c.Subscribe(t.Context(), registry.Filter{})
+	if err == nil {
+		t.Fatal("Subscribe() in ModeDurableOnly succeeded, want error")
+	}
+}
+
 //nolint:cyclop // Verifies broker startup, streaming updates, and cancellation in one test.
 func TestClientWatchYieldsRealtimeRevisions(t *testing.T) {
 	t.Parallel()
@@ -46,7 +107,7 @@ func TestClientWatchYieldsRealtimeRevisions(t *testing.T) {
 	}
 	t.Cleanup(func() {
 		_ = os.Remove(storePath)
-		_ = os.Remove(brokerapi.SocketPath(storePath))
+		_ = os.Remove(broker.SocketPath(storePath))
 	})
 	store, err := registry.OpenMemoryStore(storePath)
 	if err != nil {
@@ -56,9 +117,9 @@ func TestClientWatchYieldsRealtimeRevisions(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	ready := make(chan struct{})
 	serverErrors := make(chan error, 1)
-	server := broker.New(broker.Options{
+	server := brokerserver.New(brokerserver.Options{
 		Store:      store,
-		SocketPath: brokerapi.SocketPath(storePath),
+		SocketPath: broker.SocketPath(storePath),
 		Ready:      ready,
 	})
 	go func() { serverErrors <- server.Serve(ctx) }()

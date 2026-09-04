@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/zigai/aht/internal/brokerapi"
+	"github.com/zigai/aht/pkg/broker"
 	"github.com/zigai/aht/pkg/registry"
 )
 
@@ -14,8 +14,95 @@ var (
 	// ErrUnavailable means no realtime AHT broker accepted the local connection.
 	ErrUnavailable = errors.New("aht broker unavailable")
 	// ErrProtocol means the broker returned an invalid or incompatible response.
-	ErrProtocol        = errors.New("aht broker protocol error")
-	errHandlerRequired = errors.New("watch handler is required")
+	ErrProtocol         = errors.New("aht broker protocol error")
+	errHandlerRequired  = errors.New("watch handler is required")
+	ErrRealtimeRequired = errors.New("operation requires a realtime broker connection")
+)
+
+// Mode controls how a Client routes operations between the realtime broker
+// and the durable registry file on disk.
+type Mode string
+
+const (
+	// ModeAuto routes operations through the realtime broker and falls back to
+	// the durable registry on disk when the broker is offline.
+	// This is the default mode.
+	ModeAuto Mode = "auto"
+
+	// ModeRealtimeOnly directs all operations strictly to the realtime broker socket.
+	// When the broker is offline, operations fail immediately with [ErrUnavailable]
+	// without reading disk or taking filesystem locks.
+	ModeRealtimeOnly Mode = "realtime"
+
+	// ModeDurableOnly directs all operations directly to the on-disk registry file,
+	// bypassing the realtime broker entirely.
+	ModeDurableOnly Mode = "durable"
+)
+
+type (
+	// Session represents an agent-harness session tracked by AHT.
+	Session = registry.Session
+
+	// Filter specifies matching criteria when querying or watching sessions.
+	Filter = registry.Filter
+
+	// StateSnapshot is a revisioned collection of tracked sessions.
+	StateSnapshot = registry.StateSnapshot
+
+	// Presence indicates whether an agent session is live, gone, or unknown.
+	Presence = registry.Presence
+
+	// Activity indicates what an agent is currently doing.
+	Activity = registry.Activity
+
+	// Harness identifies a supported AI coding agent.
+	Harness = registry.Harness
+
+	// TmuxContext represents the tmux multiplexer location of a session.
+	TmuxContext = registry.TmuxContext
+
+	// MultiplexerContext represents the unified multiplexer location of a session.
+	MultiplexerContext = registry.MultiplexerContext
+
+	// Observation represents an observation recorded for a session.
+	Observation = registry.Observation
+
+	// Summary represents aggregate session counts for a terminal session.
+	Summary = registry.Summary
+
+	// Subscription streams immutable state snapshots from the realtime broker.
+	Subscription = broker.Subscription
+)
+
+const (
+	PresenceLive    Presence = registry.PresenceLive
+	PresenceGone    Presence = registry.PresenceGone
+	PresenceUnknown Presence = registry.PresenceUnknown
+
+	ActivityRunning     Activity = registry.ActivityRunning
+	ActivityWaiting     Activity = registry.ActivityWaiting
+	ActivityIdle        Activity = registry.ActivityIdle
+	ActivityFailed      Activity = registry.ActivityFailed
+	ActivityInterrupted Activity = registry.ActivityInterrupted
+	ActivityUnknown     Activity = registry.ActivityUnknown
+
+	HarnessClaude   Harness = registry.HarnessClaude
+	HarnessCodex    Harness = registry.HarnessCodex
+	HarnessCursor   Harness = registry.HarnessCursor
+	HarnessCopilot  Harness = registry.HarnessCopilot
+	HarnessCline    Harness = registry.HarnessCline
+	HarnessKimiCode Harness = registry.HarnessKimiCode
+	HarnessGrok     Harness = registry.HarnessGrok
+	HarnessGoose    Harness = registry.HarnessGoose
+	HarnessPi       Harness = registry.HarnessPi
+	HarnessOmp      Harness = registry.HarnessOmp
+	HarnessOhMyPi   Harness = registry.HarnessOhMyPi
+	HarnessOpenCode Harness = registry.HarnessOpenCode
+	HarnessAgy      Harness = registry.HarnessAgy
+	HarnessKilo     Harness = registry.HarnessKilo
+	HarnessDroid    Harness = registry.HarnessDroid
+	HarnessOpenClaw Harness = registry.HarnessOpenClaw
+	HarnessHermes   Harness = registry.HarnessHermes
 )
 
 // Config identifies the local AHT instance used by a Client. Empty fields use
@@ -23,21 +110,28 @@ var (
 type Config struct {
 	StorePath  string
 	SocketPath string
+	Mode       Mode
 }
 
 // Client reads and updates agent-harness state through the local AHT broker.
-// One-shot operations fall back to the durable registry when the broker is not
-// running. Watch requires a running broker.
+// Depending on [Mode], operations route to the realtime broker socket, durable
+// disk storage, or auto-fallback between the two.
 type Client struct {
+	mode      Mode
 	storePath string
-	store     *brokerapi.Store
-	realtime  *brokerapi.Client
+	store     registry.Store
+	realtime  *broker.Client
 }
 
 var _ registry.Store = (*Client)(nil)
 
 // New returns a client for the configured local AHT instance.
 func New(config Config) *Client {
+	mode := config.Mode
+	if mode == "" {
+		mode = ModeAuto
+	}
+
 	storePath := config.StorePath
 	if storePath == "" {
 		storePath = registry.DefaultStorePath()
@@ -45,11 +139,29 @@ func New(config Config) *Client {
 
 	socketPath := config.SocketPath
 	if socketPath == "" {
-		socketPath = brokerapi.SocketPath(storePath)
+		socketPath = broker.SocketPath(storePath)
 	}
 
-	store := brokerapi.NewStoreForSocket(storePath, socketPath)
-	return &Client{storePath: storePath, store: store, realtime: store.Client()}
+	realtime := broker.NewClientForSocket(socketPath)
+
+	var store registry.Store
+	switch mode {
+	case ModeRealtimeOnly:
+		store = realtime
+	case ModeDurableOnly:
+		store = registry.NewFileStore(storePath)
+	case ModeAuto:
+		fallthrough
+	default:
+		store = broker.NewStoreForSocket(storePath, socketPath)
+	}
+
+	return &Client{
+		mode:      mode,
+		storePath: storePath,
+		store:     store,
+		realtime:  realtime,
+	}
 }
 
 // StorePath returns the durable registry path used for broker fallback.
@@ -60,6 +172,31 @@ func (c *Client) StorePath() string {
 // SocketPath returns the broker endpoint used by the client.
 func (c *Client) SocketPath() string {
 	return c.realtime.SocketPath()
+}
+
+// Mode returns the configured operating mode.
+func (c *Client) Mode() Mode {
+	return c.mode
+}
+
+// Realtime returns the underlying realtime broker socket client.
+func (c *Client) Realtime() *broker.Client {
+	return c.realtime
+}
+
+// Subscribe returns an active subscription streaming state snapshots from the broker.
+// Subscribe requires a running broker and is not supported in [ModeDurableOnly].
+func (c *Client) Subscribe(ctx context.Context, filter registry.Filter) (*broker.Subscription, error) {
+	if c.mode == ModeDurableOnly {
+		return nil, ErrRealtimeRequired
+	}
+
+	subscription, err := c.realtime.Subscribe(ctx, filter)
+	if err != nil {
+		return nil, publicError(err)
+	}
+
+	return subscription, nil
 }
 
 // Ping verifies that the realtime broker is accepting requests.
@@ -125,12 +262,11 @@ func (c *Client) Watch(
 		return errHandlerRequired
 	}
 
-	subscription, err := c.realtime.Subscribe(ctx, filter)
+	subscription, err := c.Subscribe(ctx, filter)
 	if err != nil {
-		return publicError(err)
+		return err
 	}
 	defer subscription.Close()
-
 	snapshots := subscription.Snapshots
 	errorsChannel := subscription.Errors
 	for snapshots != nil || errorsChannel != nil {
@@ -181,14 +317,14 @@ func publicError(err error) error {
 	if err == nil {
 		return nil
 	}
-	if brokerapi.IsUnavailable(err) {
+	if broker.IsUnavailable(err) {
 		return fmt.Errorf("%w: %w", ErrUnavailable, err)
 	}
-	if errors.Is(err, brokerapi.ErrProtocol) {
+	if errors.Is(err, broker.ErrProtocol) {
 		return fmt.Errorf("%w: %w", ErrProtocol, err)
 	}
 
-	if remoteError, ok := errors.AsType[*brokerapi.RemoteError](err); ok {
+	if remoteError, ok := errors.AsType[*broker.RemoteError](err); ok {
 		return &OperationError{Code: remoteError.Code, Message: remoteError.Message}
 	}
 	return err
