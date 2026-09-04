@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/zigai/aht/internal/harness"
@@ -78,10 +79,8 @@ func Normalize(value string) (registry.Harness, error) {
 		if normalized == string(definition.ID) {
 			return definition.ID, nil
 		}
-		for _, alias := range definition.Aliases {
-			if normalized == alias {
-				return definition.ID, nil
-			}
+		if slices.Contains(definition.Aliases, normalized) {
+			return definition.ID, nil
 		}
 	}
 	return "", fmt.Errorf("%w: %q", registry.ErrUnknownHarness, value)
@@ -107,10 +106,8 @@ func FromCommand(command string) (registry.Harness, bool) {
 	normalized := normalizeToken(filepath.Base(command))
 	for _, adapter := range adapters {
 		definition := adapter.Definition()
-		for _, processName := range definition.ProcessNames {
-			if normalized == processName {
-				return definition.ID, true
-			}
+		if slices.Contains(definition.ProcessNames, normalized) {
+			return definition.ID, true
 		}
 	}
 	return "", false
@@ -123,7 +120,6 @@ func ProcessNames(harnessID registry.Harness) []string {
 	}
 	return adapter.Definition().ProcessNames
 }
-
 
 func DefaultsFromPayloadWithError(harnessID registry.Harness, rawPayload json.RawMessage) (harness.PayloadDefaults, error) {
 	if len(rawPayload) == 0 {
