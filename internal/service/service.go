@@ -57,15 +57,6 @@ type CommandExecutor interface {
 	Run(ctx context.Context, name string, args ...string) ([]byte, error)
 }
 
-// CommandFunc adapts a function into a CommandExecutor.
-type CommandFunc func(context.Context, string, ...string) ([]byte, error)
-
-func (f CommandFunc) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
-	return f(ctx, name, args...)
-}
-
-// Runner is the injectable manager command boundary.
-type Runner = CommandExecutor
 
 // Service manages the platform-native observer service.
 type Service struct {
@@ -232,9 +223,11 @@ func (s *Service) apply(ctx context.Context, options Options, update bool) (Resu
 	} else if err := backend.load(ctx, s.executor); err != nil {
 		return result, s.rollbackDefinition(ctx, backend, result.Path, content, false, err)
 	}
-	result.Installed, result.Current, result.Running, result.Changed, result.Message = true, true, true, true, "installed"
+	result.Installed, result.Current, result.Running, result.Changed = true, true, true, true
 	if installed {
 		result.Message = "updated"
+	} else {
+		result.Message = "installed"
 	}
 	return result, nil
 }

@@ -58,8 +58,6 @@ func RenderSystemdUnit(options Options) (string, error) {
 	}, "\n"), nil
 }
 
-// SystemdUnitPath returns the managed user unit path.
-func SystemdUnitPath() (string, error) { return systemdUnitPath() }
 
 func systemdUnitPath() (string, error) {
 	base, err := os.UserConfigDir()

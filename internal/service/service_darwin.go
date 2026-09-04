@@ -63,8 +63,6 @@ func RenderLaunchAgent(options Options) (string, error) {
 	return b.String(), nil
 }
 
-// LaunchAgentPath returns the managed LaunchAgent plist path.
-func LaunchAgentPath() (string, error) { return launchAgentPath() }
 
 func launchAgentPath() (string, error) {
 	home, err := os.UserHomeDir()
