@@ -1,5 +1,4 @@
-// Package brokerapi defines the local realtime registry protocol and Go client.
-package brokerapi
+package broker
 
 import (
 	"errors"
@@ -77,4 +76,9 @@ func SocketPath(storePath string) string {
 	}
 
 	return filepath.Clean(storePath) + ".sock"
+}
+
+// DefaultSocketPath returns the default endpoint for the current user's AHT broker.
+func DefaultSocketPath() string {
+	return SocketPath("")
 }

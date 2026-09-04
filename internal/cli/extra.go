@@ -8,11 +8,11 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/zigai/aht/internal/broker"
-	"github.com/zigai/aht/internal/brokerapi"
+	"github.com/zigai/aht/internal/brokerserver"
 	"github.com/zigai/aht/internal/config"
 	"github.com/zigai/aht/internal/observer"
 	"github.com/zigai/aht/internal/service"
+	"github.com/zigai/aht/pkg/broker"
 	"github.com/zigai/aht/pkg/registry"
 )
 
@@ -78,9 +78,9 @@ func (app *application) newTrackerRunCommand() *cobra.Command {
 				Quiet:              o.quiet,
 				DetectionConfigDir: cfg.Detection.ManifestsDir,
 			})
-			server := broker.New(broker.Options{
+			server := brokerserver.New(brokerserver.Options{
 				Store:      store,
-				SocketPath: brokerapi.SocketPath(store.Path()),
+				SocketPath: broker.SocketPath(store.Path()),
 			})
 			o.store = store
 			return app.runRealtimeObserver(cmd.Context(), o, watcher, store, server)
@@ -144,7 +144,7 @@ func (app *application) runRealtimeObserver(
 	options observeOptions,
 	watcher *observer.Observer,
 	store *registry.MemoryStore,
-	server *broker.Server,
+	server *brokerserver.Server,
 ) error {
 	runContext, cancel := context.WithCancel(ctx)
 	defer cancel()

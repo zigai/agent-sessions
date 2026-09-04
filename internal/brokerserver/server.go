@@ -1,4 +1,4 @@
-package broker
+package brokerserver
 
 import (
 	"bufio"
@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/zigai/aht/internal/brokerapi"
+	"github.com/zigai/aht/pkg/broker"
 	"github.com/zigai/aht/pkg/registry"
 )
 
@@ -136,7 +136,7 @@ func (s *Server) handleConnection(ctx context.Context, connection net.Conn) {
 		return
 	}
 
-	var request brokerapi.Request
+	var request broker.Request
 	//nolint:musttag // Request defines the complete public JSON protocol schema.
 	if err := json.Unmarshal(scanner.Bytes(), &request); err != nil {
 		_ = writeResponse(connection, errorResponse(request.ID, "invalid_json", err))
@@ -148,7 +148,7 @@ func (s *Server) handleConnection(ctx context.Context, connection net.Conn) {
 	}
 	_ = connection.SetReadDeadline(time.Time{})
 
-	if request.Method == brokerapi.MethodSubscribe {
+	if request.Method == broker.MethodSubscribe {
 		s.serveSubscription(ctx, connection, request)
 		return
 	}
@@ -157,8 +157,8 @@ func (s *Server) handleConnection(ctx context.Context, connection net.Conn) {
 	_ = writeResponse(connection, response)
 }
 
-func validateRequest(request brokerapi.Request) error {
-	if request.Version != brokerapi.ProtocolVersion {
+func validateRequest(request broker.Request) error {
+	if request.Version != broker.ProtocolVersion {
 		return fmt.Errorf("%w: %d", errProtocolVersion, request.Version)
 	}
 	if request.ID == "" {
@@ -166,22 +166,22 @@ func validateRequest(request brokerapi.Request) error {
 	}
 
 	switch request.Method {
-	case brokerapi.MethodPing,
-		brokerapi.MethodObserve,
-		brokerapi.MethodObserveBatch,
-		brokerapi.MethodList,
-		brokerapi.MethodGet,
-		brokerapi.MethodSummary,
-		brokerapi.MethodGC,
-		brokerapi.MethodSubscribe:
+	case broker.MethodPing,
+		broker.MethodObserve,
+		broker.MethodObserveBatch,
+		broker.MethodList,
+		broker.MethodGet,
+		broker.MethodSummary,
+		broker.MethodGC,
+		broker.MethodSubscribe:
 	default:
 		return fmt.Errorf("%w: %q", errUnknownMethod, request.Method)
 	}
 
-	if request.Method == brokerapi.MethodObserve && request.Observation == nil {
+	if request.Method == broker.MethodObserve && request.Observation == nil {
 		return errObservationRequired
 	}
-	if request.Method == brokerapi.MethodObserveBatch {
+	if request.Method == broker.MethodObserveBatch {
 		if len(request.Observations) == 0 {
 			return errBatchRequired
 		}
@@ -189,35 +189,35 @@ func validateRequest(request brokerapi.Request) error {
 			return fmt.Errorf("%w: maximum %d", errBatchTooLarge, maxBatchObservations)
 		}
 	}
-	if request.Method == brokerapi.MethodGet && request.SessionID == "" {
+	if request.Method == broker.MethodGet && request.SessionID == "" {
 		return errSessionIDRequired
 	}
 
 	return nil
 }
 
-func (s *Server) execute(ctx context.Context, request brokerapi.Request) brokerapi.Response {
+func (s *Server) execute(ctx context.Context, request broker.Request) broker.Response {
 	response := newResponse(request.ID, "result")
 
 	var err error
 	switch request.Method {
-	case brokerapi.MethodPing:
+	case broker.MethodPing:
 		response.Now = time.Now().UTC()
-	case brokerapi.MethodObserve:
+	case broker.MethodObserve:
 		var session registry.Session
 		session, err = s.store.Observe(ctx, *request.Observation)
 		response.Session = &session
-	case brokerapi.MethodObserveBatch:
+	case broker.MethodObserveBatch:
 		response.Sessions, err = s.store.ObserveBatch(ctx, request.Observations)
-	case brokerapi.MethodList:
+	case broker.MethodList:
 		response.Sessions, err = s.store.List(ctx, request.Filter)
-	case brokerapi.MethodGet:
+	case broker.MethodGet:
 		var session registry.Session
 		session, err = s.store.Get(ctx, request.SessionID)
 		response.Session = &session
-	case brokerapi.MethodSummary:
+	case broker.MethodSummary:
 		response.Summaries, err = s.store.SummaryByTmuxSession(ctx, request.Filter)
-	case brokerapi.MethodGC:
+	case broker.MethodGC:
 		var result registry.GCResult
 		result, err = s.store.GC(ctx, request.DeleteAfter)
 		response.GC = &result
@@ -232,7 +232,7 @@ func (s *Server) execute(ctx context.Context, request brokerapi.Request) brokera
 func (s *Server) serveSubscription(
 	ctx context.Context,
 	connection net.Conn,
-	request brokerapi.Request,
+	request broker.Request,
 ) {
 	state, err := s.store.State(ctx, request.Filter)
 	if err != nil {
@@ -272,23 +272,23 @@ func (s *Server) serveSubscription(
 	}
 }
 
-func snapshotResponse(id string, state registry.StateSnapshot) brokerapi.Response {
+func snapshotResponse(id string, state registry.StateSnapshot) broker.Response {
 	response := newResponse(id, "snapshot")
 	response.Snapshot = &state
 
 	return response
 }
 
-func errorResponse(id, code string, err error) brokerapi.Response {
+func errorResponse(id, code string, err error) broker.Response {
 	response := newResponse(id, "error")
-	response.Error = &brokerapi.Error{Code: code, Message: err.Error()}
+	response.Error = &broker.Error{Code: code, Message: err.Error()}
 
 	return response
 }
 
-func newResponse(id, responseType string) brokerapi.Response {
-	return brokerapi.Response{
-		Version:   brokerapi.ProtocolVersion,
+func newResponse(id, responseType string) broker.Response {
+	return broker.Response{
+		Version:   broker.ProtocolVersion,
 		ID:        id,
 		Type:      responseType,
 		Error:     nil,
@@ -301,7 +301,7 @@ func newResponse(id, responseType string) brokerapi.Response {
 	}
 }
 
-func operationErrorResponse(id string, err error) brokerapi.Response {
+func operationErrorResponse(id string, err error) broker.Response {
 	code := "operation_failed"
 	switch {
 	case errors.Is(err, registry.ErrSessionNotFound):
@@ -315,7 +315,7 @@ func operationErrorResponse(id string, err error) brokerapi.Response {
 	return errorResponse(id, code, err)
 }
 
-func writeResponse(connection net.Conn, response brokerapi.Response) error {
+func writeResponse(connection net.Conn, response broker.Response) error {
 	if err := connection.SetWriteDeadline(time.Now().Add(writeTimeout)); err != nil {
 		return fmt.Errorf("setting broker write deadline: %w", err)
 	}

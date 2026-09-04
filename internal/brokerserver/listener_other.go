@@ -1,6 +1,6 @@
 //go:build !linux && !darwin
 
-package broker
+package brokerserver
 
 import (
 	"context"

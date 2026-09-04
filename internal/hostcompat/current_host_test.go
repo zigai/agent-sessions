@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/zigai/aht/internal/brokerapi"
+	"github.com/zigai/aht/pkg/broker"
 	"github.com/zigai/aht/pkg/registry"
 )
 
@@ -243,7 +243,7 @@ func (host isolatedHost) startTracker(t *testing.T) {
 	defer deadline.Stop()
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
-	socketPath := brokerapi.SocketPath(host.store)
+	socketPath := broker.SocketPath(host.store)
 	for {
 		select {
 		case <-deadline.C:

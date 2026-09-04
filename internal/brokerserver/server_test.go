@@ -1,6 +1,6 @@
 //go:build linux || darwin
 
-package broker
+package brokerserver
 
 import (
 	"context"
@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/zigai/aht/internal/brokerapi"
+	"github.com/zigai/aht/pkg/broker"
 	"github.com/zigai/aht/pkg/registry"
 )
 
@@ -30,7 +30,7 @@ func TestServerStreamsEffectiveStateChanges(t *testing.T) {
 	}
 	t.Cleanup(func() {
 		_ = os.Remove(path)
-		_ = os.Remove(brokerapi.SocketPath(path))
+		_ = os.Remove(broker.SocketPath(path))
 	})
 	store, err := registry.OpenMemoryStore(path)
 	if err != nil {
@@ -39,7 +39,7 @@ func TestServerStreamsEffectiveStateChanges(t *testing.T) {
 	ready := make(chan struct{})
 	server := New(Options{
 		Store:      store,
-		SocketPath: brokerapi.SocketPath(path),
+		SocketPath: broker.SocketPath(path),
 		Ready:      ready,
 	})
 	serverErrors := make(chan error, 1)
@@ -53,7 +53,7 @@ func TestServerStreamsEffectiveStateChanges(t *testing.T) {
 	case <-ready:
 	}
 
-	info, err := os.Stat(brokerapi.SocketPath(path))
+	info, err := os.Stat(broker.SocketPath(path))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +61,7 @@ func TestServerStreamsEffectiveStateChanges(t *testing.T) {
 		t.Fatalf("socket mode = %o, want 600", info.Mode().Perm())
 	}
 
-	client := brokerapi.NewClient(path)
+	client := broker.NewClient(path)
 	subscription, err := client.Subscribe(ctx, registry.Filter{Presence: registry.PresenceLive})
 	if err != nil {
 		t.Fatal(err)
@@ -164,16 +164,16 @@ func TestServer_RejectsProtocolAdversity(t *testing.T) {
 		},
 		{
 			name:        "unsupported version",
-			payload:     marshalBrokerRequest(t, brokerapi.Request{Version: brokerapi.ProtocolVersion + 1, ID: "wrong-version", Method: brokerapi.MethodPing}),
+			payload:     marshalBrokerRequest(t, broker.Request{Version: broker.ProtocolVersion + 1, ID: "wrong-version", Method: broker.MethodPing}),
 			wantCode:    "invalid_request",
 			wantMessage: "unsupported broker protocol version",
 		},
 		{
 			name: "oversized batch",
-			payload: marshalBrokerRequest(t, brokerapi.Request{
-				Version:      brokerapi.ProtocolVersion,
+			payload: marshalBrokerRequest(t, broker.Request{
+				Version:      broker.ProtocolVersion,
 				ID:           "large-batch",
-				Method:       brokerapi.MethodObserveBatch,
+				Method:       broker.MethodObserveBatch,
 				Observations: make([]registry.Observation, maxBatchObservations+1),
 			}),
 			wantCode:    "invalid_request",
@@ -197,7 +197,7 @@ func TestServer_RejectsProtocolAdversity(t *testing.T) {
 		})
 	}
 
-	if err := brokerapi.NewClient(fixture.path).Ping(t.Context()); err != nil {
+	if err := broker.NewClient(fixture.path).Ping(t.Context()); err != nil {
 		t.Fatalf("broker did not serve a valid request after adversity: %v", err)
 	}
 	stopBrokerAdversityFixture(t, fixture)
@@ -210,10 +210,10 @@ func TestServer_BoundsSlowSubscriber(t *testing.T) {
 	if unixConnection, ok := connection.(*net.UnixConn); ok {
 		_ = unixConnection.SetReadBuffer(1)
 	}
-	subscribe := marshalBrokerRequest(t, brokerapi.Request{
-		Version: brokerapi.ProtocolVersion,
+	subscribe := marshalBrokerRequest(t, broker.Request{
+		Version: broker.ProtocolVersion,
 		ID:      "slow-subscriber",
-		Method:  brokerapi.MethodSubscribe,
+		Method:  broker.MethodSubscribe,
 	})
 	if _, err := connection.Write(subscribe); err != nil {
 		t.Fatalf("write slow subscription: %v", err)
@@ -239,7 +239,7 @@ func TestServer_BoundsSlowSubscriber(t *testing.T) {
 
 	clientContext, cancelClient := context.WithTimeout(t.Context(), time.Second)
 	defer cancelClient()
-	client := brokerapi.NewClient(fixture.path)
+	client := broker.NewClient(fixture.path)
 	if err := client.Ping(clientContext); err != nil {
 		t.Fatalf("slow subscriber blocked another client: %v", err)
 	}
@@ -283,7 +283,7 @@ func TestServer_ShutsDownCleanly(t *testing.T) {
 	case <-timer.C:
 		t.Fatal("broker did not close a partial-handshake connection during shutdown")
 	}
-	if _, err := os.Stat(brokerapi.SocketPath(fixture.path)); !os.IsNotExist(err) {
+	if _, err := os.Stat(broker.SocketPath(fixture.path)); !os.IsNotExist(err) {
 		t.Fatalf("broker socket remains after shutdown: %v", err)
 	}
 }
@@ -296,7 +296,7 @@ func startBrokerAdversityFixture(t *testing.T) brokerAdversityFixture {
 	}
 	t.Cleanup(func() {
 		_ = os.Remove(path)
-		_ = os.Remove(brokerapi.SocketPath(path))
+		_ = os.Remove(broker.SocketPath(path))
 	})
 	store, err := registry.OpenMemoryStore(path)
 	if err != nil {
@@ -305,7 +305,7 @@ func startBrokerAdversityFixture(t *testing.T) brokerAdversityFixture {
 	ctx, cancel := context.WithCancel(t.Context())
 	ready := make(chan struct{})
 	done := make(chan error, 1)
-	server := New(Options{Store: store, SocketPath: brokerapi.SocketPath(path), Ready: ready})
+	server := New(Options{Store: store, SocketPath: broker.SocketPath(path), Ready: ready})
 	go func() { done <- server.Serve(ctx) }()
 	select {
 	case err := <-done:
@@ -332,7 +332,7 @@ func stopBrokerAdversityFixture(t *testing.T, fixture brokerAdversityFixture) {
 	}
 }
 
-func marshalBrokerRequest(t *testing.T, request brokerapi.Request) []byte {
+func marshalBrokerRequest(t *testing.T, request broker.Request) []byte {
 	t.Helper()
 	//nolint:musttag // Request defines the complete public JSON protocol schema.
 	payload, err := json.Marshal(request)
@@ -345,14 +345,14 @@ func marshalBrokerRequest(t *testing.T, request brokerapi.Request) []byte {
 func dialRawBroker(t *testing.T, storePath string) net.Conn {
 	t.Helper()
 	dialer := net.Dialer{Timeout: time.Second}
-	connection, err := dialer.DialContext(t.Context(), "unix", brokerapi.SocketPath(storePath))
+	connection, err := dialer.DialContext(t.Context(), "unix", broker.SocketPath(storePath))
 	if err != nil {
 		t.Fatal(err)
 	}
 	return connection
 }
 
-func sendRawBrokerRequest(t *testing.T, storePath string, payload []byte) brokerapi.Response {
+func sendRawBrokerRequest(t *testing.T, storePath string, payload []byte) broker.Response {
 	t.Helper()
 	connection := dialRawBroker(t, storePath)
 	defer func() { _ = connection.Close() }()
@@ -362,7 +362,7 @@ func sendRawBrokerRequest(t *testing.T, storePath string, payload []byte) broker
 	if _, err := connection.Write(payload); err != nil {
 		t.Fatal(err)
 	}
-	var response brokerapi.Response
+	var response broker.Response
 	if err := json.NewDecoder(connection).Decode(&response); err != nil {
 		t.Fatalf("decode broker response: %v", err)
 	}
@@ -379,14 +379,14 @@ func BenchmarkBrokerObserveRoundTrip(b *testing.B) {
 	ready := make(chan struct{})
 	server := New(Options{
 		Store:      store,
-		SocketPath: brokerapi.SocketPath(path),
+		SocketPath: broker.SocketPath(path),
 		Ready:      ready,
 	})
 	serverErrors := make(chan error, 1)
 	go func() { serverErrors <- server.Serve(ctx) }()
 	<-ready
 
-	client := brokerapi.NewClient(path)
+	client := broker.NewClient(path)
 	running := registry.ActivityRunning
 	sequence := uint64(0)
 	observation := registry.Observation{

@@ -1,4 +1,4 @@
-package brokerapi
+package broker
 
 import (
 	"context"

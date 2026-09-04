@@ -18,7 +18,7 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/zigai/aht/internal/brokerapi"
+	"github.com/zigai/aht/pkg/broker"
 	"github.com/zigai/aht/pkg/registry"
 )
 
@@ -224,7 +224,7 @@ func waitForBrokerSocket(t *testing.T, tracker *runningTestCommand, storePath st
 	defer deadline.Stop()
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
-	socketPath := brokerapi.SocketPath(storePath)
+	socketPath := broker.SocketPath(storePath)
 	for {
 		select {
 		case err := <-tracker.done:

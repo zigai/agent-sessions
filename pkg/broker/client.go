@@ -1,4 +1,4 @@
-package brokerapi
+package broker
 
 import (
 	"context"
@@ -22,6 +22,8 @@ type Client struct {
 	socketPath  string
 	dialTimeout time.Duration
 }
+
+var _ registry.Store = (*Client)(nil)
 
 // NewClient returns a client for the broker associated with storePath.
 func NewClient(storePath string) *Client {
@@ -111,6 +113,16 @@ func (c *Client) Summary(ctx context.Context, filter registry.Filter) ([]registr
 	return response.Summaries, nil
 }
 
+// SummaryByTmuxSession implements registry.Store.
+func (c *Client) SummaryByTmuxSession(ctx context.Context, filter registry.Filter) ([]registry.Summary, error) {
+	return c.Summary(ctx, filter)
+}
+
+// SummaryByTmuxSessionWithOptions implements registry.Store.
+func (c *Client) SummaryByTmuxSessionWithOptions(ctx context.Context, options registry.SummaryOptions) ([]registry.Summary, error) {
+	return c.Summary(ctx, options.Filter)
+}
+
 // GC removes expired gone-session tombstones through the broker.
 func (c *Client) GC(ctx context.Context, deleteAfter time.Duration) (registry.GCResult, error) {
 	request := newRequest(MethodGC)
@@ -131,6 +143,11 @@ type Subscription struct {
 	Snapshots <-chan registry.StateSnapshot
 	Errors    <-chan error
 	cancel    context.CancelFunc
+}
+
+// NewSubscription returns a Subscription wrapping the given channels and optional cancel function.
+func NewSubscription(snapshots <-chan registry.StateSnapshot, errors <-chan error, cancel context.CancelFunc) *Subscription {
+	return &Subscription{Snapshots: snapshots, Errors: errors, cancel: cancel}
 }
 
 // Close cancels the subscription. It is safe to call more than once.
