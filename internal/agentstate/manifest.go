@@ -221,16 +221,16 @@ func compileManifestRules(manifest *Manifest) error {
 		rule := &manifest.Rules[index]
 		var err error
 		if rule.regexAllCompiled, err = compileRuleExpressions(rule.RegexAll, rule.CaseSensitive); err != nil {
-			return fmt.Errorf("compiling rule %q regex_all: %w", rule.ID, err)
+			return fmt.Errorf("%w: compiling rule %q regex_all: %w", errManifestInvalid, rule.ID, err)
 		}
 		if rule.regexAnyCompiled, err = compileRuleExpressions(rule.RegexAny, rule.CaseSensitive); err != nil {
-			return fmt.Errorf("compiling rule %q regex_any: %w", rule.ID, err)
+			return fmt.Errorf("%w: compiling rule %q regex_any: %w", errManifestInvalid, rule.ID, err)
 		}
 		if rule.regexNoneCompiled, err = compileRuleExpressions(rule.RegexNone, rule.CaseSensitive); err != nil {
-			return fmt.Errorf("compiling rule %q regex_none: %w", rule.ID, err)
+			return fmt.Errorf("%w: compiling rule %q regex_none: %w", errManifestInvalid, rule.ID, err)
 		}
 		if rule.titleRegexAnyCompiled, err = compileRuleExpressions(rule.TitleRegexAny, rule.CaseSensitive); err != nil {
-			return fmt.Errorf("compiling rule %q title_regex_any: %w", rule.ID, err)
+			return fmt.Errorf("%w: compiling rule %q title_regex_any: %w", errManifestInvalid, rule.ID, err)
 		}
 	}
 
@@ -300,15 +300,6 @@ func validateRule(rule Rule) error {
 	}
 	if err := validateRuleMatchers(rule); err != nil {
 		return err
-	}
-	expressions := append([]string{}, rule.RegexAll...)
-	expressions = append(expressions, rule.RegexAny...)
-	expressions = append(expressions, rule.RegexNone...)
-	expressions = append(expressions, rule.TitleRegexAny...)
-	for _, expression := range expressions {
-		if _, err := regexp.Compile(ruleRegexExpression(expression, rule.CaseSensitive)); err != nil {
-			return fmt.Errorf("%w: rule %q regex %q: %w", errManifestInvalid, rule.ID, expression, err)
-		}
 	}
 	return nil
 }
