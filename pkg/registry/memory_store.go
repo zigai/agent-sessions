@@ -306,12 +306,7 @@ func (s *MemoryStore) Flush(ctx context.Context) error {
 // RunPersistence coalesces bursts of observations into durable atomic snapshots.
 // The caller owns this loop and must cancel ctx before discarding the store.
 func (s *MemoryStore) RunPersistence(ctx context.Context, settle, maximumDelay time.Duration) error {
-	if settle <= 0 {
-		settle = defaultPersistenceSettle
-	}
-	if maximumDelay < settle {
-		maximumDelay = defaultPersistenceMaxDelay
-	}
+	settle, maximumDelay = normalizePersistenceOptions(settle, maximumDelay)
 
 	for {
 		select {
@@ -342,9 +337,22 @@ func (s *MemoryStore) RunPersistence(ctx context.Context, settle, maximumDelay t
 		stopAndDrainTimer(maximumTimer)
 
 		if err := s.Flush(ctx); err != nil {
+			if ctx.Err() != nil {
+				return s.flushOnShutdown(ctx)
+			}
 			return fmt.Errorf("persisting registry snapshot: %w", err)
 		}
 	}
+}
+
+func normalizePersistenceOptions(settle, maximumDelay time.Duration) (time.Duration, time.Duration) {
+	if settle <= 0 {
+		settle = defaultPersistenceSettle
+	}
+	if maximumDelay < settle {
+		maximumDelay = defaultPersistenceMaxDelay
+	}
+	return settle, maximumDelay
 }
 
 func (s *MemoryStore) setNowForTest(now func() time.Time) {
