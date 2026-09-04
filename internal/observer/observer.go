@@ -706,10 +706,7 @@ func (o *Observer) detectScreenState(ctx context.Context, sessions []registry.Se
 		var empty registry.Observation
 		return empty, false, nil
 	}
-	observedAt := o.now().UTC()
-	if observedAt.Before(at) {
-		observedAt = at
-	}
+	observedAt := screenObservationTime(at, o.now().UTC())
 	fallback, fallbackReason := screenFallbackMetadata(session, harnessID, at)
 	screen := &registry.ScreenObservation{Activity: decision.Activity, Authority: string(agentstate.AuthorityScreen), Reason: decision.Reason, RuleID: decision.RuleID, ManifestSource: decision.ManifestSource, ManifestVersion: decision.ManifestVersion, FallbackForIntegration: fallback, FallbackReason: fallbackReason, Process: *identity, ObservedAt: observedAt}
 	observation := registry.Observation{ //nolint:exhaustruct // screen observations intentionally contain no terminal contents
@@ -789,6 +786,13 @@ func shouldDetectScreen(session registry.Session, at time.Time) bool {
 	}
 	policy := agentstate.PolicyFor(session.Harness)
 	return policy.Primary == agentstate.AuthorityHook && !agentstate.HookIsActive(session, at)
+}
+
+func screenObservationTime(cycleAt time.Time, capturedAt time.Time) time.Time {
+	if capturedAt.Before(cycleAt) {
+		return cycleAt
+	}
+	return capturedAt
 }
 
 func preferForegroundProcess(candidate processinfo.Process, current processinfo.Process) bool {

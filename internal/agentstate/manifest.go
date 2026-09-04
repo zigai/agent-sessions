@@ -298,10 +298,7 @@ func validateRule(rule Rule) error {
 	if !hasPositiveMatcher(rule) {
 		return fmt.Errorf("%w: rule %q has no positive matcher", errManifestInvalid, rule.ID)
 	}
-	if err := validateRuleMatchers(rule); err != nil {
-		return err
-	}
-	return nil
+	return validateRuleMatchers(rule)
 }
 
 func hasPositiveMatcher(rule Rule) bool {

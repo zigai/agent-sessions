@@ -29,9 +29,9 @@ jobs:
             target: FuzzParseLinuxStat
           - package: ./internal/harness/catalog
             target: FuzzPayloadAdapters
-          - package: ./internal/tmuxctx
+          - package: ./pkg/tmux
             target: FuzzParseCurrent
-          - package: ./internal/tmuxctx
+          - package: ./pkg/tmux
             target: FuzzParseListPanes
     steps:
       - name: Checkout

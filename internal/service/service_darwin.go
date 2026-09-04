@@ -63,7 +63,6 @@ func RenderLaunchAgent(options Options) (string, error) {
 	return b.String(), nil
 }
 
-
 func launchAgentPath() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {

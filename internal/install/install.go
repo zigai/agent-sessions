@@ -21,7 +21,6 @@ const (
 var (
 	errUnsupportedHarness = errors.New("unsupported harness")
 	errForeignFile        = errors.New("file exists and is not managed by aht")
-	errInstallFailed      = errors.New("one or more integrations failed to install")
 )
 
 var allHarnesses = installableHarnesses()

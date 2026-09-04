@@ -76,8 +76,8 @@ func TestRealTmuxBottomScreenDetectionForFourAgents(t *testing.T) {
 		}
 		processPID := 5000 + index
 		processes = append(processes, processinfo.Process{PID: processPID, PPID: panePID, ProcessGroupID: processPID, Foreground: true, StartIdentity: "test:" + sessionName, Executable: "/usr/bin/" + sessionName, CWD: "/tmp", TTY: fields[1], Args: []string{sessionName}})
-		tmux := registry.TmuxContext{Inside: true, ServerSocket: socket, SessionID: "$" + strconv.Itoa(index+1), SessionName: sessionName, WindowID: "@" + strconv.Itoa(index+1), WindowIndex: "0", WindowName: sessionName, PaneID: fields[0], PaneIndex: "0", PaneCurrentPath: "/tmp", PanePID: panePID, PaneTTY: fields[1]}
-		pane := tmux.Pane{Tmux: tmux, ServerIdentity: socket, PanePID: panePID, PaneTTY: fields[1]}
+		tmuxCtx := registry.TmuxContext{Inside: true, ServerSocket: socket, SessionID: "$" + strconv.Itoa(index+1), SessionName: sessionName, WindowID: "@" + strconv.Itoa(index+1), WindowIndex: "0", WindowName: sessionName, PaneID: fields[0], PaneIndex: "0", PaneCurrentPath: "/tmp", PanePID: panePID, PaneTTY: fields[1]}
+		pane := tmux.Pane{Tmux: tmuxCtx, ServerIdentity: socket, PanePID: panePID, PaneTTY: fields[1]}
 		panes = append(panes, pane)
 		deadline := time.Now().Add(2 * time.Second)
 		for {

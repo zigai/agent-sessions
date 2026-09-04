@@ -13,8 +13,6 @@ import (
 	"github.com/zigai/aht/pkg/registry"
 )
 
-var errRemoveFailed = errors.New("one or more integrations failed to remove")
-
 // Remove deletes only artifacts owned by aht for one harness.
 func Remove(options Options) (Result, error) {
 	return RemoveContext(context.Background(), options)
@@ -110,9 +108,11 @@ func removePlanAction(ctx context.Context, options Options, harnessID registry.H
 		result, err := removePluginDirectory(ctx, options, harnessID, typed.Plan)
 		return result, true, err
 	case harnesspkg.ShimAction:
-		return Result{}, false, nil
+		var result Result
+		return result, false, nil
 	default:
-		return Result{}, false, nil
+		var result Result
+		return result, false, nil
 	}
 }
 
