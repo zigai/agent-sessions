@@ -35,22 +35,21 @@ func installRenderedFile(options Options, file renderedFileInstall) (Result, err
 		Harness:  string(file.Harness),
 		Path:     file.Path,
 		Changed:  changed,
-		Message:  renderedFileMessage(changed, options.DryRun, file),
+		Message:  installStatusMessage(changed, options.DryRun, file.DryRunMessage, file.AlreadyInstalledMessage, file.InstalledMessage),
 		NextStep: "",
 		Snippet:  file.Content,
 		Error:    "",
 	}, nil
 }
 
-func renderedFileMessage(changed bool, dryRun bool, file renderedFileInstall) string {
+func installStatusMessage(changed bool, dryRun bool, dryRunMsg, alreadyInstalledMsg, installedMsg string) string {
 	if dryRun {
-		return file.DryRunMessage
+		return dryRunMsg
 	}
 	if !changed {
-		return file.AlreadyInstalledMessage
+		return alreadyInstalledMsg
 	}
-
-	return file.InstalledMessage
+	return installedMsg
 }
 
 type jsonHookFileInstall struct {
@@ -86,23 +85,13 @@ func installJSONHookFile(options Options, file jsonHookFileInstall) (Result, err
 		Harness:  string(file.Harness),
 		Path:     file.Path,
 		Changed:  changed,
-		Message:  jsonHookFileMessage(changed, options.DryRun, file),
+		Message:  installStatusMessage(changed, options.DryRun, file.DryRunMessage, file.AlreadyInstalledMessage, file.InstalledMessage),
 		NextStep: "",
 		Snippet:  string(data),
 		Error:    "",
 	}, nil
 }
 
-func jsonHookFileMessage(changed bool, dryRun bool, file jsonHookFileInstall) string {
-	if dryRun {
-		return file.DryRunMessage
-	}
-	if !changed {
-		return file.AlreadyInstalledMessage
-	}
-
-	return file.InstalledMessage
-}
 
 func writeInstallFile(path string, data []byte, changed bool, dryRun bool, createDirError string, writeError string) error {
 	if !changed || dryRun {

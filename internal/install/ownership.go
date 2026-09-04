@@ -40,30 +40,31 @@ var (
 // intentionally format-agnostic: managed ownership is established by the
 // marker or source metadata and generation is established by the version.
 func ClassifyArtifact(path string) (ArtifactStatus, error) {
+	status, _, err := classifyArtifactWithID(path)
+	return status, err
+}
+
+func classifyArtifactWithID(path string) (ArtifactStatus, string, error) {
 	info, err := os.Stat(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return ArtifactMissing, nil
+			return ArtifactMissing, "", nil
 		}
-		return "", fmt.Errorf("checking artifact %s: %w", path, err)
+		return "", "", fmt.Errorf("checking artifact %s: %w", path, err)
 	}
+	contentPath := path
 	if info.IsDir() {
-		data, err := os.ReadFile(filepath.Join(path, ".aht-managed"))
-		if err != nil {
-			if errors.Is(err, os.ErrNotExist) {
-				return ArtifactForeign, nil
-			}
-			return "", fmt.Errorf("reading artifact marker %s: %w", path, err)
-		}
-		return classifyArtifactContent(string(data)), nil
+		contentPath = filepath.Join(path, ".aht-managed")
 	}
-
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(contentPath)
 	if err != nil {
-		return "", fmt.Errorf("reading artifact %s: %w", path, err)
+		if errors.Is(err, os.ErrNotExist) {
+			return ArtifactForeign, "", nil
+		}
+		return "", "", fmt.Errorf("reading artifact %s: %w", contentPath, err)
 	}
-
-	return classifyArtifactContent(string(data)), nil
+	content := string(data)
+	return classifyArtifactContent(content), integrationIDFromContent(content), nil
 }
 
 func classifyArtifactContent(content string) ArtifactStatus {
@@ -108,24 +109,11 @@ func integrationIDFromContent(content string) string {
 }
 
 func classifyArtifactForHarness(path string, harnessID registry.Harness) (ArtifactStatus, error) {
-	status, err := ClassifyArtifact(path)
+	status, integrationID, err := classifyArtifactWithID(path)
 	if err != nil || status == ArtifactMissing || status == ArtifactForeign {
 		return status, err
 	}
-
-	info, err := os.Stat(path)
-	if err != nil {
-		return "", fmt.Errorf("checking artifact %s ownership: %w", path, err)
-	}
-	ownershipPath := path
-	if info.IsDir() {
-		ownershipPath = filepath.Join(path, ".aht-managed")
-	}
-	data, err := os.ReadFile(ownershipPath)
-	if err != nil {
-		return "", fmt.Errorf("reading artifact ownership %s: %w", path, err)
-	}
-	if integrationID := integrationIDFromContent(string(data)); integrationID != "" && integrationID != string(harnessID) {
+	if integrationID != "" && integrationID != string(harnessID) {
 		return ArtifactForeign, nil
 	}
 	return status, nil

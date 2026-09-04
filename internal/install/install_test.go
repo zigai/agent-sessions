@@ -34,6 +34,8 @@ const (
 	kimiCodeManagedStart  = "# BEGIN aht managed integration: kimi-code"
 	kimiCodeManagedEnd    = "# END aht managed integration: kimi-code"
 	grokHookFileName      = "aht-state.json"
+	hookEventSessionStart = harnesspkg.HookEventSessionStart
+	hookEventStop         = harnesspkg.HookEventStop
 )
 
 func TestContextAwareIntegrationEntryPointsPreserveCancellation(t *testing.T) {
@@ -1656,19 +1658,21 @@ func TestRunAllInstallsEveryHarness(t *testing.T) {
 	t.Setenv("AGY_CLI_HOME", t.TempDir())
 	t.Setenv("HOME", t.TempDir())
 
-	results, err := RunAll(Options{
-		Harness:      "",
-		Binary:       defaultBinary,
-		TargetBinary: "/usr/bin/opencode",
-		DryRun:       false,
-		Force:        false,
-		UseShim:      false,
-	})
-	if err != nil {
-		t.Fatalf("RunAll returned error: %v", err)
-	}
-	if len(results) != len(AllHarnesses()) {
-		t.Fatalf("expected %d results, got %d", len(AllHarnesses()), len(results))
+	harnesses := AllHarnesses()
+	results := make([]Result, 0, len(harnesses))
+	for _, h := range harnesses {
+		res, err := RunContext(context.Background(), Options{
+			Harness:      h,
+			Binary:       defaultBinary,
+			TargetBinary: "/usr/bin/opencode",
+			DryRun:       false,
+			Force:        false,
+			UseShim:      false,
+		})
+		if err != nil {
+			t.Fatalf("RunContext for %s returned error: %v", h, err)
+		}
+		results = append(results, res)
 	}
 
 	for _, result := range results {

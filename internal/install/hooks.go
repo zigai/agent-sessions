@@ -7,10 +7,6 @@ import (
 	harnesspkg "github.com/zigai/aht/internal/harness"
 )
 
-const (
-	hookEventSessionStart = harnesspkg.HookEventSessionStart
-	hookEventStop         = harnesspkg.HookEventStop
-)
 
 func commandHookGroup(command string, matcher string, statusMessage string, timeoutSeconds int) map[string]any {
 	if timeoutSeconds <= 0 {

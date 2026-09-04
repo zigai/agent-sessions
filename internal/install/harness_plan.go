@@ -396,7 +396,7 @@ func installRenderedFilesPlan(
 	harness registry.Harness,
 	plan harnesspkg.RenderedFilesInstallPlan,
 ) (Result, error) {
-	files, err := renderRenderedFiles(plan.Files)
+	files, err := renderInstallFiles(plan.Files, "rendered")
 	if err != nil {
 		return Result{}, err
 	}
@@ -457,9 +457,6 @@ func renderInstallContent(content string, jsonContent any) (string, error) {
 	return string(append(data, '\n')), nil
 }
 
-func renderRenderedFiles(specs []harnesspkg.RenderedFileInstallSpec) (map[string]string, error) {
-	return renderInstallFiles(specs, "rendered")
-}
 
 func renderedFilesNeedUpdate(
 	dir string,
@@ -506,7 +503,7 @@ func installPluginDirectory(
 	harness registry.Harness,
 	plan harnesspkg.PluginDirectoryInstallPlan,
 ) (Result, error) {
-	files, err := renderPluginFiles(plan.Files)
+	files, err := renderInstallFiles(plan.Files, "plugin")
 	if err != nil {
 		return Result{}, err
 	}
@@ -606,13 +603,6 @@ func prepareImportManifestRollback(path string) (func() error, error) {
 		}
 		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("removing newly created import manifest: %w", err)
-		}
-		if _, err := os.Stat(filepath.Dir(path)); err != nil {
-			if errors.Is(err, os.ErrNotExist) {
-				return nil
-			}
-
-			return fmt.Errorf("checking import manifest directory: %w", err)
 		}
 
 		return syncDir(filepath.Dir(path))
@@ -718,7 +708,7 @@ func upsertImport(
 			next.ImportedAt = now.Format(time.RFC3339)
 		}
 		for _, component := range plan.Components {
-			if !stringSliceContains(next.Components, component) {
+			if !slices.Contains(next.Components, component) {
 				next.Components = append(next.Components, component)
 			}
 		}
@@ -744,17 +734,7 @@ func importsEqual(left importEntry, right importEntry) bool {
 	if left.Name != right.Name || left.Source != right.Source || left.ImportedAt != right.ImportedAt {
 		return false
 	}
-
-	if len(left.Components) != len(right.Components) {
-		return false
-	}
-	for index := range left.Components {
-		if left.Components[index] != right.Components[index] {
-			return false
-		}
-	}
-
-	return true
+	return slices.Equal(left.Components, right.Components)
 }
 
 func writeImportManifest(path string, manifest importManifest) error {
@@ -829,10 +809,6 @@ func syncDir(dir string) error {
 	}
 
 	return nil
-}
-
-func stringSliceContains(values []string, target string) bool {
-	return slices.Contains(values, target)
 }
 
 func managedSource(source string, harness registry.Harness) string {

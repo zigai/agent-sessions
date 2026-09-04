@@ -222,7 +222,7 @@ func collectGeneratedArtifacts(t *testing.T, binary captureExecutable) []generat
 
 func mustRenderFiles(t *testing.T, specs []harnesspkg.RenderedFileInstallSpec) map[string]string {
 	t.Helper()
-	files, err := renderRenderedFiles(specs)
+	files, err := renderInstallFiles(specs, "rendered")
 	if err != nil {
 		t.Fatalf("render generated files: %v", err)
 	}

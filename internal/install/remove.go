@@ -69,7 +69,7 @@ func removeNativeIntegration(ctx context.Context, options Options, plan harnessp
 			return result, err
 		}
 	}
-	return emptyResult(), fmt.Errorf("%w: %q", errUnsupportedHarness, options.Harness)
+	return Result{}, fmt.Errorf("%w: %q", errUnsupportedHarness, options.Harness)
 }
 
 func removeOwnedShim(path string, dryRun bool, status ArtifactStatus) (bool, error) {
@@ -85,15 +85,6 @@ func removeOwnedShim(path string, dryRun bool, status ArtifactStatus) (bool, err
 	return true, nil
 }
 
-// RemoveAll deletes owned artifacts for every installable harness.
-func RemoveAll(options Options) ([]Result, error) {
-	return RemoveAllContext(context.Background(), options)
-}
-
-// RemoveAllContext removes every integration while honoring caller cancellation.
-func RemoveAllContext(ctx context.Context, options Options) ([]Result, error) {
-	return runAllHarnesses(ctx, options, RemoveContext, "remove failed", errRemoveFailed)
-}
 
 func removePlanAction(ctx context.Context, options Options, harnessID registry.Harness, action harnesspkg.InstallAction) (Result, bool, error) {
 	switch typed := action.(type) {
@@ -120,9 +111,9 @@ func removePlanAction(ctx context.Context, options Options, harnessID registry.H
 		result, err := removePluginDirectory(ctx, options, harnessID, typed.Plan)
 		return result, true, err
 	case harnesspkg.ShimAction:
-		return emptyResult(), false, nil
+		return Result{}, false, nil
 	default:
-		return emptyResult(), false, nil
+		return Result{}, false, nil
 	}
 }
 
@@ -179,11 +170,6 @@ func removeManagedJSONHookEvent(
 }
 
 func removeJSONHooks(options Options, harnessID registry.Harness, path string, apply func(map[string]any) bool) (Result, error) {
-	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
-		return removeResult(harnessID, path, false, options.DryRun), nil
-	} else if err != nil {
-		return Result{}, fmt.Errorf("checking %s: %w", path, err)
-	}
 	config, err := readJSONObject(path)
 	if err != nil {
 		return Result{}, err
@@ -364,8 +350,4 @@ func removeResult(harnessID registry.Harness, path string, changed bool, dryRun 
 		message = "integration removed"
 	}
 	return Result{Harness: string(harnessID), Path: path, Changed: changed, Message: message, NextStep: "", Snippet: "", Error: ""}
-}
-
-func emptyResult() Result {
-	return Result{Harness: "", Path: "", Changed: false, Message: "", NextStep: "", Snippet: "", Error: ""}
 }
