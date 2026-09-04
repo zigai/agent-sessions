@@ -1,4 +1,4 @@
-package muxctx
+package mux
 
 import (
 	"context"

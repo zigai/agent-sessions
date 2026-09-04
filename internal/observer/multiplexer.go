@@ -9,12 +9,12 @@ import (
 	"strings"
 
 	harness "github.com/zigai/aht/internal/harness/catalog"
-	"github.com/zigai/aht/internal/herdrctx"
-	"github.com/zigai/aht/internal/muxctx"
 	"github.com/zigai/aht/internal/processinfo"
-	"github.com/zigai/aht/internal/tmuxctx"
-	"github.com/zigai/aht/internal/zellijctx"
+	"github.com/zigai/aht/pkg/herdr"
+	"github.com/zigai/aht/pkg/mux"
 	"github.com/zigai/aht/pkg/registry"
+	"github.com/zigai/aht/pkg/tmux"
+	"github.com/zigai/aht/pkg/zellij"
 )
 
 var errUnsupportedMultiplexerPane = errors.New("unsupported multiplexer pane")
@@ -25,18 +25,18 @@ const (
 	multiplexerPriorityHerdr  = 3
 )
 
-func listMultiplexerPanes(ctx context.Context) ([]muxctx.Pane, error) {
-	panes := make([]muxctx.Pane, 0)
+func listMultiplexerPanes(ctx context.Context) ([]mux.Pane, error) {
+	panes := make([]mux.Pane, 0)
 	var listErrors []error
 	if _, err := exec.LookPath("tmux"); err == nil {
-		tmuxPanes, listErr := tmuxctx.ListPanes(ctx)
+		tmuxPanes, listErr := tmux.ListPanes(ctx)
 		if listErr != nil {
 			listErrors = append(listErrors, listErr)
 		} else {
 			panes = append(panes, multiplexerPanesFromTmux(tmuxPanes)...)
 		}
 	}
-	for _, list := range []muxctx.PaneLister{zellijctx.ListPanes, herdrctx.ListPanes} {
+	for _, list := range []mux.PaneLister{zellij.ListPanes, herdr.ListPanes} {
 		listed, listErr := list(ctx)
 		if listErr != nil {
 			listErrors = append(listErrors, listErr)
@@ -46,8 +46,8 @@ func listMultiplexerPanes(ctx context.Context) ([]muxctx.Pane, error) {
 	return panes, errors.Join(listErrors...)
 }
 
-func multiplexerPanesFromTmux(panes []tmuxctx.Pane) []muxctx.Pane {
-	result := make([]muxctx.Pane, 0, len(panes))
+func multiplexerPanesFromTmux(panes []tmux.Pane) []mux.Pane {
+	result := make([]mux.Pane, 0, len(panes))
 	for _, pane := range panes {
 		location := registry.MultiplexerFromTmux(pane.Tmux)
 		if location.ServerID == "" {
@@ -55,11 +55,11 @@ func multiplexerPanesFromTmux(panes []tmuxctx.Pane) []muxctx.Pane {
 		}
 		location.PanePID = pane.PanePID
 		location.PaneTTY = pane.PaneTTY
-		processes := make([]muxctx.ProcessRef, 0, 1)
+		processes := make([]mux.ProcessRef, 0, 1)
 		if pane.PanePID > 0 {
-			processes = append(processes, muxctx.ProcessRef{PID: pane.PanePID, ProcessGroupID: 0, Command: "", CWD: ""})
+			processes = append(processes, mux.ProcessRef{PID: pane.PanePID, ProcessGroupID: 0, Command: "", CWD: ""})
 		}
-		result = append(result, muxctx.Pane{
+		result = append(result, mux.Pane{
 			Location: location, Processes: processes, ProcessTTY: pane.PaneTTY,
 			Command: "", CWD: location.PaneCurrentPath, Title: "", Activity: nil, StateReason: "",
 		})
@@ -67,36 +67,36 @@ func multiplexerPanesFromTmux(panes []tmuxctx.Pane) []muxctx.Pane {
 	return result
 }
 
-func captureMultiplexerPane(ctx context.Context, pane muxctx.Pane) (muxctx.ScreenSnapshot, error) {
+func captureMultiplexerPane(ctx context.Context, pane mux.Pane) (mux.ScreenSnapshot, error) {
 	switch pane.Location.Kind {
 	case registry.MultiplexerTmux:
-		tmuxPane := tmuxctx.Pane{
+		tmuxPane := tmux.Pane{
 			Tmux: pane.Location.TmuxContext(), ServerIdentity: pane.Location.ServerID,
 			PanePID: pane.Location.PanePID, PaneTTY: pane.Location.PaneTTY,
 		}
-		snapshot, err := tmuxctx.CapturePane(ctx, tmuxPane)
+		snapshot, err := tmux.CapturePane(ctx, tmuxPane)
 		if err != nil {
-			return muxctx.ScreenSnapshot{}, fmt.Errorf("capture tmux pane: %w", err)
+			return mux.ScreenSnapshot{}, fmt.Errorf("capture tmux pane: %w", err)
 		}
-		return muxctx.ScreenSnapshot{Text: snapshot.Text, Title: snapshot.Title}, nil
+		return mux.ScreenSnapshot{Text: snapshot.Text, Title: snapshot.Title}, nil
 	case registry.MultiplexerZellij:
-		snapshot, err := zellijctx.CapturePane(ctx, pane)
+		snapshot, err := zellij.CapturePane(ctx, pane)
 		if err != nil {
-			return muxctx.ScreenSnapshot{}, fmt.Errorf("capture zellij pane: %w", err)
+			return mux.ScreenSnapshot{}, fmt.Errorf("capture zellij pane: %w", err)
 		}
 		return snapshot, nil
 	case registry.MultiplexerHerdr:
-		snapshot, err := herdrctx.CapturePane(ctx, pane)
+		snapshot, err := herdr.CapturePane(ctx, pane)
 		if err != nil {
-			return muxctx.ScreenSnapshot{}, fmt.Errorf("capture herdr pane: %w", err)
+			return mux.ScreenSnapshot{}, fmt.Errorf("capture herdr pane: %w", err)
 		}
 		return snapshot, nil
 	default:
-		return muxctx.ScreenSnapshot{}, errUnsupportedMultiplexerPane
+		return mux.ScreenSnapshot{}, errUnsupportedMultiplexerPane
 	}
 }
 
-func multiplexerPaneProcess(pane muxctx.Pane, processes []processinfo.Process, byPID map[int]processinfo.Process, harnessByPID map[int]registry.Harness, paneCommandCounts map[string]int) (processinfo.Process, registry.Harness, bool) {
+func multiplexerPaneProcess(pane mux.Pane, processes []processinfo.Process, byPID map[int]processinfo.Process, harnessByPID map[int]registry.Harness, paneCommandCounts map[string]int) (processinfo.Process, registry.Harness, bool) {
 	if process, harnessID, ok := foregroundPaneProcess(pane, processes, harnessByPID); ok {
 		return process, harnessID, true
 	}
@@ -120,7 +120,7 @@ func multiplexerPaneProcess(pane muxctx.Pane, processes []processinfo.Process, b
 	return empty, "", false
 }
 
-func processMatchingMultiplexerIdentity(pane muxctx.Pane, processes []processinfo.Process, harnessByPID map[int]registry.Harness) (processinfo.Process, registry.Harness, bool) {
+func processMatchingMultiplexerIdentity(pane mux.Pane, processes []processinfo.Process, harnessByPID map[int]registry.Harness) (processinfo.Process, registry.Harness, bool) {
 	var selected processinfo.Process
 	var selectedHarness registry.Harness
 	for _, process := range processes {
@@ -165,7 +165,7 @@ func normalizeMultiplexerPaneID(kind registry.MultiplexerKind, paneID string) st
 	return paneID
 }
 
-func foregroundPaneProcess(pane muxctx.Pane, processes []processinfo.Process, harnessByPID map[int]registry.Harness) (processinfo.Process, registry.Harness, bool) {
+func foregroundPaneProcess(pane mux.Pane, processes []processinfo.Process, harnessByPID map[int]registry.Harness) (processinfo.Process, registry.Harness, bool) {
 	var selected processinfo.Process
 	var selectedHarness registry.Harness
 	for _, process := range processes {
@@ -207,7 +207,7 @@ func descendantHarnessProcess(rootPID int, processes []processinfo.Process, byPI
 	return empty, "", false
 }
 
-func commandPaneProcess(pane muxctx.Pane, processes []processinfo.Process, harnessByPID map[int]registry.Harness, paneCommandCounts map[string]int) (processinfo.Process, registry.Harness, bool) {
+func commandPaneProcess(pane mux.Pane, processes []processinfo.Process, harnessByPID map[int]registry.Harness, paneCommandCounts map[string]int) (processinfo.Process, registry.Harness, bool) {
 	key, paneHarness, ok := commandPaneKey(pane)
 	if !ok || paneCommandCounts[key] != 1 {
 		var empty processinfo.Process
@@ -230,7 +230,7 @@ func commandPaneProcess(pane muxctx.Pane, processes []processinfo.Process, harne
 	return selected, paneHarness, selected.PID != 0
 }
 
-func commandPaneCounts(panes []muxctx.Pane) map[string]int {
+func commandPaneCounts(panes []mux.Pane) map[string]int {
 	counts := make(map[string]int)
 	for _, pane := range panes {
 		if key, _, ok := commandPaneKey(pane); ok {
@@ -240,7 +240,7 @@ func commandPaneCounts(panes []muxctx.Pane) map[string]int {
 	return counts
 }
 
-func commandPaneKey(pane muxctx.Pane) (string, registry.Harness, bool) {
+func commandPaneKey(pane mux.Pane) (string, registry.Harness, bool) {
 	if pane.CWD == "" {
 		return "", "", false
 	}

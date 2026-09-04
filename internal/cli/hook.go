@@ -18,8 +18,8 @@ import (
 
 	"github.com/zigai/aht/internal/harness"
 	harnesspkg "github.com/zigai/aht/internal/harness/catalog"
-	"github.com/zigai/aht/internal/tmuxctx"
 	"github.com/zigai/aht/pkg/registry"
+	"github.com/zigai/aht/pkg/tmux"
 )
 
 var errUnsupportedManagedHook = errors.New("harness does not support managed hooks")
@@ -86,7 +86,7 @@ func reportManagedHook(ctx context.Context, store registry.Store, result harness
 		return nil
 	}
 	observation := result.Report
-	if collected, err := tmuxctx.Current(ctx); err == nil {
+	if collected, err := tmux.Current(ctx); err == nil {
 		observation.Tmux = &collected
 	}
 	if collected := reportMultiplexerContext(); !collected.Empty() {

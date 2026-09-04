@@ -1,4 +1,4 @@
-package tmuxctx
+package tmux
 
 import "testing"
 

@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/zigai/aht/internal/muxctx"
 	"github.com/zigai/aht/internal/processinfo"
+	"github.com/zigai/aht/pkg/mux"
 	"github.com/zigai/aht/pkg/registry"
 )
 
@@ -61,7 +61,7 @@ func TestObserverCycleAcceptsCanonicalizedCatalogAlias(t *testing.T) {
 		StorePath:   path,
 		HealthPath:  path + ".health",
 		ProcessList: func(context.Context) ([]processinfo.Process, error) { return nil, nil },
-		PaneList:    func(context.Context) ([]muxctx.Pane, error) { return nil, nil },
+		PaneList:    func(context.Context) ([]mux.Pane, error) { return nil, nil },
 		CatalogList: DefaultCatalogList,
 		Now:         func() time.Time { return time.Now().UTC() },
 	})

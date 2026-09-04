@@ -1,4 +1,4 @@
-package zellijctx
+package zellij
 
 import (
 	"context"
@@ -10,7 +10,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/zigai/aht/internal/muxctx"
+	"github.com/zigai/aht/pkg/mux"
 	"github.com/zigai/aht/pkg/registry"
 )
 
@@ -60,11 +60,11 @@ func CurrentWithEnv(env Env) registry.MultiplexerContext {
 	}
 }
 
-func ListPanes(ctx context.Context) ([]muxctx.Pane, error) {
+func ListPanes(ctx context.Context) ([]mux.Pane, error) {
 	return ListPanesWithOptions(ctx, ListOptions{Run: nil, LookPath: nil})
 }
 
-func ListPanesWithOptions(ctx context.Context, options ListOptions) ([]muxctx.Pane, error) {
+func ListPanesWithOptions(ctx context.Context, options ListOptions) ([]mux.Pane, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("list zellij panes: %w", err)
 	}
@@ -87,7 +87,7 @@ func ListPanesWithOptions(ctx context.Context, options ListOptions) ([]muxctx.Pa
 		return nil, fmt.Errorf("list zellij sessions: %w", err)
 	}
 	sessions := parseSessions(sessionOutput)
-	panes := make([]muxctx.Pane, 0)
+	panes := make([]mux.Pane, 0)
 	var listErrors []error
 	for _, session := range sessions {
 		output, listErr := options.Run(ctx, "--session", session, "action", "list-panes", "--all", "--json")
@@ -104,13 +104,13 @@ func ListPanesWithOptions(ctx context.Context, options ListOptions) ([]muxctx.Pa
 	return panes, errors.Join(listErrors...)
 }
 
-func CapturePane(ctx context.Context, pane muxctx.Pane) (muxctx.ScreenSnapshot, error) {
+func CapturePane(ctx context.Context, pane mux.Pane) (mux.ScreenSnapshot, error) {
 	return CapturePaneWithOptions(ctx, pane, CaptureOptions{Run: nil})
 }
 
-func CapturePaneWithOptions(ctx context.Context, pane muxctx.Pane, options CaptureOptions) (muxctx.ScreenSnapshot, error) {
+func CapturePaneWithOptions(ctx context.Context, pane mux.Pane, options CaptureOptions) (mux.ScreenSnapshot, error) {
 	if pane.Location.Kind != registry.MultiplexerZellij || pane.Location.SessionName == "" || pane.Location.PaneID == "" {
-		return muxctx.ScreenSnapshot{}, errPaneRequired
+		return mux.ScreenSnapshot{}, errPaneRequired
 	}
 	run := options.Run
 	if run == nil {
@@ -118,9 +118,9 @@ func CapturePaneWithOptions(ctx context.Context, pane muxctx.Pane, options Captu
 	}
 	text, err := run(ctx, "--session", pane.Location.SessionName, "action", "dump-screen", "--pane-id", pane.Location.PaneID)
 	if err != nil {
-		return muxctx.ScreenSnapshot{}, fmt.Errorf("capture zellij pane: %w", err)
+		return mux.ScreenSnapshot{}, fmt.Errorf("capture zellij pane: %w", err)
 	}
-	return muxctx.ScreenSnapshot{Text: strings.Join(muxctx.BoundBottomLines(text, defaultCaptureLines), "\n"), Title: pane.Title}, nil
+	return mux.ScreenSnapshot{Text: strings.Join(mux.BoundBottomLines(text, defaultCaptureLines), "\n"), Title: pane.Title}, nil
 }
 
 func parseSessions(output string) []string {
@@ -140,12 +140,12 @@ func parseSessions(output string) []string {
 	return sessions
 }
 
-func parsePanes(session string, output string) ([]muxctx.Pane, error) {
+func parsePanes(session string, output string) ([]mux.Pane, error) {
 	var records []paneRecord
 	if err := json.Unmarshal([]byte(output), &records); err != nil {
 		return nil, fmt.Errorf("parse zellij panes: %w", err)
 	}
-	panes := make([]muxctx.Pane, 0, len(records))
+	panes := make([]mux.Pane, 0, len(records))
 	for _, record := range records {
 		if record.IsPlugin || record.Exited {
 			continue
@@ -156,7 +156,7 @@ func parsePanes(session string, output string) ([]muxctx.Pane, error) {
 			TabID: strconv.Itoa(record.TabID), TabIndex: strconv.Itoa(record.TabPosition), TabName: record.TabName,
 			PaneID: paneID, PaneCurrentPath: record.PaneCWD,
 		}
-		panes = append(panes, muxctx.Pane{ //nolint:exhaustruct // Zellij CLI provides no process references or semantic activity
+		panes = append(panes, mux.Pane{ //nolint:exhaustruct // Zellij CLI provides no process references or semantic activity
 			Location: location, Command: record.PaneCommand, CWD: record.PaneCWD, Title: record.Title,
 		})
 	}

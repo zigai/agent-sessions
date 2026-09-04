@@ -14,9 +14,9 @@ import (
 	"time"
 
 	harnesspkg "github.com/zigai/aht/internal/harness"
-	"github.com/zigai/aht/internal/muxctx"
+	"github.com/zigai/aht/pkg/mux"
 	"github.com/zigai/aht/internal/processinfo"
-	"github.com/zigai/aht/internal/tmuxctx"
+	"github.com/zigai/aht/pkg/tmux"
 	"github.com/zigai/aht/pkg/registry"
 )
 
@@ -48,7 +48,7 @@ func TestRealTmuxBottomScreenDetectionForFourAgents(t *testing.T) {
 		{registry.HarnessPi, "Type a message · Enter to send", registry.ActivityIdle},
 	}
 	processes := make([]processinfo.Process, 0, len(tests))
-	panes := make([]tmuxctx.Pane, 0, len(tests))
+	panes := make([]tmux.Pane, 0, len(tests))
 	for index, test := range tests {
 		sessionName := string(test.harness)
 		script := filepath.Join(t.TempDir(), sessionName+".sh")
@@ -77,11 +77,11 @@ func TestRealTmuxBottomScreenDetectionForFourAgents(t *testing.T) {
 		processPID := 5000 + index
 		processes = append(processes, processinfo.Process{PID: processPID, PPID: panePID, ProcessGroupID: processPID, Foreground: true, StartIdentity: "test:" + sessionName, Executable: "/usr/bin/" + sessionName, CWD: "/tmp", TTY: fields[1], Args: []string{sessionName}})
 		tmux := registry.TmuxContext{Inside: true, ServerSocket: socket, SessionID: "$" + strconv.Itoa(index+1), SessionName: sessionName, WindowID: "@" + strconv.Itoa(index+1), WindowIndex: "0", WindowName: sessionName, PaneID: fields[0], PaneIndex: "0", PaneCurrentPath: "/tmp", PanePID: panePID, PaneTTY: fields[1]}
-		pane := tmuxctx.Pane{Tmux: tmux, ServerIdentity: socket, PanePID: panePID, PaneTTY: fields[1]}
+		pane := tmux.Pane{Tmux: tmux, ServerIdentity: socket, PanePID: panePID, PaneTTY: fields[1]}
 		panes = append(panes, pane)
 		deadline := time.Now().Add(2 * time.Second)
 		for {
-			snapshot, captureErr := tmuxctx.CapturePane(ctx, pane)
+			snapshot, captureErr := tmux.CapturePane(ctx, pane)
 			if captureErr == nil && strings.Contains(snapshot.Text, test.screen) {
 				break
 			}
@@ -93,7 +93,7 @@ func TestRealTmuxBottomScreenDetectionForFourAgents(t *testing.T) {
 	}
 
 	store := registry.NewFileStore(filepath.Join(t.TempDir(), "state.json"))
-	observer := New(Options{Store: store, ProcessList: func(context.Context) ([]processinfo.Process, error) { return processes, nil }, PaneList: func(context.Context) ([]muxctx.Pane, error) { return multiplexerPanesFromTmux(panes), nil }, CatalogList: func(context.Context) ([]CatalogEntry, error) { return nil, nil }, DetectionConfigDir: t.TempDir(), Now: func() time.Time { return time.Now().UTC() }})
+	observer := New(Options{Store: store, ProcessList: func(context.Context) ([]processinfo.Process, error) { return processes, nil }, PaneList: func(context.Context) ([]mux.Pane, error) { return multiplexerPanesFromTmux(panes), nil }, CatalogList: func(context.Context) ([]CatalogEntry, error) { return nil, nil }, DetectionConfigDir: t.TempDir(), Now: func() time.Time { return time.Now().UTC() }})
 	result, err := observer.RunOnce(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -119,11 +119,11 @@ func TestRealTmuxBottomScreenDetectionForFourAgents(t *testing.T) {
 		}
 	}
 
-	raceOptions := Options{Store: store, ProcessList: func(context.Context) ([]processinfo.Process, error) { return processes, nil }, PaneList: func(context.Context) ([]muxctx.Pane, error) { return multiplexerPanesFromTmux(panes), nil }, CatalogList: func(context.Context) ([]CatalogEntry, error) { return nil, nil }, DetectionConfigDir: t.TempDir(), Now: func() time.Time { return time.Now().UTC() }}
-	raceOptions.ScreenCapture = func(captureCtx context.Context, pane muxctx.Pane) (muxctx.ScreenSnapshot, error) {
+	raceOptions := Options{Store: store, ProcessList: func(context.Context) ([]processinfo.Process, error) { return processes, nil }, PaneList: func(context.Context) ([]mux.Pane, error) { return multiplexerPanesFromTmux(panes), nil }, CatalogList: func(context.Context) ([]CatalogEntry, error) { return nil, nil }, DetectionConfigDir: t.TempDir(), Now: func() time.Time { return time.Now().UTC() }}
+	raceOptions.ScreenCapture = func(captureCtx context.Context, pane mux.Pane) (mux.ScreenSnapshot, error) {
 		snapshot, captureErr := captureMultiplexerPane(captureCtx, pane)
 		if captureErr != nil {
-			return muxctx.ScreenSnapshot{}, fmt.Errorf("capture race fixture: %w", captureErr)
+			return mux.ScreenSnapshot{}, fmt.Errorf("capture race fixture: %w", captureErr)
 		}
 		harnessID := registry.Harness(pane.Location.SessionName)
 		if harnessID != registry.HarnessPi && harnessID != registry.HarnessOpenCode {
@@ -140,7 +140,7 @@ func TestRealTmuxBottomScreenDetectionForFourAgents(t *testing.T) {
 			running := registry.ActivityRunning
 			presence := registry.PresenceLive
 			if _, err := store.Observe(captureCtx, registry.Observation{Source: registry.ObservationSourceNative, Evidence: registry.ObservationEvidenceNativeEvent, Harness: harnessID, Identity: registry.ObservationIdentity{SessionID: "race-" + string(harnessID)}, Presence: &presence, Activity: &running, NativeEvent: "integration_race", Process: processIdentity(process), Attributes: map[string]string{"aht_integration": integration}, ObservedAt: time.Now().UTC()}); err != nil {
-				return muxctx.ScreenSnapshot{}, fmt.Errorf("record integration race: %w", err)
+				return mux.ScreenSnapshot{}, fmt.Errorf("record integration race: %w", err)
 			}
 			break
 		}

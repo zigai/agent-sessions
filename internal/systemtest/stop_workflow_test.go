@@ -15,7 +15,7 @@ import (
 
 	harnesspkg "github.com/zigai/aht/internal/harness"
 	"github.com/zigai/aht/internal/processinfo"
-	"github.com/zigai/aht/internal/tmuxctx"
+	"github.com/zigai/aht/pkg/tmux"
 	"github.com/zigai/aht/pkg/registry"
 )
 
@@ -251,14 +251,14 @@ func startTmuxAgentSession(t *testing.T, socket string, session string, binary s
 	}
 }
 
-func requireTmuxPane(t *testing.T, socket string) tmuxctx.Pane {
+func requireTmuxPane(t *testing.T, socket string) tmux.Pane {
 	t.Helper()
 	deadline := time.NewTimer(5 * time.Second)
 	defer deadline.Stop()
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
 	for {
-		panes, err := tmuxctx.ListPanes(t.Context())
+		panes, err := tmux.ListPanes(t.Context())
 		if err == nil {
 			for _, pane := range panes {
 				if pane.ServerIdentity == socket {
@@ -274,7 +274,7 @@ func requireTmuxPane(t *testing.T, socket string) tmuxctx.Pane {
 	}
 }
 
-func seedTmuxStopSession(t *testing.T, store *registry.FileStore, sessionID string, pane tmuxctx.Pane) registry.Session {
+func seedTmuxStopSession(t *testing.T, store *registry.FileStore, sessionID string, pane tmux.Pane) registry.Session {
 	t.Helper()
 	process := &registry.ProcessIdentity{
 		PID:           pane.PanePID,

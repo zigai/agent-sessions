@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/zigai/aht/internal/muxctx"
 	"github.com/zigai/aht/internal/processinfo"
+	"github.com/zigai/aht/pkg/mux"
 	"github.com/zigai/aht/pkg/registry"
 )
 
@@ -19,7 +19,7 @@ func TestObserverCorrelatesZellijEnvironmentIdentityAndDetectsScreen(t *testing.
 		Executable: "/usr/bin/codex", CWD: "/repo", MultiplexerKind: "zellij",
 		MultiplexerSession: "work", MultiplexerPane: "7",
 	}
-	pane := muxctx.Pane{
+	pane := mux.Pane{
 		Location: registry.MultiplexerContext{
 			Kind: registry.MultiplexerZellij, SessionName: "work", TabID: "3", TabName: "agents",
 			PaneID: "terminal_7", PaneCurrentPath: "/repo",
@@ -31,11 +31,11 @@ func TestObserverCorrelatesZellijEnvironmentIdentityAndDetectsScreen(t *testing.
 		ProcessList: func(context.Context) ([]processinfo.Process, error) {
 			return []processinfo.Process{process}, nil
 		},
-		PaneList: func(context.Context) ([]muxctx.Pane, error) {
-			return []muxctx.Pane{pane}, nil
+		PaneList: func(context.Context) ([]mux.Pane, error) {
+			return []mux.Pane{pane}, nil
 		},
-		ScreenCapture: func(context.Context, muxctx.Pane) (muxctx.ScreenSnapshot, error) {
-			return muxctx.ScreenSnapshot{Text: "› next task\nContext 63% used", Title: "Codex"}, nil
+		ScreenCapture: func(context.Context, mux.Pane) (mux.ScreenSnapshot, error) {
+			return mux.ScreenSnapshot{Text: "› next task\nContext 63% used", Title: "Codex"}, nil
 		},
 		CatalogList: func(context.Context) ([]CatalogEntry, error) { return nil, nil },
 		Now:         func() time.Time { return time.Now().UTC() },
@@ -63,12 +63,12 @@ func TestObserverUsesHerdrForegroundProcessAndSemanticState(t *testing.T) {
 		Executable: "/usr/bin/claude", CWD: "/repo",
 	}
 	waiting := registry.ActivityWaiting
-	pane := muxctx.Pane{
+	pane := mux.Pane{
 		Location: registry.MultiplexerContext{
 			Kind: registry.MultiplexerHerdr, SessionName: "work", WorkspaceID: "w1", TabID: "w1:t1",
 			PaneID: "w1:p1", PaneCurrentPath: "/repo", PanePID: 42,
 		},
-		Processes: []muxctx.ProcessRef{{PID: 42, ProcessGroupID: 42, Command: "claude", CWD: "/repo"}},
+		Processes: []mux.ProcessRef{{PID: 42, ProcessGroupID: 42, Command: "claude", CWD: "/repo"}},
 		Activity:  &waiting, StateReason: "herdr_agent_status",
 	}
 	captureCalled := false
@@ -77,12 +77,12 @@ func TestObserverUsesHerdrForegroundProcessAndSemanticState(t *testing.T) {
 		ProcessList: func(context.Context) ([]processinfo.Process, error) {
 			return []processinfo.Process{process}, nil
 		},
-		PaneList: func(context.Context) ([]muxctx.Pane, error) {
-			return []muxctx.Pane{pane}, nil
+		PaneList: func(context.Context) ([]mux.Pane, error) {
+			return []mux.Pane{pane}, nil
 		},
-		ScreenCapture: func(context.Context, muxctx.Pane) (muxctx.ScreenSnapshot, error) {
+		ScreenCapture: func(context.Context, mux.Pane) (mux.ScreenSnapshot, error) {
 			captureCalled = true
-			return muxctx.ScreenSnapshot{}, nil
+			return mux.ScreenSnapshot{}, nil
 		},
 		CatalogList: func(context.Context) ([]CatalogEntry, error) { return nil, nil },
 		Now:         func() time.Time { return time.Now().UTC() },
@@ -112,14 +112,14 @@ func TestObserverPrefersRicherNestedMultiplexerLocation(t *testing.T) {
 		PID: 42, PPID: 40, ProcessGroupID: 42, StartIdentity: "boot:42", Executable: "/usr/bin/codex", CWD: "/repo",
 		MultiplexerKind: "zellij", MultiplexerSession: "outer", MultiplexerPane: "7",
 	}
-	panes := []muxctx.Pane{
+	panes := []mux.Pane{
 		{
 			Location: registry.MultiplexerContext{Kind: registry.MultiplexerZellij, SessionName: "outer", PaneID: "terminal_7", PaneCurrentPath: "/repo"},
 			Command:  "codex", CWD: "/repo",
 		},
 		{
 			Location:  registry.MultiplexerContext{Kind: registry.MultiplexerHerdr, SessionName: "inner", WorkspaceID: "w1", TabID: "w1:t1", PaneID: "w1:p1", PaneCurrentPath: "/repo"},
-			Processes: []muxctx.ProcessRef{{PID: 42, ProcessGroupID: 42, Command: "codex", CWD: "/repo"}},
+			Processes: []mux.ProcessRef{{PID: 42, ProcessGroupID: 42, Command: "codex", CWD: "/repo"}},
 		},
 	}
 	observer := New(Options{
@@ -127,9 +127,9 @@ func TestObserverPrefersRicherNestedMultiplexerLocation(t *testing.T) {
 		ProcessList: func(context.Context) ([]processinfo.Process, error) {
 			return []processinfo.Process{process}, nil
 		},
-		PaneList: func(context.Context) ([]muxctx.Pane, error) { return panes, nil },
-		ScreenCapture: func(context.Context, muxctx.Pane) (muxctx.ScreenSnapshot, error) {
-			return muxctx.ScreenSnapshot{Text: "› next task"}, nil
+		PaneList: func(context.Context) ([]mux.Pane, error) { return panes, nil },
+		ScreenCapture: func(context.Context, mux.Pane) (mux.ScreenSnapshot, error) {
+			return mux.ScreenSnapshot{Text: "› next task"}, nil
 		},
 		CatalogList: func(context.Context) ([]CatalogEntry, error) { return nil, nil },
 		Now:         func() time.Time { return time.Now().UTC() },
@@ -149,7 +149,7 @@ func TestObserverPrefersRicherNestedMultiplexerLocation(t *testing.T) {
 func TestCommandCWDFallbackRequiresUniquePane(t *testing.T) {
 	t.Parallel()
 	process := processinfo.Process{PID: 42, StartIdentity: "boot:42", Executable: "/usr/bin/codex", CWD: "/repo"}
-	panes := []muxctx.Pane{
+	panes := []mux.Pane{
 		{Location: registry.MultiplexerContext{Kind: registry.MultiplexerZellij, SessionName: "one", PaneID: "terminal_1"}, Command: "codex", CWD: "/repo"},
 		{Location: registry.MultiplexerContext{Kind: registry.MultiplexerZellij, SessionName: "two", PaneID: "terminal_2"}, Command: "codex", CWD: "/repo"},
 	}

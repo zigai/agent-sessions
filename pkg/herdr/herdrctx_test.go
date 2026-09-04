@@ -1,4 +1,4 @@
-package herdrctx
+package herdr
 
 import (
 	"context"
@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/zigai/aht/internal/muxctx"
+	"github.com/zigai/aht/pkg/mux"
 	"github.com/zigai/aht/pkg/registry"
 )
 
@@ -104,7 +104,7 @@ func TestCapturePaneUsesDetectionBuffer(t *testing.T) {
 	t.Parallel()
 	var gotEnv map[string]string
 	var gotArgs []string
-	snapshot, err := CapturePaneWithOptions(context.Background(), muxctx.Pane{
+	snapshot, err := CapturePaneWithOptions(context.Background(), mux.Pane{
 		Location: registry.MultiplexerContext{Kind: registry.MultiplexerHerdr, ServerID: "/tmp/herdr.sock", SessionName: "work", PaneID: "w1:p1"},
 		Title:    "Codex",
 	}, CaptureOptions{Run: func(_ context.Context, env map[string]string, args ...string) (string, error) {

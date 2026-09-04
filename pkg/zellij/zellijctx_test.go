@@ -1,4 +1,4 @@
-package zellijctx
+package zellij
 
 import (
 	"context"
@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/zigai/aht/internal/muxctx"
+	"github.com/zigai/aht/pkg/mux"
 	"github.com/zigai/aht/pkg/registry"
 )
 
@@ -80,7 +80,7 @@ func TestCapturePaneTargetsNativePaneAndBoundsOutput(t *testing.T) {
 	for index := range lines {
 		lines[index] = "line"
 	}
-	snapshot, err := CapturePaneWithOptions(context.Background(), muxctx.Pane{
+	snapshot, err := CapturePaneWithOptions(context.Background(), mux.Pane{
 		Location: registry.MultiplexerContext{Kind: registry.MultiplexerZellij, SessionName: "work", PaneID: "terminal_7"},
 		Title:    "Codex",
 	}, CaptureOptions{Run: func(_ context.Context, args ...string) (string, error) {

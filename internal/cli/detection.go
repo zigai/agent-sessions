@@ -9,11 +9,11 @@ import (
 	"time"
 
 	"github.com/zigai/aht/internal/agentstate"
-	"github.com/zigai/aht/internal/herdrctx"
-	"github.com/zigai/aht/internal/muxctx"
-	"github.com/zigai/aht/internal/tmuxctx"
-	"github.com/zigai/aht/internal/zellijctx"
+	"github.com/zigai/aht/pkg/herdr"
+	"github.com/zigai/aht/pkg/mux"
 	"github.com/zigai/aht/pkg/registry"
+	"github.com/zigai/aht/pkg/tmux"
+	"github.com/zigai/aht/pkg/zellij"
 )
 
 var errTmuxPaneNotLive = errors.New("tmux pane is not live")
@@ -162,14 +162,14 @@ func processMatchExplanation(session registry.Session) string {
 //nolint:cyclop // live capture dispatches across supported native multiplexer APIs
 func evaluateLiveSessionScreen(ctx context.Context, session registry.Session, configDir string) (agentstate.Decision, bool, error) {
 	if session.Multiplexer.Kind != registry.MultiplexerTmux {
-		pane := muxctx.Pane{Location: session.Multiplexer}
-		var snapshot muxctx.ScreenSnapshot
+		pane := mux.Pane{Location: session.Multiplexer}
+		var snapshot mux.ScreenSnapshot
 		var err error
 		switch session.Multiplexer.Kind {
 		case registry.MultiplexerZellij:
-			snapshot, err = zellijctx.CapturePane(ctx, pane)
+			snapshot, err = zellij.CapturePane(ctx, pane)
 		case registry.MultiplexerHerdr:
-			snapshot, err = herdrctx.CapturePane(ctx, pane)
+			snapshot, err = herdr.CapturePane(ctx, pane)
 		default:
 			return agentstate.Decision{}, false, fmt.Errorf("%w: %s", errTmuxPaneNotLive, session.Multiplexer.PaneID)
 		}
@@ -182,7 +182,7 @@ func evaluateLiveSessionScreen(ctx context.Context, session registry.Session, co
 		}
 		return agentstate.Evaluate(manifest, agentstate.NormalizeSnapshot(snapshot.Text, snapshot.Title)), true, nil
 	}
-	panes, err := tmuxctx.ListPanes(ctx)
+	panes, err := tmux.ListPanes(ctx)
 	if err != nil {
 		return agentstate.Decision{}, false, fmt.Errorf("list tmux panes: %w", err)
 	}
@@ -190,7 +190,7 @@ func evaluateLiveSessionScreen(ctx context.Context, session registry.Session, co
 		if pane.Tmux.PaneID != session.Tmux.PaneID || !sameTmuxServer(pane.ServerIdentity, session.Tmux.ServerSocket) {
 			continue
 		}
-		snapshot, err := tmuxctx.CapturePane(ctx, pane)
+		snapshot, err := tmux.CapturePane(ctx, pane)
 		if err != nil {
 			return agentstate.Decision{}, false, fmt.Errorf("capture tmux pane: %w", err)
 		}

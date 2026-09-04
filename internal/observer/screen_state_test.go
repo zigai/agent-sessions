@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/zigai/aht/internal/muxctx"
 	"github.com/zigai/aht/internal/processinfo"
+	"github.com/zigai/aht/pkg/mux"
 	"github.com/zigai/aht/pkg/registry"
 )
 
@@ -35,8 +35,8 @@ func TestObserverDetectsScreenStateForTargetAgents(t *testing.T) {
 			store := registry.NewFileStore(filepath.Join(t.TempDir(), "state.json"))
 			process, pane := detectionProcessPane(index+100, test.command)
 			options := detectionObserverOptions(store, process, pane, t.TempDir())
-			options.ScreenCapture = func(context.Context, muxctx.Pane) (muxctx.ScreenSnapshot, error) {
-				return muxctx.ScreenSnapshot{Text: test.screen, Title: test.command}, nil
+			options.ScreenCapture = func(context.Context, mux.Pane) (mux.ScreenSnapshot, error) {
+				return mux.ScreenSnapshot{Text: test.screen, Title: test.command}, nil
 			}
 			if _, err := New(options).RunOnce(context.Background()); err != nil {
 				t.Fatal(err)
@@ -60,10 +60,10 @@ func TestObserverUsesBundledOmpFallbackWhenNativeIntegrationIsMissing(t *testing
 	store := registry.NewFileStore(filepath.Join(t.TempDir(), "state.json"))
 	process, pane := detectionProcessPane(198, "omp")
 	options := detectionObserverOptions(store, process, pane, t.TempDir())
-	options.ScreenCapture = func(context.Context, muxctx.Pane) (muxctx.ScreenSnapshot, error) {
+	options.ScreenCapture = func(context.Context, mux.Pane) (mux.ScreenSnapshot, error) {
 		text := "╰────────╯\n ~/Projects/config · Codex · GPT-5.6-Sol · medium 22.7%/1M" +
 			strings.Repeat("\n ", 20)
-		return muxctx.ScreenSnapshot{Text: text}, nil
+		return mux.ScreenSnapshot{Text: text}, nil
 	}
 	if _, err := New(options).RunOnce(context.Background()); err != nil {
 		t.Fatal(err)
@@ -92,8 +92,8 @@ func TestObserverTracksOmpScreenStateTransitions(t *testing.T) {
 	screen := ""
 	options := detectionObserverOptions(store, process, pane, t.TempDir())
 	options.Now = func() time.Time { return at }
-	options.ScreenCapture = func(context.Context, muxctx.Pane) (muxctx.ScreenSnapshot, error) {
-		return muxctx.ScreenSnapshot{Text: screen}, nil
+	options.ScreenCapture = func(context.Context, mux.Pane) (mux.ScreenSnapshot, error) {
+		return mux.ScreenSnapshot{Text: screen}, nil
 	}
 	observer := New(options)
 
@@ -139,11 +139,11 @@ func TestObserverRecordsUnknownWhenStaleIntegrationHasNoTmuxPane(t *testing.T) {
 		t.Fatal(err)
 	}
 	options := detectionObserverOptions(store, process, pane, t.TempDir())
-	options.PaneList = func(context.Context) ([]muxctx.Pane, error) { return nil, nil }
+	options.PaneList = func(context.Context) ([]mux.Pane, error) { return nil, nil }
 	captureCalled := false
-	options.ScreenCapture = func(context.Context, muxctx.Pane) (muxctx.ScreenSnapshot, error) {
+	options.ScreenCapture = func(context.Context, mux.Pane) (mux.ScreenSnapshot, error) {
 		captureCalled = true
-		return muxctx.ScreenSnapshot{}, nil
+		return mux.ScreenSnapshot{}, nil
 	}
 	if _, err := New(options).RunOnce(context.Background()); err != nil {
 		t.Fatal(err)
@@ -169,11 +169,11 @@ func TestObserverPreservesKnownActivityWhenScreenCaptureFails(t *testing.T) {
 	captureFails := false
 	options := detectionObserverOptions(store, process, pane, t.TempDir())
 	options.Now = func() time.Time { return at }
-	options.ScreenCapture = func(context.Context, muxctx.Pane) (muxctx.ScreenSnapshot, error) {
+	options.ScreenCapture = func(context.Context, mux.Pane) (mux.ScreenSnapshot, error) {
 		if captureFails {
-			return muxctx.ScreenSnapshot{}, context.Canceled
+			return mux.ScreenSnapshot{}, context.Canceled
 		}
-		return muxctx.ScreenSnapshot{Text: "› next task\nContext 63% used", Title: "codex"}, nil
+		return mux.ScreenSnapshot{Text: "› next task\nContext 63% used", Title: "codex"}, nil
 	}
 	observer := New(options)
 	if _, err := observer.RunOnce(context.Background()); err != nil {
@@ -211,8 +211,8 @@ func TestObserverPreservesIdleSinceAcrossUnrecognizedScreenRedraw(t *testing.T) 
 	screen := "› next task\nContext 63% used"
 	options := detectionObserverOptions(store, process, pane, t.TempDir())
 	options.Now = func() time.Time { return at }
-	options.ScreenCapture = func(context.Context, muxctx.Pane) (muxctx.ScreenSnapshot, error) {
-		return muxctx.ScreenSnapshot{Text: screen, Title: "codex"}, nil
+	options.ScreenCapture = func(context.Context, mux.Pane) (mux.ScreenSnapshot, error) {
+		return mux.ScreenSnapshot{Text: screen, Title: "codex"}, nil
 	}
 	observer := New(options)
 	if _, err := observer.RunOnce(context.Background()); err != nil {
@@ -244,8 +244,8 @@ func TestObserverReportsDetectionManifestLoadFailure(t *testing.T) {
 	store := registry.NewFileStore(filepath.Join(t.TempDir(), "state.json"))
 	process, pane := detectionProcessPane(298, "omp")
 	options := detectionObserverOptions(store, process, pane, configDir)
-	options.ScreenCapture = func(context.Context, muxctx.Pane) (muxctx.ScreenSnapshot, error) {
-		return muxctx.ScreenSnapshot{Text: "ordinary screen", Title: ""}, nil
+	options.ScreenCapture = func(context.Context, mux.Pane) (mux.ScreenSnapshot, error) {
+		return mux.ScreenSnapshot{Text: "ordinary screen", Title: ""}, nil
 	}
 	result, err := New(options).RunOnce(context.Background())
 	if err != nil {
@@ -265,14 +265,14 @@ func TestObserverPreservesKnownActivityAcrossPaneEnumerationFailure(t *testing.T
 	paneEnumerationFails := false
 	options := detectionObserverOptions(store, process, pane, t.TempDir())
 	options.Now = func() time.Time { return at }
-	options.PaneList = func(context.Context) ([]muxctx.Pane, error) {
+	options.PaneList = func(context.Context) ([]mux.Pane, error) {
 		if paneEnumerationFails {
 			return nil, context.DeadlineExceeded
 		}
-		return []muxctx.Pane{pane}, nil
+		return []mux.Pane{pane}, nil
 	}
-	options.ScreenCapture = func(context.Context, muxctx.Pane) (muxctx.ScreenSnapshot, error) {
-		return muxctx.ScreenSnapshot{Text: "› next task\nContext 63% used", Title: "codex"}, nil
+	options.ScreenCapture = func(context.Context, mux.Pane) (mux.ScreenSnapshot, error) {
+		return mux.ScreenSnapshot{Text: "› next task\nContext 63% used", Title: "codex"}, nil
 	}
 	observer := New(options)
 	if _, err := observer.RunOnce(context.Background()); err != nil {
@@ -317,8 +317,8 @@ func TestObserverNeverPersistsRawTerminalContents(t *testing.T) {
 	store := registry.NewFileStore(path)
 	process, pane := detectionProcessPane(199, "codex")
 	options := detectionObserverOptions(store, process, pane, t.TempDir())
-	options.ScreenCapture = func(context.Context, muxctx.Pane) (muxctx.ScreenSnapshot, error) {
-		return muxctx.ScreenSnapshot{Text: "Would you like to run the following command? " + secret, Title: secret}, nil
+	options.ScreenCapture = func(context.Context, mux.Pane) (mux.ScreenSnapshot, error) {
+		return mux.ScreenSnapshot{Text: "Would you like to run the following command? " + secret, Title: secret}, nil
 	}
 	if _, err := New(options).RunOnce(context.Background()); err != nil {
 		t.Fatal(err)
@@ -340,8 +340,8 @@ func TestObserverScreenDetectionRecoversMissedPermissionTransition(t *testing.T)
 	screen := "Would you like to run the following command?"
 	options := detectionObserverOptions(store, process, pane, t.TempDir())
 	options.Now = func() time.Time { return at }
-	options.ScreenCapture = func(context.Context, muxctx.Pane) (muxctx.ScreenSnapshot, error) {
-		return muxctx.ScreenSnapshot{Text: screen, Title: "codex"}, nil
+	options.ScreenCapture = func(context.Context, mux.Pane) (mux.ScreenSnapshot, error) {
+		return mux.ScreenSnapshot{Text: screen, Title: "codex"}, nil
 	}
 	observer := New(options)
 	if _, err := observer.RunOnce(context.Background()); err != nil {
@@ -369,7 +369,7 @@ func TestScreenFallbackCannotOverrideConcurrentCompleteIntegration(t *testing.T)
 			store := registry.NewFileStore(filepath.Join(t.TempDir(), "state.json"))
 			process, pane := detectionProcessPane(300+len(harness), string(harness))
 			options := detectionObserverOptions(store, process, pane, t.TempDir())
-			options.ScreenCapture = func(ctx context.Context, _ muxctx.Pane) (muxctx.ScreenSnapshot, error) {
+			options.ScreenCapture = func(ctx context.Context, _ mux.Pane) (mux.ScreenSnapshot, error) {
 				running := registry.ActivityRunning
 				presence := registry.PresenceLive
 				integration := "pi-extension"
@@ -379,9 +379,9 @@ func TestScreenFallbackCannotOverrideConcurrentCompleteIntegration(t *testing.T)
 				identity := observerProcessIdentity(process)
 				_, err := store.Observe(ctx, registry.Observation{Source: registry.ObservationSourceNative, Evidence: registry.ObservationEvidenceNativeEvent, Harness: harness, Identity: registry.ObservationIdentity{SessionID: "active"}, Presence: &presence, Activity: &running, NativeEvent: "agent_start", Process: identity, Attributes: map[string]string{"aht_integration": integration}, ObservedAt: time.Now().UTC()})
 				if err != nil {
-					return muxctx.ScreenSnapshot{}, fmt.Errorf("record concurrent integration report: %w", err)
+					return mux.ScreenSnapshot{}, fmt.Errorf("record concurrent integration report: %w", err)
 				}
-				return muxctx.ScreenSnapshot{Text: "Type a message · Enter to send"}, nil
+				return mux.ScreenSnapshot{Text: "Type a message · Enter to send"}, nil
 			}
 			if _, err := New(options).RunOnce(context.Background()); err != nil {
 				t.Fatal(err)
@@ -397,11 +397,11 @@ func TestScreenFallbackCannotOverrideConcurrentCompleteIntegration(t *testing.T)
 	}
 }
 
-func detectionObserverOptions(store registry.Store, process processinfo.Process, pane muxctx.Pane, configDir string) Options {
+func detectionObserverOptions(store registry.Store, process processinfo.Process, pane mux.Pane, configDir string) Options {
 	return Options{
 		Store:              store,
 		ProcessList:        func(context.Context) ([]processinfo.Process, error) { return []processinfo.Process{process}, nil },
-		PaneList:           func(context.Context) ([]muxctx.Pane, error) { return []muxctx.Pane{pane}, nil },
+		PaneList:           func(context.Context) ([]mux.Pane, error) { return []mux.Pane{pane}, nil },
 		CatalogList:        func(context.Context) ([]CatalogEntry, error) { return nil, nil },
 		DetectionConfigDir: configDir,
 		HealthPath:         filepath.Join("", ""),
@@ -409,10 +409,10 @@ func detectionObserverOptions(store registry.Store, process processinfo.Process,
 	}
 }
 
-func detectionProcessPane(pid int, command string) (processinfo.Process, muxctx.Pane) {
+func detectionProcessPane(pid int, command string) (processinfo.Process, mux.Pane) {
 	process := processinfo.Process{PID: pid, PPID: 1, ProcessGroupID: pid, Foreground: true, StartIdentity: "boot:" + command, Executable: "/usr/bin/" + command, CWD: "/work", TTY: "/dev/pts/9", Args: []string{command}}
 	tmux := registry.TmuxContext{Inside: true, ServerSocket: "default", SessionID: "$1", SessionName: "agents", WindowID: "@1", WindowIndex: "1", WindowName: "agents", PaneID: "%9", PaneIndex: "1", PaneCurrentPath: "/work", PanePID: 10, PaneTTY: "/dev/pts/9"}
-	return process, muxctx.Pane{Location: registry.MultiplexerFromTmux(tmux), Command: command, CWD: "/work", Title: command}
+	return process, mux.Pane{Location: registry.MultiplexerFromTmux(tmux), Command: command, CWD: "/work", Title: command}
 }
 
 func observerProcessIdentity(process processinfo.Process) *registry.ProcessIdentity {

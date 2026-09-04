@@ -1,4 +1,4 @@
-package herdrctx
+package herdr
 
 import (
 	"cmp"
@@ -10,7 +10,7 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/zigai/aht/internal/muxctx"
+	"github.com/zigai/aht/pkg/mux"
 	"github.com/zigai/aht/pkg/registry"
 )
 
@@ -57,12 +57,12 @@ func CurrentWithEnv(env Env) registry.MultiplexerContext {
 	}
 }
 
-func ListPanes(ctx context.Context) ([]muxctx.Pane, error) {
+func ListPanes(ctx context.Context) ([]mux.Pane, error) {
 	return ListPanesWithOptions(ctx, ListOptions{Run: nil, LookPath: nil})
 }
 
 //nolint:gocognit,cyclop // native session, snapshot, and process responses are intentionally joined here
-func ListPanesWithOptions(ctx context.Context, options ListOptions) ([]muxctx.Pane, error) {
+func ListPanesWithOptions(ctx context.Context, options ListOptions) ([]mux.Pane, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("list herdr panes: %w", err)
 	}
@@ -88,7 +88,7 @@ func ListPanesWithOptions(ctx context.Context, options ListOptions) ([]muxctx.Pa
 	if err != nil {
 		return nil, err
 	}
-	panes := make([]muxctx.Pane, 0)
+	panes := make([]mux.Pane, 0)
 	var listErrors []error
 	for _, session := range sessions {
 		env := map[string]string{"HERDR_SESSION": session}
@@ -126,13 +126,13 @@ func ListPanesWithOptions(ctx context.Context, options ListOptions) ([]muxctx.Pa
 	return panes, errors.Join(listErrors...)
 }
 
-func CapturePane(ctx context.Context, pane muxctx.Pane) (muxctx.ScreenSnapshot, error) {
+func CapturePane(ctx context.Context, pane mux.Pane) (mux.ScreenSnapshot, error) {
 	return CapturePaneWithOptions(ctx, pane, CaptureOptions{Run: nil})
 }
 
-func CapturePaneWithOptions(ctx context.Context, pane muxctx.Pane, options CaptureOptions) (muxctx.ScreenSnapshot, error) {
+func CapturePaneWithOptions(ctx context.Context, pane mux.Pane, options CaptureOptions) (mux.ScreenSnapshot, error) {
 	if pane.Location.Kind != registry.MultiplexerHerdr || pane.Location.PaneID == "" {
-		return muxctx.ScreenSnapshot{}, errPaneRequired
+		return mux.ScreenSnapshot{}, errPaneRequired
 	}
 	run := options.Run
 	if run == nil {
@@ -147,9 +147,9 @@ func CapturePaneWithOptions(ctx context.Context, pane muxctx.Pane, options Captu
 	}
 	output, err := run(ctx, env, "pane", "read", pane.Location.PaneID, "--source", "detection")
 	if err != nil {
-		return muxctx.ScreenSnapshot{}, fmt.Errorf("capture herdr pane: %w", err)
+		return mux.ScreenSnapshot{}, fmt.Errorf("capture herdr pane: %w", err)
 	}
-	return muxctx.ScreenSnapshot{Text: parseReadOutput(output), Title: pane.Title}, nil
+	return mux.ScreenSnapshot{Text: parseReadOutput(output), Title: pane.Title}, nil
 }
 
 type herdrNamedItem struct {
@@ -297,7 +297,7 @@ func parseListSessions(output string) ([]string, bool) {
 }
 
 //nolint:cyclop // pane location and metadata mapping evaluates multiple herdr attributes
-func parseSnapshot(session string, output string) ([]muxctx.Pane, error) {
+func parseSnapshot(session string, output string) ([]mux.Pane, error) {
 	var resp struct {
 		herdrSnapshotData
 
@@ -341,7 +341,7 @@ func parseSnapshot(session string, output string) ([]muxctx.Pane, error) {
 		}
 	}
 
-	panes := make([]muxctx.Pane, 0, len(data.Panes))
+	panes := make([]mux.Pane, 0, len(data.Panes))
 	for _, item := range data.Panes {
 		if item.Exited || item.Closed {
 			continue
@@ -367,7 +367,7 @@ func parseSnapshot(session string, output string) ([]muxctx.Pane, error) {
 			PaneID:          paneID,
 			PaneCurrentPath: cwd,
 		}
-		panes = append(panes, muxctx.Pane{ //nolint:exhaustruct // process references are enriched by pane process-info below
+		panes = append(panes, mux.Pane{ //nolint:exhaustruct // process references are enriched by pane process-info below
 			Location:    location,
 			CWD:         cwd,
 			Command:     label,
@@ -379,7 +379,7 @@ func parseSnapshot(session string, output string) ([]muxctx.Pane, error) {
 	return panes, nil
 }
 
-func parseProcessInfo(output string) ([]muxctx.ProcessRef, int, error) {
+func parseProcessInfo(output string) ([]mux.ProcessRef, int, error) {
 	var resp struct {
 		herdrProcessInfoData
 
@@ -403,7 +403,7 @@ func parseProcessInfo(output string) ([]muxctx.ProcessRef, int, error) {
 		data = resp.Result.herdrProcessInfoData
 	}
 	processGroupID := cmp.Or(data.ProcessGroupID, data.ForegroundPgid)
-	refs := make([]muxctx.ProcessRef, 0, len(data.ForegroundProcesses)+1)
+	refs := make([]mux.ProcessRef, 0, len(data.ForegroundProcesses)+1)
 	for _, item := range data.ForegroundProcesses {
 		if item.PID <= 0 {
 			continue
@@ -418,7 +418,7 @@ func parseProcessInfo(output string) ([]muxctx.ProcessRef, int, error) {
 				command = strings.Join(argv, " ")
 			}
 		}
-		refs = append(refs, muxctx.ProcessRef{
+		refs = append(refs, mux.ProcessRef{
 			PID:            item.PID,
 			ProcessGroupID: processGroupID,
 			Command:        command,
@@ -426,7 +426,7 @@ func parseProcessInfo(output string) ([]muxctx.ProcessRef, int, error) {
 		})
 	}
 	if data.ShellPID > 0 {
-		refs = append(refs, muxctx.ProcessRef{PID: data.ShellPID, ProcessGroupID: 0, Command: "", CWD: ""})
+		refs = append(refs, mux.ProcessRef{PID: data.ShellPID, ProcessGroupID: 0, Command: "", CWD: ""})
 	}
 	return refs, processGroupID, nil
 }

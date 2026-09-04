@@ -1,4 +1,4 @@
-package tmuxctx
+package tmux
 
 import (
 	"context"
@@ -131,7 +131,7 @@ func currentDisplayMessageArgs(format string, paneID string) []string {
 }
 
 func ListPanes(ctx context.Context) ([]Pane, error) {
-	return ListPanesWithOptions(ctx, ListOptions{
+	return ListPanesWithOptions(ctx, ListOptions{ //nolint:exhaustruct // default options leave Run and ServerProcesses nil
 		Env: Env{TMUX: os.Getenv("TMUX"), TMUXPane: os.Getenv("TMUX_PANE")},
 	})
 }
@@ -225,7 +225,6 @@ func listPanesFormat() string {
 		"socket_path",
 	})
 }
-
 
 // SendInterruptTo sends an interrupt to a pane on the identified tmux server.
 func SendInterruptTo(ctx context.Context, serverIdentity, paneID string) error {

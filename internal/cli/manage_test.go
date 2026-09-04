@@ -6,8 +6,8 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/zigai/aht/internal/tmuxctx"
 	"github.com/zigai/aht/pkg/registry"
+	"github.com/zigai/aht/pkg/tmux"
 )
 
 var errTestSignal = errors.New("signal failed")
@@ -82,7 +82,7 @@ func TestTmuxStopTargetValidationChecksEveryServer(t *testing.T) {
 	t.Parallel()
 
 	session := registry.Session{Tmux: registry.TmuxContext{ServerSocket: "/tmp/correct", PaneID: "%1", PanePID: 42}}
-	panes := []tmuxctx.Pane{
+	panes := []tmux.Pane{
 		{Tmux: registry.TmuxContext{ServerSocket: "/tmp/wrong", PaneID: "%1", PanePID: 41}},
 		{Tmux: registry.TmuxContext{ServerSocket: "/tmp/correct", PaneID: "%1", PanePID: 42}},
 	}
@@ -95,7 +95,7 @@ func TestTmuxStopTargetRejectsMissingStoredServerIdentity(t *testing.T) {
 	t.Parallel()
 
 	session := registry.Session{Tmux: registry.TmuxContext{PaneID: "%1", PanePID: 42}}
-	panes := []tmuxctx.Pane{
+	panes := []tmux.Pane{
 		{Tmux: registry.TmuxContext{ServerSocket: "-L:custom", PaneID: "%1", PanePID: 42}},
 	}
 	if validation := tmuxStopTargetValidation(session, panes); validation.OK {

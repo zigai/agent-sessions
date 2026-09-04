@@ -25,12 +25,12 @@ import (
 	"github.com/zigai/aht/internal/config"
 	"github.com/zigai/aht/internal/harness"
 	harnesspkg "github.com/zigai/aht/internal/harness/catalog"
-	"github.com/zigai/aht/internal/herdrctx"
 	"github.com/zigai/aht/internal/processinfo"
-	"github.com/zigai/aht/internal/tmuxctx"
-	"github.com/zigai/aht/internal/zellijctx"
 	"github.com/zigai/aht/pkg/client"
+	"github.com/zigai/aht/pkg/herdr"
 	"github.com/zigai/aht/pkg/registry"
+	"github.com/zigai/aht/pkg/tmux"
+	"github.com/zigai/aht/pkg/zellij"
 )
 
 var (
@@ -701,7 +701,7 @@ func reportTmuxContext(ctx context.Context, noTmux bool) registry.TmuxContext {
 	if noTmux {
 		return registry.TmuxContext{}
 	}
-	t, err := tmuxctx.Current(ctx)
+	t, err := tmux.Current(ctx)
 	if err != nil {
 		return registry.TmuxContext{}
 	}
@@ -709,10 +709,10 @@ func reportTmuxContext(ctx context.Context, noTmux bool) registry.TmuxContext {
 }
 
 func reportMultiplexerContext() registry.MultiplexerContext {
-	if context := herdrctx.Current(); !context.Empty() {
+	if context := herdr.Current(); !context.Empty() {
 		return context
 	}
-	return zellijctx.Current()
+	return zellij.Current()
 }
 
 func reportProcessAncestors(ctx context.Context, pid int) []processinfo.Process {
@@ -1421,6 +1421,7 @@ func compareSessionTmux(a, b registry.Session) int {
 func compareSessionUpdated(a, b registry.Session) int { return compareTime(a.UpdatedAt, b.UpdatedAt) }
 
 func compareSessionCreated(a, b registry.Session) int { return compareTime(a.CreatedAt, b.CreatedAt) }
+
 func compareTime(a, b time.Time) int {
 	return a.Compare(b)
 }
@@ -1450,6 +1451,7 @@ func findProjectRoot(start string) string {
 		d = p
 	}
 }
+
 func parseAttributes(values []string) (map[string]string, error) {
 	a := map[string]string{}
 	for _, v := range values {

@@ -12,10 +12,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/zigai/aht/internal/herdrctx"
-	"github.com/zigai/aht/internal/muxctx"
+	"github.com/zigai/aht/pkg/herdr"
+	"github.com/zigai/aht/pkg/mux"
 	"github.com/zigai/aht/pkg/registry"
-	"github.com/zigai/aht/internal/zellijctx"
+	"github.com/zigai/aht/pkg/zellij"
 )
 
 func TestCurrentZellijDiscoveryAndCapture(t *testing.T) {
@@ -65,10 +65,10 @@ func TestCurrentZellijDiscoveryAndCapture(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	pane := waitForMultiplexerPane(t, ctx, registry.MultiplexerZellij, session, strings.TrimSpace(string(output)), func(ctx context.Context) ([]muxctx.Pane, error) {
-		return zellijctx.ListPanes(ctx)
+	pane := waitForMultiplexerPane(t, ctx, registry.MultiplexerZellij, session, strings.TrimSpace(string(output)), func(ctx context.Context) ([]mux.Pane, error) {
+		return zellij.ListPanes(ctx)
 	})
-	waitForPaneCapture(t, ctx, pane, marker, zellijctx.CapturePane)
+	waitForPaneCapture(t, ctx, pane, marker, zellij.CapturePane)
 }
 
 func TestCurrentHerdrDiscoveryAndCapture(t *testing.T) {
@@ -117,8 +117,8 @@ func TestCurrentHerdrDiscoveryAndCapture(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	pane := waitForMultiplexerPane(t, ctx, registry.MultiplexerHerdr, session, "", func(ctx context.Context) ([]muxctx.Pane, error) {
-		return herdrctx.ListPanes(ctx)
+	pane := waitForMultiplexerPane(t, ctx, registry.MultiplexerHerdr, session, "", func(ctx context.Context) ([]mux.Pane, error) {
+		return herdr.ListPanes(ctx)
 	})
 	marker := "AHT_HERDR_CURRENT_VERSION_CAPTURE"
 	run := exec.Command(herdr, "pane", "run", pane.Location.PaneID, "printf '%s\\n' "+shellSingleQuote(marker))
@@ -127,7 +127,7 @@ func TestCurrentHerdrDiscoveryAndCapture(t *testing.T) {
 	if err != nil {
 		t.Fatalf("write Herdr test pane: %v\n%s\n%s", err, output, readProbeLog(logPath))
 	}
-	waitForPaneCapture(t, ctx, pane, marker, herdrctx.CapturePane)
+	waitForPaneCapture(t, ctx, pane, marker, herdr.CapturePane)
 }
 
 func waitForCommandSuccess(t *testing.T, timeout time.Duration, name string, args ...string) {
@@ -155,8 +155,8 @@ func waitForMultiplexerPane(
 	kind registry.MultiplexerKind,
 	session string,
 	paneID string,
-	list func(context.Context) ([]muxctx.Pane, error),
-) muxctx.Pane {
+	list func(context.Context) ([]mux.Pane, error),
+) mux.Pane {
 	t.Helper()
 	var lastErr error
 	for ctx.Err() == nil {
@@ -176,18 +176,18 @@ func waitForMultiplexerPane(
 		time.Sleep(25 * time.Millisecond)
 	}
 	t.Fatalf("%s pane for session %q was not discovered: %v", kind, session, lastErr)
-	return muxctx.Pane{}
+	return mux.Pane{}
 }
 
 func waitForPaneCapture(
 	t *testing.T,
 	ctx context.Context,
-	pane muxctx.Pane,
+	pane mux.Pane,
 	marker string,
-	capture func(context.Context, muxctx.Pane) (muxctx.ScreenSnapshot, error),
+	capture func(context.Context, mux.Pane) (mux.ScreenSnapshot, error),
 ) {
 	t.Helper()
-	var last muxctx.ScreenSnapshot
+	var last mux.ScreenSnapshot
 	var lastErr error
 	for ctx.Err() == nil {
 		last, lastErr = capture(ctx, pane)

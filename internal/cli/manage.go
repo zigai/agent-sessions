@@ -18,8 +18,8 @@ import (
 
 	harnesspkg "github.com/zigai/aht/internal/harness/catalog"
 	"github.com/zigai/aht/internal/processinfo"
-	"github.com/zigai/aht/internal/tmuxctx"
 	"github.com/zigai/aht/pkg/registry"
+	"github.com/zigai/aht/pkg/tmux"
 )
 
 var (
@@ -99,7 +99,7 @@ func (defaultSessionStopSignaler) ValidateStopTarget(ctx context.Context, s regi
 }
 
 func (defaultSessionStopSignaler) SendTmuxInterrupt(ctx context.Context, serverIdentity, paneID string) error {
-	if err := tmuxctx.SendInterruptTo(ctx, serverIdentity, paneID); err != nil {
+	if err := tmux.SendInterruptTo(ctx, serverIdentity, paneID); err != nil {
 		return fmt.Errorf("send tmux interrupt: %w", err)
 	}
 	return nil
@@ -273,14 +273,14 @@ func (app *application) runManageStopSessions(ctx context.Context, ss []registry
 }
 
 func validateTmuxStopTarget(ctx context.Context, s registry.Session) (stopTargetValidation, error) {
-	panes, e := tmuxctx.ListPanes(ctx)
+	panes, e := tmux.ListPanes(ctx)
 	if e != nil {
 		return stopTargetValidation{}, fmt.Errorf("list tmux panes: %w", e)
 	}
 	return tmuxStopTargetValidation(s, panes), nil
 }
 
-func tmuxStopTargetValidation(session registry.Session, panes []tmuxctx.Pane) stopTargetValidation {
+func tmuxStopTargetValidation(session registry.Session, panes []tmux.Pane) stopTargetValidation {
 	paneIDFound := false
 	for _, p := range panes {
 		if p.Tmux.PaneID != session.Tmux.PaneID {

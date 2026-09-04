@@ -1,6 +1,6 @@
 //go:build integration
 
-package tmuxctx
+package tmux
 
 import (
 	"context"

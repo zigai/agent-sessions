@@ -4,12 +4,12 @@ import (
 	"testing"
 
 	"github.com/zigai/aht/internal/processinfo"
-	"github.com/zigai/aht/internal/tmuxctx"
 	"github.com/zigai/aht/pkg/registry"
+	"github.com/zigai/aht/pkg/tmux"
 )
 
-func paneProcess(pane tmuxctx.Pane, processes []processinfo.Process, byPID map[int]processinfo.Process, harnessByPID map[int]registry.Harness) (processinfo.Process, registry.Harness, bool) {
-	converted := multiplexerPanesFromTmux([]tmuxctx.Pane{pane})
+func paneProcess(pane tmux.Pane, processes []processinfo.Process, byPID map[int]processinfo.Process, harnessByPID map[int]registry.Harness) (processinfo.Process, registry.Harness, bool) {
+	converted := multiplexerPanesFromTmux([]tmux.Pane{pane})
 	return multiplexerPaneProcess(converted[0], processes, byPID, harnessByPID, commandPaneCounts(converted))
 }
 
@@ -20,7 +20,7 @@ func TestPaneProcessPrefersDirectAgentOverForegroundWrapper(t *testing.T) {
 	processes := []processinfo.Process{wrapper, direct}
 	byPID := map[int]processinfo.Process{30: wrapper, 31: direct}
 	harnessByPID := map[int]registry.Harness{30: registry.HarnessPi, 31: registry.HarnessPi}
-	pane := tmuxctx.Pane{Tmux: registry.TmuxContext{PaneID: "%5", PaneTTY: "/dev/pts/5", PanePID: 10}, ServerIdentity: "default", PanePID: 10, PaneTTY: "/dev/pts/5"}
+	pane := tmux.Pane{Tmux: registry.TmuxContext{PaneID: "%5", PaneTTY: "/dev/pts/5", PanePID: 10}, ServerIdentity: "default", PanePID: 10, PaneTTY: "/dev/pts/5"}
 	got, harnessID, ok := paneProcess(pane, processes, byPID, harnessByPID)
 	if !ok || got.PID != direct.PID || harnessID != registry.HarnessPi {
 		t.Fatalf("paneProcess = process %#v harness %q ok %v, want direct Pi", got, harnessID, ok)
@@ -34,7 +34,7 @@ func TestPaneProcessPrefersForegroundAgentOnControllingTTY(t *testing.T) {
 	processes := []processinfo.Process{background, foreground}
 	byPID := map[int]processinfo.Process{20: background, 21: foreground}
 	harnessByPID := map[int]registry.Harness{20: registry.HarnessCodex, 21: registry.HarnessClaude}
-	pane := tmuxctx.Pane{Tmux: registry.TmuxContext{PaneID: "%4", PaneTTY: "/dev/pts/4", PanePID: 10}, ServerIdentity: "default", PanePID: 10, PaneTTY: "/dev/pts/4"}
+	pane := tmux.Pane{Tmux: registry.TmuxContext{PaneID: "%4", PaneTTY: "/dev/pts/4", PanePID: 10}, ServerIdentity: "default", PanePID: 10, PaneTTY: "/dev/pts/4"}
 	got, harness, ok := paneProcess(pane, processes, byPID, harnessByPID)
 	if !ok || got.PID != foreground.PID || harness != registry.HarnessClaude {
 		t.Fatalf("paneProcess = process %#v harness %q ok %v, want foreground Claude", got, harness, ok)

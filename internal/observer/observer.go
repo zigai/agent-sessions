@@ -17,8 +17,8 @@ import (
 
 	"github.com/zigai/aht/internal/agentstate"
 	harness "github.com/zigai/aht/internal/harness/catalog"
-	"github.com/zigai/aht/internal/muxctx"
 	"github.com/zigai/aht/internal/processinfo"
+	"github.com/zigai/aht/pkg/mux"
 	"github.com/zigai/aht/pkg/registry"
 )
 
@@ -56,9 +56,9 @@ type Options struct {
 	GracePeriod        time.Duration
 	HealthPath         string
 	ProcessList        ProcessLister
-	PaneList           muxctx.PaneLister
+	PaneList           mux.PaneLister
 	CatalogList        CatalogLister
-	ScreenCapture      muxctx.ScreenCapturer
+	ScreenCapture      mux.ScreenCapturer
 	DetectionConfigDir string
 	Now                func() time.Time
 	ErrorWriter        io.Writer
@@ -121,9 +121,9 @@ type Observer struct {
 	grace          time.Duration
 	healthPath     string
 	processList    ProcessLister
-	paneList       muxctx.PaneLister
+	paneList       mux.PaneLister
 	catalogList    CatalogLister
-	screenCapture  muxctx.ScreenCapturer
+	screenCapture  mux.ScreenCapturer
 	manifestLoader agentstate.Loader
 	now            func() time.Time
 	errorWriter    io.Writer
@@ -661,7 +661,7 @@ func unavailableScreenState(manifestLoader agentstate.Loader, sessions []registr
 }
 
 //nolint:funcorder // state detection runs as part of reconciliation near its call site
-func (o *Observer) detectScreenState(ctx context.Context, sessions []registry.Session, harnessID registry.Harness, process processinfo.Process, pane muxctx.Pane, at time.Time) (registry.Observation, bool, error) {
+func (o *Observer) detectScreenState(ctx context.Context, sessions []registry.Session, harnessID registry.Harness, process processinfo.Process, pane mux.Pane, at time.Time) (registry.Observation, bool, error) {
 	if !o.manifestLoader.Supports(harnessID) {
 		var empty registry.Observation
 		return empty, false, nil
@@ -790,7 +790,6 @@ func shouldDetectScreen(session registry.Session, at time.Time) bool {
 	policy := agentstate.PolicyFor(session.Harness)
 	return policy.Primary == agentstate.AuthorityHook && !agentstate.HookIsActive(session, at)
 }
-
 
 func preferForegroundProcess(candidate processinfo.Process, current processinfo.Process) bool {
 	candidateDirect := isDirectAgentProcess(candidate)
