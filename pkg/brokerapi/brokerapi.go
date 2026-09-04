@@ -39,4 +39,5 @@ var (
 	SocketPath         = broker.SocketPath
 	DefaultSocketPath  = broker.DefaultSocketPath
 	IsUnavailable      = broker.IsUnavailable
+	NewSubscription    = broker.NewSubscription
 )
