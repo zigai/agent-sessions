@@ -190,7 +190,7 @@ func (app *application) runObserver(ctx context.Context, options observeOptions,
 		store = app.store()
 	}
 	handle := func(result observer.Result) error {
-		if options.autoClean && store != nil {
+		if options.autoClean {
 			_, _ = store.GC(ctx, options.maxGoneAge)
 		}
 		if app.outputJSON {
@@ -223,9 +223,7 @@ func (app *application) runObserverOnce(ctx context.Context, options observeOpti
 		if store == nil {
 			store = app.store()
 		}
-		if store != nil {
-			_, _ = store.GC(ctx, options.maxGoneAge)
-		}
+		_, _ = store.GC(ctx, options.maxGoneAge)
 	}
 	var writeErr error
 	if app.outputJSON {

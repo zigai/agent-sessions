@@ -166,8 +166,6 @@ func evaluateLiveSessionScreen(ctx context.Context, session registry.Session, co
 		var snapshot muxctx.ScreenSnapshot
 		var err error
 		switch session.Multiplexer.Kind {
-		case registry.MultiplexerTmux:
-			return agentstate.Decision{}, false, fmt.Errorf("%w: %s", errTmuxPaneNotLive, session.Multiplexer.PaneID)
 		case registry.MultiplexerZellij:
 			snapshot, err = zellijctx.CapturePane(ctx, pane)
 		case registry.MultiplexerHerdr:

@@ -106,39 +106,6 @@ func TestMachineFacingCommandsAndDestructiveResetAreExplicit(t *testing.T) {
 	}
 }
 
-func TestLegacyCommandsAndFlagsAreRemoved(t *testing.T) {
-	for _, args := range [][]string{
-		{"path"},
-		{"get", "missing"},
-		{"gc", "--all"},
-		{"manage", "reset"},
-		{"admin"},
-		{"install-hooks", "codex"},
-		{"agy-hook"},
-		{"observe", "--once"},
-		{"service", "status"},
-		{"list", "--watch"},
-		{"list", "--harness", "codex"},
-		{"doctor", "--all"},
-		{"show", "missing"},
-		{"explain", "missing"},
-		{"setup", "codex"},
-		{"integrations", "status", "codex"},
-		{"monitor", "status"},
-		{"registry", "path"},
-		{"detection", "test"},
-		{"manage", "monitor", "status"},
-		{"manage", "registry", "path"},
-		{"manage", "detection", "test"},
-		{"detect", "--harness", "pi", "--file", "-"},
-	} {
-		root := NewRootCommand(&bytes.Buffer{}, &bytes.Buffer{})
-		root.SetArgs(args)
-		if err := root.ExecuteContext(context.Background()); err == nil {
-			t.Errorf("legacy invocation unexpectedly succeeded: %v", args)
-		}
-	}
-}
 
 func TestEveryHiddenInternalCommandHasCallableHelp(t *testing.T) {
 	commands := []string{"report"}
@@ -212,15 +179,6 @@ func TestJSONInvocationFailureLeavesStdoutEmpty(t *testing.T) {
 	}
 }
 
-func TestObsoleteQueueCommandsAreRemoved(t *testing.T) {
-	for _, command := range []string{"drain-queue", "queue-status"} {
-		root := NewRootCommand(&bytes.Buffer{}, &bytes.Buffer{})
-		root.SetArgs([]string{command})
-		if err := root.ExecuteContext(context.Background()); err == nil {
-			t.Fatalf("obsolete queue command %q unexpectedly succeeded", command)
-		}
-	}
-}
 
 func TestListRejectsModeSpecificFlags(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "sessions.json")

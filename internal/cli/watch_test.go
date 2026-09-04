@@ -291,11 +291,13 @@ func TestFormatWatchTableAlignsColumns(t *testing.T) {
 
 	// Columns start at fixed character offsets:
 	// time (0), action (22), harness (42), presence (54), activity (64), label (74)
-	actionOffset := watchTimeWidth + humanColumnGap
-	harnessOffset := actionOffset + watchActionWidth + humanColumnGap
-	presenceOffset := harnessOffset + watchHarnessWidth + humanColumnGap
-	activityOffset := presenceOffset + watchPresenceWidth + humanColumnGap
-	labelOffset := activityOffset + watchActivityWidth + humanColumnGap
+	const (
+		actionOffset   = 22
+		harnessOffset  = 42
+		presenceOffset = 54
+		activityOffset = 64
+		labelOffset    = 74
+	)
 
 	for name, row := range map[string]struct {
 		output   string

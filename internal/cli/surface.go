@@ -297,15 +297,13 @@ func selectedHarnesses(args []string, emptyMeansAll bool) ([]registry.Harness, e
 		}
 		return nil, errAgentRequired
 	}
-	if len(args) > 1 {
-		for _, arg := range args {
-			if strings.EqualFold(arg, "all") {
-				return nil, errAllWithAgents
-			}
-		}
-	}
 	if len(args) == 1 && strings.EqualFold(args[0], "all") {
 		return install.AllHarnesses(), nil
+	}
+	for _, arg := range args {
+		if strings.EqualFold(arg, "all") {
+			return nil, errAllWithAgents
+		}
 	}
 	seen := make(map[registry.Harness]bool)
 	result := make([]registry.Harness, 0, len(args))

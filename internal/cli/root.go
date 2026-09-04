@@ -60,7 +60,6 @@ const (
 	registryIDShortLength            = 8
 	reportProcessArgumentPrefixCount = 4
 	reportProcessAncestorLimit       = 16
-	reportCommandName                = "report"
 	listCommandName                  = "list"
 	statusCommandName                = "status"
 	installCommandName               = "install"
@@ -68,7 +67,6 @@ const (
 	trackerCommand                   = "tracker"
 	stateCommandName                 = "state"
 	hookCommandName                  = "hook"
-	listSortUpdated                  = "updated"
 	hoursPerDay                      = 24
 	jsonIndent                       = "  "
 )
@@ -1190,25 +1188,38 @@ func shortRegistryID(id string) string {
 }
 
 func abbreviatedRegistryIDs(sessions []registry.Session) map[string]string {
+	type idParts struct {
+		prefix string
+		suffix string
+	}
+	parts := make(map[string]idParts, len(sessions))
+	for _, session := range sessions {
+		p, s := splitRegistryID(session.ID)
+		parts[session.ID] = idParts{prefix: p, suffix: s}
+	}
+
 	result := make(map[string]string, len(sessions))
 	for _, session := range sessions {
-		prefix, suffix := splitRegistryID(session.ID)
-		if len(suffix) <= registryIDShortLength {
+		part := parts[session.ID]
+		if len(part.suffix) <= registryIDShortLength {
 			result[session.ID] = session.ID
 			continue
 		}
 		length := registryIDShortLength
 		for _, other := range sessions {
-			otherPrefix, otherSuffix := splitRegistryID(other.ID)
-			if session.ID == other.ID || prefix != otherPrefix {
+			if session.ID == other.ID {
 				continue
 			}
-			common := commonPrefixLength(suffix, otherSuffix)
+			otherPart := parts[other.ID]
+			if part.prefix != otherPart.prefix {
+				continue
+			}
+			common := commonPrefixLength(part.suffix, otherPart.suffix)
 			if common >= length {
-				length = min(common+1, len(suffix))
+				length = min(common+1, len(part.suffix))
 			}
 		}
-		result[session.ID] = prefix + suffix[:length]
+		result[session.ID] = part.prefix + part.suffix[:length]
 	}
 	return result
 }
@@ -1367,7 +1378,7 @@ func sortListSessions(ss []registry.Session, o listOptions) error {
 }
 
 func listSortLess(k string) (sessionCompareFunc, error) {
-	if c, ok := map[string]sessionCompareFunc{"multiplexer": compareSessionMultiplexer, "tmux": compareSessionTmux, "updated": compareSessionUpdated, "presence-changed": func(a, b registry.Session) int { return compareTime(a.PresenceChangedAt, b.PresenceChangedAt) }, "activity-changed": func(a, b registry.Session) int { return compareTime(a.ActivityChangedAt, b.ActivityChangedAt) }, "created": compareSessionCreated, "harness": func(a, b registry.Session) int { return strings.Compare(string(a.Harness), string(b.Harness)) }, "presence": func(a, b registry.Session) int { return strings.Compare(string(a.Presence), string(b.Presence)) }, "activity": func(a, b registry.Session) int { return strings.Compare(appReportActivity(a), appReportActivity(b)) }, "cwd": func(a, b registry.Session) int { return strings.Compare(a.CWD, b.CWD) }, "id": compareSessionID}[k]; ok {
+	if c, ok := map[string]sessionCompareFunc{"multiplexer": compareSessionMultiplexer, "tmux": compareSessionTmux, "updated": compareSessionUpdated, "presence-changed": func(a, b registry.Session) int { return compareTime(a.PresenceChangedAt, b.PresenceChangedAt) }, "activity-changed": func(a, b registry.Session) int { return compareTime(a.ActivityChangedAt, b.ActivityChangedAt) }, "created": compareSessionCreated, "harness": func(a, b registry.Session) int { return strings.Compare(string(a.Harness), string(b.Harness)) }, "presence": func(a, b registry.Session) int { return strings.Compare(string(a.Presence), string(b.Presence)) }, "activity": func(a, b registry.Session) int { return strings.Compare(appReportActivity(a), appReportActivity(b)) }, "cwd": func(a, b registry.Session) int { return strings.Compare(a.CWD, b.CWD) }, "id": func(a, b registry.Session) int { return strings.Compare(a.ID, b.ID) }}[k]; ok {
 		return c, nil
 	}
 	return nil, fmt.Errorf("%w: %q", errInvalidListSort, k)
@@ -1375,15 +1386,8 @@ func listSortLess(k string) (sessionCompareFunc, error) {
 
 func normalizeListSort(s string) string {
 	s = strings.ToLower(strings.ReplaceAll(strings.TrimSpace(s), "_", "-"))
-	switch s {
-	case "", "time", "updated-at":
+	if s == "" {
 		return "updated"
-	case "presence-changed-at", "presence-since":
-		return "presence-changed"
-	case "activity-changed-at", "activity-since":
-		return "activity-changed"
-	case "mux":
-		return "multiplexer"
 	}
 	return s
 }
@@ -1417,18 +1421,8 @@ func compareSessionTmux(a, b registry.Session) int {
 func compareSessionUpdated(a, b registry.Session) int { return compareTime(a.UpdatedAt, b.UpdatedAt) }
 
 func compareSessionCreated(a, b registry.Session) int { return compareTime(a.CreatedAt, b.CreatedAt) }
-func compareSessionID(a, b registry.Session) int      { return strings.Compare(a.ID, b.ID) }
 func compareTime(a, b time.Time) int {
-	if a.Equal(b) {
-		return 0
-	}
-	if a.IsZero() {
-		return -1
-	}
-	if b.IsZero() || a.After(b) {
-		return 1
-	}
-	return -1
+	return a.Compare(b)
 }
 
 func firstEnv(names ...string) string {
@@ -1440,14 +1434,13 @@ func firstEnv(names ...string) string {
 	return ""
 }
 func firstEnvInt(names ...string) int { v := firstEnv(names...); n, _ := strconv.Atoi(v); return n }
-func defaultCWD() string              { v, _ := os.Getwd(); return v }
 func findProjectRoot(start string) string {
 	if start == "" {
 		return ""
 	}
 	d, _ := filepath.Abs(start)
 	for {
-		if exists(filepath.Join(d, ".git")) {
+		if _, err := os.Stat(filepath.Join(d, ".git")); err == nil {
 			return d
 		}
 		p := filepath.Dir(d)
@@ -1457,7 +1450,6 @@ func findProjectRoot(start string) string {
 		d = p
 	}
 }
-func exists(path string) bool { _, e := os.Stat(path); return e == nil }
 func parseAttributes(values []string) (map[string]string, error) {
 	a := map[string]string{}
 	for _, v := range values {
@@ -1521,7 +1513,9 @@ func applyPayloadDefaults(o *reportOptions, a map[string]string, d harness.Paylo
 
 func applyReportRuntimeDefaults(o *reportOptions) {
 	if o.cwd == "" && o.cwdAuto {
-		o.cwd = defaultCWD()
+		if wd, err := os.Getwd(); err == nil {
+			o.cwd = wd
+		}
 	}
 	if o.projectRoot == "" && o.projectRootAuto {
 		o.projectRoot = findProjectRoot(o.cwd)

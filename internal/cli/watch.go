@@ -318,7 +318,7 @@ func nativeEvent(s registry.Session) string {
 }
 
 func watchEventFromSession(a string, s, p registry.Session, at time.Time) watchEvent {
-	e := watchEvent{Time: at.UTC(), Action: a, ID: s.ID, Harness: s.Harness, Presence: s.Presence, Activity: s.Activity, SessionID: s.SessionID, SessionPath: s.SessionPath, Label: watchSessionLabel(s), NativeEvent: nativeEvent(s), CWD: s.CWD, Tmux: watchTmuxLabel(s.Tmux), Multiplexer: watchMultiplexerLabel(s.Multiplexer)}
+	e := watchEvent{Time: at.UTC(), Action: a, ID: s.ID, Harness: s.Harness, Presence: s.Presence, Activity: s.Activity, SessionID: s.SessionID, SessionPath: s.SessionPath, Label: sessionDisplayLabel(s), NativeEvent: nativeEvent(s), CWD: s.CWD, Tmux: watchTmuxLabel(s.Tmux), Multiplexer: watchMultiplexerLabel(s.Multiplexer)}
 	if !s.UpdatedAt.IsZero() {
 		e.Time = s.UpdatedAt
 	}
@@ -349,9 +349,6 @@ func sortWatchEvents(e []watchEvent) {
 	})
 }
 
-func watchSessionLabel(s registry.Session) string {
-	return sessionDisplayLabel(s)
-}
 
 func watchTmuxLabel(c registry.TmuxContext) string {
 	p := []string{}
@@ -430,13 +427,6 @@ func formatWatchPlainEvent(e watchEvent) string {
 	return truncateHumanText(strings.Join([]string{e.Time.UTC().Format(time.RFC3339), e.Action, string(e.Harness), string(e.Presence), appReportActivity(registry.Session{Activity: e.Activity}), "session=" + e.Label}, " "), humanLineWidth)
 }
 
-const (
-	watchTimeWidth     = 20
-	watchActionWidth   = 18
-	watchHarnessWidth  = 10
-	watchPresenceWidth = 8
-	watchActivityWidth = 8
-)
 
 func formatWatchTableEvent(e watchEvent) string {
 	if e.Action == watchActionSnapshotEmpty {
