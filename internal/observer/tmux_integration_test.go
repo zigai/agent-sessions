@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	harnesspkg "github.com/zigai/aht/internal/harness"
 	"github.com/zigai/aht/internal/muxctx"
 	"github.com/zigai/aht/internal/processinfo"
 	"github.com/zigai/aht/internal/tmuxctx"
@@ -170,7 +171,7 @@ func activityValue(value *registry.Activity) registry.Activity {
 }
 
 func shellSingleQuote(value string) string {
-	return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
+	return harnesspkg.ShellQuote(value)
 }
 
 func shortTmuxDirectory() (string, error) {

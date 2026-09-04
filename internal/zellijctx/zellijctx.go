@@ -120,7 +120,7 @@ func CapturePaneWithOptions(ctx context.Context, pane muxctx.Pane, options Captu
 	if err != nil {
 		return muxctx.ScreenSnapshot{}, fmt.Errorf("capture zellij pane: %w", err)
 	}
-	return muxctx.ScreenSnapshot{Text: boundBottomLines(text, defaultCaptureLines), Title: pane.Title}, nil
+	return muxctx.ScreenSnapshot{Text: strings.Join(muxctx.BoundBottomLines(text, defaultCaptureLines), "\n"), Title: pane.Title}, nil
 }
 
 func parseSessions(output string) []string {
@@ -181,8 +181,4 @@ func runZellij(ctx context.Context, args ...string) (string, error) {
 		return string(output), fmt.Errorf("run zellij command: %w", err)
 	}
 	return string(output), nil
-}
-
-func boundBottomLines(text string, limit int) string {
-	return strings.Join(muxctx.BoundBottomLines(text, limit), "\n")
 }

@@ -10,13 +10,13 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"testing"
 	"time"
 
+	harnesspkg "github.com/zigai/aht/internal/harness"
 	"github.com/zigai/aht/internal/processinfo"
-	"github.com/zigai/aht/pkg/registry"
 	"github.com/zigai/aht/internal/tmuxctx"
+	"github.com/zigai/aht/pkg/registry"
 )
 
 type systemStopResult struct {
@@ -244,7 +244,7 @@ func waitForSystemTestCommandExit(t *testing.T, process *runningTestCommand) {
 
 func startTmuxAgentSession(t *testing.T, socket string, session string, binary string, storePath string) {
 	t.Helper()
-	shellCommand := "exec " + shellSingleQuoteSystemTest(binary) + " --store " + shellSingleQuoteSystemTest(storePath) + " manage tracker run --quiet"
+	shellCommand := "exec " + harnesspkg.ShellQuote(binary) + " --store " + harnesspkg.ShellQuote(storePath) + " manage tracker run --quiet"
 	command := exec.CommandContext(t.Context(), "tmux", "-S", socket, "-f", "/dev/null", "new-session", "-d", "-s", session, shellCommand)
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("start tmux session %q: %v; output=%q", session, err, output)
@@ -310,9 +310,6 @@ func sessionForTmuxSocket(t *testing.T, sessions []registry.Session, socket stri
 	return registry.Session{}
 }
 
-func shellSingleQuoteSystemTest(value string) string {
-	return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
-}
 
 func waitForTmuxSessionExit(t *testing.T, socket string, session string) {
 	t.Helper()

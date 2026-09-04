@@ -8,6 +8,11 @@ import (
 	"github.com/zigai/aht/pkg/registry"
 )
 
+func paneProcess(pane tmuxctx.Pane, processes []processinfo.Process, byPID map[int]processinfo.Process, harnessByPID map[int]registry.Harness) (processinfo.Process, registry.Harness, bool) {
+	converted := multiplexerPanesFromTmux([]tmuxctx.Pane{pane})
+	return multiplexerPaneProcess(converted[0], processes, byPID, harnessByPID, commandPaneCounts(converted))
+}
+
 func TestPaneProcessPrefersDirectAgentOverForegroundWrapper(t *testing.T) {
 	t.Parallel()
 	wrapper := processinfo.Process{PID: 30, PPID: 10, ProcessGroupID: 30, Foreground: true, StartIdentity: "boot:30", Executable: "fence", TTY: "/dev/pts/5", AgentHint: "pi", Args: []string{"fence", "--", "pi"}}

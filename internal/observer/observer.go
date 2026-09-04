@@ -19,7 +19,6 @@ import (
 	harness "github.com/zigai/aht/internal/harness/catalog"
 	"github.com/zigai/aht/internal/muxctx"
 	"github.com/zigai/aht/internal/processinfo"
-	"github.com/zigai/aht/internal/tmuxctx"
 	"github.com/zigai/aht/pkg/registry"
 )
 
@@ -707,7 +706,10 @@ func (o *Observer) detectScreenState(ctx context.Context, sessions []registry.Se
 		var empty registry.Observation
 		return empty, false, nil
 	}
-	observedAt := screenObservationTime(at, o.now().UTC())
+	observedAt := o.now().UTC()
+	if observedAt.Before(at) {
+		observedAt = at
+	}
 	fallback, fallbackReason := screenFallbackMetadata(session, harnessID, at)
 	screen := &registry.ScreenObservation{Activity: decision.Activity, Authority: string(agentstate.AuthorityScreen), Reason: decision.Reason, RuleID: decision.RuleID, ManifestSource: decision.ManifestSource, ManifestVersion: decision.ManifestVersion, FallbackForIntegration: fallback, FallbackReason: fallbackReason, Process: *identity, ObservedAt: observedAt}
 	observation := registry.Observation{ //nolint:exhaustruct // screen observations intentionally contain no terminal contents
@@ -789,17 +791,6 @@ func shouldDetectScreen(session registry.Session, at time.Time) bool {
 	return policy.Primary == agentstate.AuthorityHook && !agentstate.HookIsActive(session, at)
 }
 
-func screenObservationTime(cycleAt time.Time, capturedAt time.Time) time.Time {
-	if capturedAt.Before(cycleAt) {
-		return cycleAt
-	}
-	return capturedAt
-}
-
-func paneProcess(pane tmuxctx.Pane, processes []processinfo.Process, byPID map[int]processinfo.Process, harnessByPID map[int]registry.Harness) (processinfo.Process, registry.Harness, bool) {
-	converted := multiplexerPanesFromTmux([]tmuxctx.Pane{pane})
-	return multiplexerPaneProcess(converted[0], processes, byPID, harnessByPID, commandPaneCounts(converted))
-}
 
 func preferForegroundProcess(candidate processinfo.Process, current processinfo.Process) bool {
 	candidateDirect := isDirectAgentProcess(candidate)

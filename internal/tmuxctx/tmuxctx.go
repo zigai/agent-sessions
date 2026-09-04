@@ -131,12 +131,9 @@ func currentDisplayMessageArgs(format string, paneID string) []string {
 }
 
 func ListPanes(ctx context.Context) ([]Pane, error) {
-	env := Env{TMUX: os.Getenv("TMUX"), TMUXPane: os.Getenv("TMUX_PANE")}
-	return ListPanesWithEnv(ctx, env)
-}
-
-func ListPanesWithEnv(ctx context.Context, env Env) ([]Pane, error) {
-	return ListPanesWithOptions(ctx, ListOptions{Env: env, Run: nil, ServerProcesses: nil})
+	return ListPanesWithOptions(ctx, ListOptions{
+		Env: Env{TMUX: os.Getenv("TMUX"), TMUXPane: os.Getenv("TMUX_PANE")},
+	})
 }
 
 func ListPanesWithOptions(ctx context.Context, options ListOptions) ([]Pane, error) {
@@ -229,9 +226,6 @@ func listPanesFormat() string {
 	})
 }
 
-func SendInterrupt(ctx context.Context, paneID string) error {
-	return SendInterruptTo(ctx, "", paneID)
-}
 
 // SendInterruptTo sends an interrupt to a pane on the identified tmux server.
 func SendInterruptTo(ctx context.Context, serverIdentity, paneID string) error {
