@@ -532,7 +532,10 @@ func TestDefaultsFromPayload(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
-			got := DefaultsFromPayload(test.harness, json.RawMessage(test.payload))
+			got, err := DefaultsFromPayloadWithError(test.harness, json.RawMessage(test.payload))
+			if err != nil {
+				t.Fatalf("unexpected error from DefaultsFromPayloadWithError: %v", err)
+			}
 			if got.SessionID != test.wantID ||
 				got.SessionPath != test.wantPath ||
 				got.CWD != test.wantCWD ||
@@ -564,10 +567,13 @@ func TestKimiDefaultsFromPayloadUsesCurrentSessionDirectory(t *testing.T) {
 		t.Fatalf("creating Kimi session directory: %v", err)
 	}
 
-	got := DefaultsFromPayload(
+	got, err := DefaultsFromPayloadWithError(
 		registry.HarnessKimiCode,
 		json.RawMessage(`{"session_id":"kimi-index-session","cwd":"/repo","hook_event_name":"SessionStart","source":"startup"}`),
 	)
+	if err != nil {
+		t.Fatalf("unexpected error from DefaultsFromPayloadWithError: %v", err)
+	}
 
 	if got.SessionID != "kimi-index-session" ||
 		got.SessionPath != sessionDir ||

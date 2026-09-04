@@ -19,6 +19,6 @@ func FuzzPayloadAdapters(f *testing.F) {
 		}
 		raw := json.RawMessage(payload)
 		_ = PayloadCompatibleWithHarness(harness, raw)
-		_ = DefaultsFromPayload(harness, raw)
+		_, _ = DefaultsFromPayloadWithError(harness, raw)
 	})
 }

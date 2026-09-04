@@ -2,6 +2,7 @@ package harness
 
 import (
 	"encoding/json"
+	"slices"
 
 	"github.com/zigai/aht/pkg/registry"
 )
@@ -117,5 +118,5 @@ func cloneEnvKeys(keys EnvKeys) EnvKeys {
 }
 
 func cloneStrings(values []string) []string {
-	return append([]string(nil), values...)
+	return slices.Clone(values)
 }

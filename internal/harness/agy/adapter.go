@@ -250,13 +250,13 @@ func agyHookReport(invocation harness.HookInvocation) (registry.Observation, boo
 		RawPayload: invocation.RawPayload,
 	}, true
 }
-
 func agyResumeCommand(sessionID string) []string {
 	if sessionID == "" {
 		return nil
 	}
 	return []string{agyCommand, "--conversation", sessionID}
 }
+
 
 func agyActivityForHook(event string, payload map[string]any) *registry.Activity {
 	var activity registry.Activity
@@ -290,8 +290,6 @@ func agyHookResponse(event string) map[string]any {
 	switch event {
 	case harness.HookEventPreToolUse:
 		return map[string]any{"decision": "allow"}
-	case "Stop":
-		return map[string]any{"decision": ""}
 	default:
 		return map[string]any{}
 	}

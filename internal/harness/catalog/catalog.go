@@ -75,11 +75,11 @@ func Normalize(value string) (registry.Harness, error) {
 	normalized := normalizeToken(value)
 	for _, adapter := range adapters {
 		definition := adapter.Definition()
-		if normalized == normalizeToken(string(definition.ID)) {
+		if normalized == string(definition.ID) {
 			return definition.ID, nil
 		}
 		for _, alias := range definition.Aliases {
-			if normalized == normalizeToken(alias) {
+			if normalized == alias {
 				return definition.ID, nil
 			}
 		}
@@ -108,7 +108,7 @@ func FromCommand(command string) (registry.Harness, bool) {
 	for _, adapter := range adapters {
 		definition := adapter.Definition()
 		for _, processName := range definition.ProcessNames {
-			if normalized == normalizeToken(processName) {
+			if normalized == processName {
 				return definition.ID, true
 			}
 		}
@@ -124,10 +124,6 @@ func ProcessNames(harnessID registry.Harness) []string {
 	return adapter.Definition().ProcessNames
 }
 
-func DefaultsFromPayload(harnessID registry.Harness, rawPayload json.RawMessage) harness.PayloadDefaults {
-	defaults, _ := DefaultsFromPayloadWithError(harnessID, rawPayload)
-	return defaults
-}
 
 func DefaultsFromPayloadWithError(harnessID registry.Harness, rawPayload json.RawMessage) (harness.PayloadDefaults, error) {
 	if len(rawPayload) == 0 {
