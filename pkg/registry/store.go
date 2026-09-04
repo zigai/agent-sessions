@@ -1,6 +1,7 @@
 package registry
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -161,7 +162,7 @@ func applyObservationBatch(
 			return nil, sequenceErr
 		}
 		at = sequencedAt
-		if id != "" && shouldIgnoreNativeAfterGone(session, observation, at) {
+		if shouldIgnoreNativeAfterGone(session, observation, at) {
 			saved = append(saved, session)
 			continue
 		}
@@ -949,16 +950,14 @@ func cloneAttributes(value map[string]string) map[string]string {
 	if len(value) == 0 {
 		return nil
 	}
-	cloned := make(map[string]string, len(value))
-	maps.Copy(cloned, value)
-	return cloned
+	return maps.Clone(value)
 }
 
 func cloneRaw(value json.RawMessage) json.RawMessage {
 	if len(value) == 0 {
 		return nil
 	}
-	return append(json.RawMessage(nil), value...)
+	return bytes.Clone(value)
 }
 
 func activityEqual(left, right *Activity) bool {
@@ -1237,7 +1236,6 @@ func (s *FileStore) load() (snapshot, error) {
 	if err := validateSnapshot(snap); err != nil {
 		return snapshot{}, err
 	}
-	snap.SchemaVersion = storeSchemaVersion
 	return snap, nil
 }
 
