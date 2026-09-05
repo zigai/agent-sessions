@@ -857,11 +857,15 @@ func TestDoctorIsConciseUnlessVerbose(t *testing.T) {
 	t.Setenv(registry.StateDirEnv, filepath.Join(home, "state"))
 	path := filepath.Join(home, "sessions.json")
 
+	normalize := func(s string) string {
+		return strings.Join(strings.Fields(s), " ")
+	}
+
 	var concise bytes.Buffer
 	root := NewRootCommand(&concise, &bytes.Buffer{})
 	root.SetArgs([]string{"--store", path, "manage", "doctor"})
 	_ = root.ExecuteContext(context.Background())
-	if strings.Contains(concise.String(), "RUN/IDLE") || strings.Contains(concise.String(), "integration.codex") {
+	if strings.Contains(normalize(concise.String()), "Run/Idle") || strings.Contains(concise.String(), "integration.codex") {
 		t.Fatalf("concise doctor contains full matrix:\n%s", concise.String())
 	}
 	installRoot := NewRootCommand(&bytes.Buffer{}, &bytes.Buffer{})
@@ -873,7 +877,7 @@ func TestDoctorIsConciseUnlessVerbose(t *testing.T) {
 	root = NewRootCommand(&concise, &bytes.Buffer{})
 	root.SetArgs([]string{"--store", path, "manage", "doctor"})
 	_ = root.ExecuteContext(context.Background())
-	if !strings.Contains(concise.String(), "integration.codex") || strings.Contains(concise.String(), "RUN/IDLE") {
+	if !strings.Contains(concise.String(), "integration.codex") || strings.Contains(normalize(concise.String()), "Run/Idle") {
 		t.Fatalf("concise doctor omitted installed integration or added matrix:\n%s", concise.String())
 	}
 
@@ -881,7 +885,7 @@ func TestDoctorIsConciseUnlessVerbose(t *testing.T) {
 	root = NewRootCommand(&verbose, &bytes.Buffer{})
 	root.SetArgs([]string{"--store", path, "manage", "doctor", "--verbose"})
 	_ = root.ExecuteContext(context.Background())
-	if !strings.Contains(verbose.String(), "Start") || !strings.Contains(verbose.String(), "integration.codex") {
+	if !strings.Contains(normalize(verbose.String()), "Run/Idle") || !strings.Contains(verbose.String(), "Start") || !strings.Contains(verbose.String(), "integration.codex") {
 		t.Fatalf("verbose doctor omitted details:\n%s", verbose.String())
 	}
 

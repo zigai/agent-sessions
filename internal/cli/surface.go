@@ -47,6 +47,24 @@ type setupResult struct {
 	Tracker      service.Result   `json:"tracker"`
 }
 
+type cleanOptions struct {
+	all       bool
+	olderThan time.Duration
+	ageSet    bool
+}
+
+type infoOptions struct {
+	explain                 bool
+	paneID                  string
+	configDir               string
+	disableScreenInspection bool
+}
+
+type explainedInfoResult struct {
+	Session     registry.Session `json:"session"`
+	Explanation explainResult    `json:"explanation"`
+}
+
 func (app *application) newSetupCommand() *cobra.Command {
 	options := integrationCommandOptions{binary: defaultInstallBinary()}
 	serviceConfig := serviceOptions{binary: defaultInstallBinary(), interval: serviceDefaultInterval}
@@ -417,12 +435,6 @@ func (app *application) newStateCommand() *cobra.Command {
 	return command
 }
 
-type cleanOptions struct {
-	all       bool
-	olderThan time.Duration
-	ageSet    bool
-}
-
 func (app *application) newRegistryCleanCommand() *cobra.Command {
 	options := cleanOptions{}
 	var yes bool
@@ -479,18 +491,6 @@ func (app *application) runRegistryClean(ctx context.Context, options cleanOptio
 		return app.writeJSON(result)
 	}
 	return app.writef("deleted=%d remaining=%d\n", result.Deleted, result.Remaining)
-}
-
-type infoOptions struct {
-	explain                 bool
-	paneID                  string
-	configDir               string
-	disableScreenInspection bool
-}
-
-type explainedInfoResult struct {
-	Session     registry.Session `json:"session"`
-	Explanation explainResult    `json:"explanation"`
 }
 
 func (app *application) newInfoCommand() *cobra.Command {

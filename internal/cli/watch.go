@@ -77,6 +77,18 @@ type watchEvent struct {
 	Tmux             string             `json:"tmux,omitempty"`
 	Multiplexer      string             `json:"multiplexer,omitempty"`
 }
+type watchUpdateProcessor struct {
+	app      *application
+	options  watchOptions
+	writer   *watchEventWriter
+	previous []registry.Session
+}
+
+type watchEventWriter struct {
+	app           *application
+	format        string
+	headerWritten bool
+}
 
 func (app *application) runWatch(ctx context.Context, o watchOptions) error {
 	if o.formatSet && strings.TrimSpace(o.format) == "" {
@@ -110,33 +122,14 @@ func (app *application) runBrokerWatch(
 	o watchOptions,
 	ahtClient *client.Client,
 ) error {
-	var previous []registry.Session
-	writer := &watchEventWriter{app: app, format: o.format}
+	processor := newWatchUpdateProcessor(app, o)
 	initialized := false
 	err := ahtClient.Watch(ctx, o.filter, func(state registry.StateSnapshot) error {
-		currentSessions := applyConfigFilter(state.Sessions, app.cfg.Filter, o.agent)
-		if !initialized {
+		first := !initialized
+		if first {
 			initialized = true
-			previous = currentSessions
-			if !o.noSnapshot {
-				if err := writer.write(snapshotWatchEvents(previous, o.now())); err != nil {
-					return err
-				}
-			}
-			notifyWatchReady(o.ready)
-			return nil
 		}
-
-		events := diffWatchEvents(
-			watchSessionMap(previous),
-			watchSessionMap(currentSessions),
-			o.now(),
-		)
-		if err := writer.write(events); err != nil {
-			return err
-		}
-		previous = currentSessions
-		return nil
+		return processor.accept(state.Sessions, first)
 	})
 	if err != nil {
 		return fmt.Errorf("watching AHT state: %w", err)
@@ -149,8 +142,7 @@ func (app *application) runFilesystemWatch(ctx context.Context, o watchOptions) 
 	if _, _, e := watchTarget(s); e != nil {
 		return e
 	}
-	var previous []registry.Session
-	writer := &watchEventWriter{app: app, format: o.format}
+	processor := newWatchUpdateProcessor(app, o)
 	err := s.Watch(ctx, registry.WatchOptions{
 		Filter:            o.filter,
 		Debounce:          o.debounce,
@@ -159,27 +151,45 @@ func (app *application) runFilesystemWatch(ctx context.Context, o watchOptions) 
 		if app.reportWatchResultError(result) {
 			return nil
 		}
-		currentSessions := applyConfigFilter(result.Sessions, app.cfg.Filter, o.agent)
-		if result.Initial {
-			previous = currentSessions
-			if !o.noSnapshot {
-				if e := writer.write(snapshotWatchEvents(previous, o.now())); e != nil {
-					return e
-				}
-			}
-			notifyWatchReady(o.ready)
-			return nil
-		}
-		events := diffWatchEvents(watchSessionMap(previous), watchSessionMap(currentSessions), o.now())
-		if e := writer.write(events); e != nil {
-			return e
-		}
-		previous = currentSessions
-		return nil
+		return processor.accept(result.Sessions, result.Initial)
 	})
 	if err != nil {
 		return fmt.Errorf("watching registry store: %w", err)
 	}
+	return nil
+}
+
+func newWatchUpdateProcessor(app *application, o watchOptions) *watchUpdateProcessor {
+	return &watchUpdateProcessor{
+		app:      app,
+		options:  o,
+		writer:   &watchEventWriter{app: app, format: o.format},
+		previous: nil,
+	}
+}
+
+func (p *watchUpdateProcessor) accept(rawSessions []registry.Session, initial bool) error {
+	currentSessions := applyConfigFilter(rawSessions, p.app.cfg.Filter, p.options.agent)
+	if initial {
+		p.previous = currentSessions
+		if !p.options.noSnapshot {
+			if err := p.writer.write(snapshotWatchEvents(p.previous, p.options.now())); err != nil {
+				return err
+			}
+		}
+		notifyWatchReady(p.options.ready)
+		return nil
+	}
+
+	events := diffWatchEvents(
+		watchSessionMap(p.previous),
+		watchSessionMap(currentSessions),
+		p.options.now(),
+	)
+	if err := p.writer.write(events); err != nil {
+		return err
+	}
+	p.previous = currentSessions
 	return nil
 }
 
@@ -381,12 +391,6 @@ func watchMultiplexerLabel(context registry.MultiplexerContext) string {
 		parts = append(parts, context.PaneID)
 	}
 	return strings.Join(parts, ":")
-}
-
-type watchEventWriter struct {
-	app           *application
-	format        string
-	headerWritten bool
 }
 
 func (w *watchEventWriter) write(e []watchEvent) error {

@@ -12,7 +12,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -26,6 +25,10 @@ var errUnsupportedManagedHook = errors.New("harness does not support managed hoo
 
 type managedHookOptions struct {
 	event string
+}
+
+type observationSink interface {
+	Observe(ctx context.Context, observation registry.Observation) (registry.Session, error)
 }
 
 func (app *application) newHookCommand() *cobra.Command {
@@ -81,10 +84,6 @@ func (app *application) runManagedHook(
 	return app.writeJSON(result.Response)
 }
 
-type observationSink interface {
-	Observe(context.Context, registry.Observation) (registry.Session, error)
-}
-
 func reportManagedHook(ctx context.Context, store observationSink, result harness.HookResult) error {
 	if !result.ReportOK {
 		return nil
@@ -103,20 +102,11 @@ func reportManagedHook(ctx context.Context, store observationSink, result harnes
 }
 
 func rawPayloadFromHookBytes(data []byte) json.RawMessage {
-	data = []byte(strings.TrimSpace(string(data)))
-	if len(data) == 0 {
-		return nil
-	}
-	if json.Valid(data) {
-		return json.RawMessage(data)
-	}
-
-	wrapped, err := json.Marshal(string(data))
+	payload, err := normalizeRawPayloadBytes(data)
 	if err != nil {
 		return nil
 	}
-
-	return json.RawMessage(wrapped)
+	return payload
 }
 
 func hookPayloadObject(rawPayload json.RawMessage) map[string]any {

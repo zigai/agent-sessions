@@ -16,6 +16,16 @@ import (
 	"github.com/zigai/aht/pkg/registry"
 )
 
+const (
+	observeDefaultInterval = 300 * time.Millisecond
+	realtimeComponentCount = 3
+)
+
+var (
+	errObserverRunDegraded     = errors.New("observer reconciliation degraded")
+	errUnknownServiceOperation = errors.New("unknown service operation")
+)
+
 type observeOptions struct {
 	once       bool
 	quiet      bool
@@ -27,15 +37,19 @@ type observeOptions struct {
 }
 
 type goneCollector interface {
-	GC(context.Context, time.Duration) (registry.GCResult, error)
+	GC(ctx context.Context, maxAge time.Duration) (registry.GCResult, error)
 }
 
-const (
-	observeDefaultInterval = 300 * time.Millisecond
-	realtimeComponentCount = 3
-)
+type trackerComponentResult struct {
+	name string
+	err  error
+}
 
-var errObserverRunDegraded = errors.New("observer reconciliation degraded")
+type serviceOptions struct {
+	binary          string
+	interval, grace time.Duration
+	dryRun          bool
+}
 
 func (app *application) newTrackerRunCommand() *cobra.Command {
 	o := observeOptions{interval: observeDefaultInterval}
@@ -139,11 +153,6 @@ func applyTrackerAutoClean(o *observeOptions, cfg config.Config) {
 			o.maxGoneAge = d
 		}
 	}
-}
-
-type trackerComponentResult struct {
-	name string
-	err  error
 }
 
 func (app *application) runRealtimeObserver(
@@ -273,20 +282,10 @@ func (app *application) writeObserverResult(result observer.Result) error {
 	return nil
 }
 
-type serviceOptions struct {
-	binary          string
-	interval, grace time.Duration
-	dryRun          bool
-}
-
-var errUnknownServiceOperation = errors.New("unknown service operation")
-
 func runServiceOperation(ctx context.Context, operation string, options service.Options) (service.Result, error) {
 	var result service.Result
 	var err error
 	switch operation {
-	case installCommandName:
-		result, err = service.Install(ctx, options)
 	case "update":
 		result, err = service.Update(ctx, options)
 	case "uninstall":

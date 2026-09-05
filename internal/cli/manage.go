@@ -23,14 +23,14 @@ import (
 	"github.com/zigai/aht/pkg/tmux"
 )
 
+const stopTargetMaxAge = 30 * time.Minute
+
 var (
 	errManageStopAllFailed = errors.New("one or more sessions failed to stop")
 	errStateResetForce     = errors.New("--force is required to reset stored session state")
 	errStopTargetSkipped   = errors.New("session was not stopped")
 	errUnknownStopMethod   = errors.New("unknown stop method")
 )
-
-const stopTargetMaxAge = 30 * time.Minute
 
 type manageResetResult struct {
 	registry.ResetResult

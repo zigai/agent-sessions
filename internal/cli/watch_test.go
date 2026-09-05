@@ -4,12 +4,20 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/zigai/aht/pkg/registry"
+)
+
+var (
+	errTestWatcherExitedEarly = errors.New("test watcher exited early with nil error")
+	errTestWatcherTimeout     = errors.New("timed out waiting for watcher readiness")
+	errTestStartupFailed      = errors.New("startup failed")
 )
 
 func TestDiffWatchEventsSeparatesPresenceAndActivity(t *testing.T) {
@@ -104,6 +112,92 @@ func TestDiffWatchEventsIgnoresTransientMultiplexerTabNameChanges(t *testing.T) 
 	}
 }
 
+type testWatchHandle struct {
+	cancel context.CancelFunc
+	done   <-chan error
+	joined <-chan struct{}
+}
+
+func waitTestWatchReady(ready <-chan struct{}, done <-chan error, timeout time.Duration) error {
+	select {
+	case <-ready:
+		return nil
+	case err := <-done:
+		if err == nil {
+			return errTestWatcherExitedEarly
+		}
+		return fmt.Errorf("test watcher exited early: %w", err)
+	case <-time.After(timeout):
+		return errTestWatcherTimeout
+	}
+}
+
+func startTestWatch(t *testing.T, run func(ctx context.Context, ready chan struct{}) error) *testWatchHandle {
+	t.Helper()
+	ctx, cancel := context.WithCancel(t.Context())
+	ready := make(chan struct{})
+	done := make(chan error, 1)
+	joined := make(chan struct{})
+
+	go func() {
+		defer close(joined)
+		done <- run(ctx, ready)
+	}()
+
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-joined:
+		case <-time.After(5 * time.Second):
+			t.Errorf("test watcher failed to stop within deadline")
+		}
+	})
+
+	if err := waitTestWatchReady(ready, done, 5*time.Second); err != nil {
+		cancel()
+		select {
+		case <-joined:
+		case <-time.After(5 * time.Second):
+			t.Errorf("test watcher failed to stop within deadline after startup failure")
+		}
+		t.Fatalf("readiness wait: %v", err)
+	}
+
+	return &testWatchHandle{
+		cancel: cancel,
+		done:   done,
+		joined: joined,
+	}
+}
+
+func (h *testWatchHandle) stop(t *testing.T) {
+	t.Helper()
+	h.cancel()
+	select {
+	case <-h.joined:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("test watcher failed to stop within deadline")
+	}
+	select {
+	case err := <-h.done:
+		if err != nil {
+			t.Fatalf("test watcher failed: %v", err)
+		}
+	default:
+	}
+}
+
+func TestWaitTestWatchReadyObservesStartupError(t *testing.T) {
+	t.Parallel()
+	ready := make(chan struct{})
+	done := make(chan error, 1)
+	done <- errTestStartupFailed
+	err := waitTestWatchReady(ready, done, time.Second)
+	if err == nil || !errors.Is(err, errTestStartupFailed) {
+		t.Fatalf("waitTestWatchReady() = %v, want error wrapping %v", err, errTestStartupFailed)
+	}
+}
+
 func TestWatchJSONModeEmitsJSONLinesOnlyWhenRequested(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "sessions.json")
 	store := registry.NewFileStore(path)
@@ -114,17 +208,10 @@ func TestWatchJSONModeEmitsJSONLinesOnlyWhenRequested(t *testing.T) {
 
 	var stdout bytes.Buffer
 	app := &application{storePath: path, outputJSON: true, stdout: &stdout, stderr: &bytes.Buffer{}}
-	ctx, cancel := context.WithCancel(context.Background())
-	ready := make(chan struct{})
-	done := make(chan error, 1)
-	go func() {
-		done <- app.runWatch(ctx, watchOptions{ready: ready})
-	}()
-	<-ready
-	cancel()
-	if err := <-done; err != nil {
-		t.Fatal(err)
-	}
+	watcher := startTestWatch(t, func(ctx context.Context, ready chan struct{}) error {
+		return app.runWatch(ctx, watchOptions{ready: ready})
+	})
+	watcher.stop(t)
 	lines := strings.Split(strings.TrimSpace(stdout.String()), "\n")
 	if len(lines) != 1 {
 		t.Fatalf("watch JSONL lines = %d: %q", len(lines), stdout.String())
@@ -145,17 +232,10 @@ func TestWatchDefaultsToHumanTable(t *testing.T) {
 
 	var stdout bytes.Buffer
 	app := &application{storePath: path, stdout: &stdout, stderr: &bytes.Buffer{}}
-	ctx, cancel := context.WithCancel(context.Background())
-	ready := make(chan struct{})
-	done := make(chan error, 1)
-	go func() {
-		done <- app.runWatch(ctx, watchOptions{ready: ready})
-	}()
-	<-ready
-	cancel()
-	if err := <-done; err != nil {
-		t.Fatal(err)
-	}
+	watcher := startTestWatch(t, func(ctx context.Context, ready chan struct{}) error {
+		return app.runWatch(ctx, watchOptions{ready: ready})
+	})
+	watcher.stop(t)
 	if !strings.Contains(stdout.String(), "Time") || !strings.Contains(stdout.String(), "Event") || !strings.Contains(stdout.String(), "snapshot") || !strings.Contains(stdout.String(), "watch-human") || strings.HasPrefix(strings.TrimSpace(stdout.String()), "{") {
 		t.Fatalf("watch default output = %q", stdout.String())
 	}
@@ -178,19 +258,12 @@ func TestWatchNoSnapshotSignalsReadyWithoutOutput(t *testing.T) {
 
 	var stdout bytes.Buffer
 	app := &application{storePath: path, stdout: &stdout, stderr: &bytes.Buffer{}}
-	ctx, cancel := context.WithCancel(context.Background())
-	ready := make(chan struct{})
-	done := make(chan error, 1)
-	go func() {
-		done <- app.runWatch(ctx, watchOptions{noSnapshot: true, ready: ready})
-	}()
-	<-ready
+	watcher := startTestWatch(t, func(ctx context.Context, ready chan struct{}) error {
+		return app.runWatch(ctx, watchOptions{noSnapshot: true, ready: ready})
+	})
+	watcher.stop(t)
 	if stdout.Len() != 0 {
 		t.Fatalf("--no-snapshot output = %q", stdout.String())
-	}
-	cancel()
-	if err := <-done; err != nil {
-		t.Fatal(err)
 	}
 }
 
@@ -235,8 +308,15 @@ func TestDiffWatchEventsReportsProcessBindingWithoutPresenceChange(t *testing.T)
 func TestFormatWatchPlainUsesNullableActivity(t *testing.T) {
 	t.Parallel()
 	event := watchEvent{Time: time.Unix(0, 0), Action: watchActionRemoved, Harness: registry.HarnessCodex, Presence: registry.PresenceGone, Label: "gone"}
-	if got := formatWatchPlainEvent(event); got == "" || got[len(got)-len("session=gone"):] != "session=gone" {
-		t.Fatalf("unexpected watch plain format: %q", got)
+	want := "1970-01-01T00:00:00Z removed codex gone null session=gone"
+	if got := formatWatchPlainEvent(event); got != want {
+		t.Fatalf("formatWatchPlainEvent(nil activity) = %q, want %q", got, want)
+	}
+	unknown := registry.ActivityUnknown
+	unknownEvent := watchEvent{Time: time.Unix(0, 0), Action: watchActionRemoved, Harness: registry.HarnessCodex, Presence: registry.PresenceGone, Activity: &unknown, Label: "gone"}
+	wantUnknown := "1970-01-01T00:00:00Z removed codex gone unknown session=gone"
+	if got := formatWatchPlainEvent(unknownEvent); got != wantUnknown {
+		t.Fatalf("formatWatchPlainEvent(unknown activity) = %q, want %q", got, wantUnknown)
 	}
 }
 

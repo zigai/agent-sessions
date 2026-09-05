@@ -18,14 +18,20 @@ func TestParseDurationDayBounds(t *testing.T) {
 			t.Errorf("ParseDuration(%q) error = %v, want ErrInvalidDuration", input, err)
 		}
 	}
-	for _, input := range []string{"106751d", "-106751d"} {
-		got, err := ParseDuration(input)
+	const largestWholeDays = 106751 * 24 * time.Hour
+	for _, tc := range []struct {
+		input string
+		want  time.Duration
+	}{
+		{input: "106751d", want: largestWholeDays},
+		{input: "-106751d", want: -largestWholeDays},
+	} {
+		got, err := ParseDuration(tc.input)
 		if err != nil {
 			t.Fatal(err)
 		}
-		const largestWholeDays = 106751 * 24 * time.Hour
-		if got != largestWholeDays && got != -largestWholeDays {
-			t.Errorf("ParseDuration(%q) = %s", input, got)
+		if got != tc.want {
+			t.Errorf("ParseDuration(%q) = %s, want %s", tc.input, got, tc.want)
 		}
 	}
 }

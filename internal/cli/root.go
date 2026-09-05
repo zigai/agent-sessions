@@ -33,6 +33,21 @@ import (
 	"github.com/zigai/aht/pkg/zellij"
 )
 
+const (
+	registryIDShortLength            = 8
+	reportProcessArgumentPrefixCount = 4
+	reportProcessAncestorLimit       = 16
+	listCommandName                  = "list"
+	statusCommandName                = "status"
+	installCommandName               = "install"
+	integrationsCommand              = "integrations"
+	trackerCommand                   = "tracker"
+	stateCommandName                 = "state"
+	hookCommandName                  = "hook"
+	hoursPerDay                      = 24
+	jsonIndent                       = "  "
+)
+
 var (
 	version                      = "dev"
 	commit                       = "none"
@@ -56,21 +71,6 @@ var (
 	errListAbsoluteJSON          = errors.New("--absolute-time cannot be used with --json")
 )
 
-const (
-	registryIDShortLength            = 8
-	reportProcessArgumentPrefixCount = 4
-	reportProcessAncestorLimit       = 16
-	listCommandName                  = "list"
-	statusCommandName                = "status"
-	installCommandName               = "install"
-	integrationsCommand              = "integrations"
-	trackerCommand                   = "tracker"
-	stateCommandName                 = "state"
-	hookCommandName                  = "hook"
-	hoursPerDay                      = 24
-	jsonIndent                       = "  "
-)
-
 type application struct {
 	storePath          string
 	configPath         string
@@ -82,6 +82,55 @@ type application struct {
 	stdout             io.Writer
 	stderr             io.Writer
 }
+
+type reportOptions struct {
+	harness         string
+	presence        string
+	activity        string
+	lifecycle       string
+	sessionID       string
+	sessionPath     string
+	cwd             string
+	cwdAuto         bool
+	projectRoot     string
+	projectRootAuto bool
+	pid             int
+	ppid            int
+	processGroupID  int
+	startIdentity   string
+	executable      string
+	tty             string
+	event           string
+	observedAt      string
+	sequence        string
+	attributes      []string
+	rawStdin        bool
+	rawDefaultsOnly bool
+	noTmux          bool
+	quiet           bool
+	resumeCommand   []string
+	evidence        string
+}
+
+type preparedReport struct {
+	harness     registry.Harness
+	observation registry.Observation
+	ignored     bool
+}
+
+type reportRuntimeContext struct {
+	tmux              registry.TmuxContext
+	multiplexer       registry.MultiplexerContext
+	processes         []processinfo.Process
+	defaultObservedAt time.Time
+}
+
+type listOptions struct {
+	harness, presence, activity, tmuxSession, multiplexerSession, sortBy string
+	summary, absoluteTime, absoluteSet, sortSet, desc, descSet, full     bool
+}
+
+type sessionCompareFunc func(registry.Session, registry.Session) int
 
 func (app *application) loadConfig() (config.Config, error) {
 	if app.cfgLoaded {
@@ -238,46 +287,6 @@ func (app *application) newRegistryPathCommand() *cobra.Command {
 		}
 		return app.writeln(app.resolvedStorePath())
 	}}
-}
-
-type reportOptions struct {
-	harness         string
-	presence        string
-	activity        string
-	lifecycle       string
-	sessionID       string
-	sessionPath     string
-	cwd             string
-	cwdAuto         bool
-	projectRoot     string
-	projectRootAuto bool
-	pid             int
-	ppid            int
-	processGroupID  int
-	startIdentity   string
-	executable      string
-	tty             string
-	event           string
-	observedAt      string
-	sequence        string
-	attributes      []string
-	rawStdin        bool
-	rawDefaultsOnly bool
-	noTmux          bool
-	quiet           bool
-	resumeCommand   []string
-	evidence        string
-}
-type preparedReport struct {
-	harness     registry.Harness
-	observation registry.Observation
-	ignored     bool
-}
-type reportRuntimeContext struct {
-	tmux              registry.TmuxContext
-	multiplexer       registry.MultiplexerContext
-	processes         []processinfo.Process
-	defaultObservedAt time.Time
 }
 
 func (app *application) newReportCommand() *cobra.Command {
@@ -792,12 +801,6 @@ func psProcessArgs(ctx context.Context, pid int) []string {
 	return strings.Fields(strings.TrimSpace(string(out)))
 }
 
-// list.
-type listOptions struct {
-	harness, presence, activity, tmuxSession, multiplexerSession, sortBy string
-	summary, absoluteTime, absoluteSet, sortSet, desc, descSet, full     bool
-}
-
 func (app *application) newListCommand() *cobra.Command {
 	o := listOptions{}
 	cmd := &cobra.Command{Use: listCommandName, Short: "Show known sessions", Args: cobra.NoArgs, RunE: func(c *cobra.Command, _ []string) error {
@@ -917,12 +920,15 @@ func (app *application) runListSessions(ctx context.Context, o listOptions) erro
 		return app.writeJSON(ss)
 	}
 	now := time.Now().UTC()
-	displayIDs := abbreviatedRegistryIDs(ss)
+	var displayIDs map[string]string
+	if !o.full {
+		displayIDs = abbreviatedRegistryIDs(ss)
+	}
 	rows := make([][]string, 0, len(ss))
 	for _, s := range ss {
-		id := displayIDs[s.ID]
-		if o.full {
-			id = s.ID
+		id := s.ID
+		if !o.full {
+			id = displayIDs[s.ID]
 		}
 		rows = append(rows, []string{
 			id, string(s.Harness), sessionDisplayLabel(s), string(s.Presence), listActivity(s),
@@ -1021,13 +1027,7 @@ func applyConfigFilter(sessions []registry.Session, filter config.FilterConfig, 
 	return result
 }
 
-func listTableColumns(rows [][]string, maxWidth int) []humanColumn {
-	const (
-		maxLocationColumnWidth = 24
-	)
-	if maxWidth <= 0 {
-		maxWidth = humanLineWidth
-	}
+func listColumnMetrics(rows [][]string) ([]string, []int) {
 	headings := []string{"ID", "Agent", "Session", "Presence", "Activity", "Location", "CWD", "Updated"}
 	maxLen := make([]int, len(headings))
 	for i, h := range headings {
@@ -1040,6 +1040,17 @@ func listTableColumns(rows [][]string, maxWidth int) []humanColumn {
 			}
 		}
 	}
+	return headings, maxLen
+}
+
+func listTableColumns(rows [][]string, maxWidth int) []humanColumn {
+	const (
+		maxLocationColumnWidth = 24
+	)
+	if maxWidth <= 0 {
+		maxWidth = humanLineWidth
+	}
+	headings, maxLen := listColumnMetrics(rows)
 
 	idWidth := maxLen[0]
 	agentWidth := maxLen[1]
@@ -1090,18 +1101,7 @@ func listFullTableColumns(rows [][]string, maxWidth int) ([]humanColumn, bool) {
 		sessionMinWidth = 24
 		cwdMinWidth     = 20
 	)
-	headings := []string{"ID", "Agent", "Session", "Presence", "Activity", "Location", "CWD", "Updated"}
-	maxLen := make([]int, len(headings))
-	for index, heading := range headings {
-		maxLen[index] = text.StringWidth(heading)
-	}
-	for _, row := range rows {
-		for index, cell := range row {
-			if index < len(maxLen) {
-				maxLen[index] = max(maxLen[index], text.StringWidth(cell))
-			}
-		}
-	}
+	headings, maxLen := listColumnMetrics(rows)
 	sessionNeeded := maxLen[2]
 	cwdNeeded := maxLen[6]
 	sessionWidth := min(sessionNeeded, max(len("Session"), sessionMinWidth))
@@ -1351,8 +1351,6 @@ func (app *application) writeSessionDetails(session registry.Session) error {
 	return app.writeHumanDetails(rows)
 }
 
-type sessionCompareFunc func(registry.Session, registry.Session) int
-
 func sortListSessions(ss []registry.Session, o listOptions) error {
 	key := normalizeListSort(o.sortBy)
 	cmp, e := listSortLess(key)
@@ -1370,7 +1368,7 @@ func sortListSessions(ss []registry.Session, o listOptions) error {
 }
 
 func listSortLess(k string) (sessionCompareFunc, error) {
-	if c, ok := map[string]sessionCompareFunc{"multiplexer": compareSessionMultiplexer, "tmux": compareSessionTmux, "updated": compareSessionUpdated, "presence-changed": func(a, b registry.Session) int { return compareTime(a.PresenceChangedAt, b.PresenceChangedAt) }, "activity-changed": func(a, b registry.Session) int { return compareTime(a.ActivityChangedAt, b.ActivityChangedAt) }, "created": compareSessionCreated, "harness": func(a, b registry.Session) int { return strings.Compare(string(a.Harness), string(b.Harness)) }, "presence": func(a, b registry.Session) int { return strings.Compare(string(a.Presence), string(b.Presence)) }, "activity": func(a, b registry.Session) int { return strings.Compare(appReportActivity(a), appReportActivity(b)) }, "cwd": func(a, b registry.Session) int { return strings.Compare(a.CWD, b.CWD) }, "id": func(a, b registry.Session) int { return strings.Compare(a.ID, b.ID) }}[k]; ok {
+	if c, ok := map[string]sessionCompareFunc{"multiplexer": compareSessionMultiplexer, "tmux": compareSessionTmux, "updated": compareSessionUpdated, "presence-changed": func(a, b registry.Session) int { return a.PresenceChangedAt.Compare(b.PresenceChangedAt) }, "activity-changed": func(a, b registry.Session) int { return a.ActivityChangedAt.Compare(b.ActivityChangedAt) }, "created": compareSessionCreated, "harness": func(a, b registry.Session) int { return strings.Compare(string(a.Harness), string(b.Harness)) }, "presence": func(a, b registry.Session) int { return strings.Compare(string(a.Presence), string(b.Presence)) }, "activity": func(a, b registry.Session) int { return strings.Compare(appReportActivity(a), appReportActivity(b)) }, "cwd": func(a, b registry.Session) int { return strings.Compare(a.CWD, b.CWD) }, "id": func(a, b registry.Session) int { return strings.Compare(a.ID, b.ID) }}[k]; ok {
 		return c, nil
 	}
 	return nil, fmt.Errorf("%w: %q", errInvalidListSort, k)
@@ -1410,13 +1408,9 @@ func compareSessionTmux(a, b registry.Session) int {
 	return strings.Compare(a.ID, b.ID)
 }
 
-func compareSessionUpdated(a, b registry.Session) int { return compareTime(a.UpdatedAt, b.UpdatedAt) }
+func compareSessionUpdated(a, b registry.Session) int { return a.UpdatedAt.Compare(b.UpdatedAt) }
 
-func compareSessionCreated(a, b registry.Session) int { return compareTime(a.CreatedAt, b.CreatedAt) }
-
-func compareTime(a, b time.Time) int {
-	return a.Compare(b)
-}
+func compareSessionCreated(a, b registry.Session) int { return a.CreatedAt.Compare(b.CreatedAt) }
 
 func firstEnv(names ...string) string {
 	for _, n := range names {
@@ -1470,19 +1464,9 @@ func readStdinPayloadData(stdin io.Reader, storeRaw, defaultsOnly bool) (json.Ra
 	if err != nil {
 		return nil, nil, fmt.Errorf("read stdin payload: %w", err)
 	}
-	d = []byte(strings.TrimSpace(string(d)))
-	if len(d) == 0 {
-		return nil, nil, nil
-	}
-	var p json.RawMessage
-	if json.Valid(d) {
-		p = json.RawMessage(d)
-	} else {
-		encoded, err := json.Marshal(string(d))
-		if err != nil {
-			return nil, nil, fmt.Errorf("encode stdin payload: %w", err)
-		}
-		p = encoded
+	p, err := normalizeRawPayloadBytes(d)
+	if err != nil {
+		return nil, nil, fmt.Errorf("encode stdin payload: %w", err)
 	}
 	if storeRaw {
 		return p, p, nil

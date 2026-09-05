@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 )
 
 const (
@@ -69,4 +70,19 @@ func readPayloadInputWithLimit(reader io.Reader, limit int, limitErr error) ([]b
 		return nil, limitErr
 	}
 	return data, nil
+}
+
+func normalizeRawPayloadBytes(data []byte) (json.RawMessage, error) {
+	data = []byte(strings.TrimSpace(string(data)))
+	if len(data) == 0 {
+		return nil, nil
+	}
+	if json.Valid(data) {
+		return json.RawMessage(data), nil
+	}
+	wrapped, err := json.Marshal(string(data))
+	if err != nil {
+		return nil, fmt.Errorf("encode raw payload: %w", err)
+	}
+	return json.RawMessage(wrapped), nil
 }

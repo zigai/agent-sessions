@@ -114,18 +114,10 @@ func TestFilesystemWatchPreservesRequestedFilter(t *testing.T) {
 	}
 	var stdout bytes.Buffer
 	app := &application{storePath: path, stdout: &stdout}
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	ready := make(chan struct{})
-	done := make(chan error, 1)
-	go func() {
-		done <- app.runFilesystemWatch(ctx, watchOptions{filter: registry.Filter{Harness: registry.HarnessCodex}, format: watchFormatJSON, ready: ready, now: time.Now})
-	}()
-	<-ready
-	cancel()
-	if err := <-done; err != nil {
-		t.Fatal(err)
-	}
+	watcher := startTestWatch(t, func(ctx context.Context, ready chan struct{}) error {
+		return app.runFilesystemWatch(ctx, watchOptions{filter: registry.Filter{Harness: registry.HarnessCodex}, format: watchFormatJSON, ready: ready, now: time.Now})
+	})
+	watcher.stop(t)
 	var event watchEvent
 	if err := json.Unmarshal(bytes.TrimSpace(stdout.Bytes()), &event); err != nil || event.Harness != registry.HarnessCodex {
 		t.Fatalf("filtered snapshot = %q, %v", stdout.String(), err)
@@ -133,6 +125,7 @@ func TestFilesystemWatchPreservesRequestedFilter(t *testing.T) {
 }
 
 func TestListColumnsPreservePrimaryValuesAndUseCellWidths(t *testing.T) {
+	//nolint:gosmopolitan // Test fixture intentionally uses multibyte CJK characters to verify cell width calculations.
 	row := []string{"kimi-code:123456789abcdef", "kimi-code", "session", "live", "interrupted", "location", "日本語", "now"}
 	columns := listTableColumns([][]string{row}, 200)
 	for _, index := range []int{0, 1, 3, 4, 6} {

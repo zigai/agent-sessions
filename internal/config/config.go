@@ -50,6 +50,28 @@ var (
 	ErrUnmarshalConfig     = errors.New("failed to unmarshal configuration")
 	ErrAccessConfig        = errors.New("failed to access config file")
 	ErrInvalidDuration     = errors.New("invalid duration")
+
+	validSortKeys = map[string]string{
+		"updated":             "updated",
+		"time":                "updated",
+		"updated-at":          "updated",
+		"created":             "created",
+		"harness":             "harness",
+		"agent":               "harness",
+		"presence":            "presence",
+		"activity":            "activity",
+		"cwd":                 "cwd",
+		"id":                  "id",
+		"multiplexer":         "multiplexer",
+		"mux":                 "multiplexer",
+		"tmux":                "tmux",
+		"presence-changed":    "presence-changed",
+		"presence-changed-at": "presence-changed",
+		"presence-since":      "presence-changed",
+		"activity-changed":    "activity-changed",
+		"activity-changed-at": "activity-changed",
+		"activity-since":      "activity-changed",
+	}
 )
 
 type Config struct {
@@ -227,28 +249,6 @@ func ParseDuration(s string) (time.Duration, error) {
 	return d, nil
 }
 
-var validSortKeys = map[string]string{
-	"updated":             "updated",
-	"time":                "updated",
-	"updated-at":          "updated",
-	"created":             "created",
-	"harness":             "harness",
-	"agent":               "harness",
-	"presence":            "presence",
-	"activity":            "activity",
-	"cwd":                 "cwd",
-	"id":                  "id",
-	"multiplexer":         "multiplexer",
-	"mux":                 "multiplexer",
-	"tmux":                "tmux",
-	"presence-changed":    "presence-changed",
-	"presence-changed-at": "presence-changed",
-	"presence-since":      "presence-changed",
-	"activity-changed":    "activity-changed",
-	"activity-changed-at": "activity-changed",
-	"activity-since":      "activity-changed",
-}
-
 // NormalizeSort validates and normalizes sort key names.
 func NormalizeSort(s string) (string, error) {
 	norm := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(s), "_", "-"))
@@ -340,7 +340,7 @@ func Load(path string) (Config, string, error) {
 	k := koanf.New(".")
 
 	// Layer 1: Base defaults
-	if err := k.Load(structs.Provider(defaultConfig(), "koanf"), nil); err != nil {
+	if err := k.Load(structs.Provider(Config{}, "koanf"), nil); err != nil {
 		return Config{}, resolvedPath, fmt.Errorf("%w: %w", ErrLoadDefaults, err)
 	}
 
@@ -405,10 +405,6 @@ func normalizeConfig(cfg Config) (Config, error) {
 	}
 
 	return cfg, nil
-}
-
-func defaultConfig() Config {
-	return Config{}
 }
 
 func envTransform(k, v string) (string, any) {

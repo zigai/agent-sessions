@@ -21,18 +21,16 @@ import (
 	"github.com/zigai/aht/pkg/registry"
 )
 
-type doctorStatus string
-
 const (
 	doctorOK      doctorStatus = "ok"
 	doctorWarning doctorStatus = "warning"
 	doctorError   doctorStatus = "error"
-)
 
-const (
 	doctorCheckCapacity    = 10
 	serviceDefaultInterval = 300 * time.Millisecond
 )
+
+type doctorStatus string
 
 type doctorCheck struct {
 	Name    string       `json:"name"`
@@ -55,6 +53,11 @@ type doctorResult struct {
 	OK           bool               `json:"ok"`
 	Checks       []doctorCheck      `json:"checks"`
 	Capabilities []doctorCapability `json:"capabilities"`
+}
+
+type observerHealth struct {
+	LastSuccessAt        time.Time `json:"last_success_at"`
+	LastEnumerationError string    `json:"last_enumeration_error"`
 }
 
 func (app *application) newDoctorCommand() *cobra.Command {
@@ -202,11 +205,6 @@ func (app *application) doctorServiceStatus(ctx context.Context) (service.Result
 		return result, fmt.Errorf("tracker status: %w", err)
 	}
 	return result, nil
-}
-
-type observerHealth struct {
-	LastSuccessAt        time.Time `json:"last_success_at"`
-	LastEnumerationError string    `json:"last_enumeration_error"`
 }
 
 func (result *doctorResult) addObserverReconciliationCheck(storePath string) {

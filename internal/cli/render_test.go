@@ -151,13 +151,15 @@ func TestHumanTablesFallbackPreservesCompleteValues(t *testing.T) {
 	t.Parallel()
 	var output bytes.Buffer
 	app := &application{stdout: &output}
-	value := strings.Repeat("界", 90)
+	//nolint:gosmopolitan // Test fixture intentionally uses multibyte CJK characters to verify wrapped table formatting.
+	cjkChar := "界"
+	value := strings.Repeat(cjkChar, 90)
 	columns := []humanColumn{{heading: "identity", width: 100}, {heading: "reason", width: 100}}
 	if err := app.writeWrappedHumanTable(columns, [][]string{{"target-id", value}}); err != nil {
 		t.Fatal(err)
 	}
 	got := output.String()
-	if strings.Contains(got, "…") || !strings.Contains(got, "identity:") || strings.Count(got, "界") != 90 {
+	if strings.Contains(got, "…") || !strings.Contains(got, "identity:") || strings.Count(got, cjkChar) != 90 {
 		t.Fatalf("stacked fallback lost data: %q", got)
 	}
 	assertHumanLinesBounded(t, got)
@@ -165,6 +167,7 @@ func TestHumanTablesFallbackPreservesCompleteValues(t *testing.T) {
 
 func TestHumanWrappingUsesDisplayCells(t *testing.T) {
 	t.Parallel()
+	//nolint:gosmopolitan // Test table intentionally includes multibyte CJK fixtures to verify cell width wrapping.
 	for _, value := range []string{"界世界世界世", "ab界cd界ef", "é/é/界/世界", "📦/🌍/directory"} {
 		for _, width := range []int{2, 3, 5, 8} {
 			got := truncateHumanText(value, width)
