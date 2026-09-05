@@ -10,10 +10,9 @@ import (
 )
 
 func BenchmarkPrepareReport(b *testing.B) {
-	app := &application{}
 	options := reportOptions{harness: "codex", sessionID: "benchmark", event: "turn_start", activity: "running"}
 	for b.Loop() {
-		if _, err := app.prepareReport(nil, options, reportRuntimeContext{defaultObservedAt: time.Now().UTC()}); err != nil {
+		if _, err := prepareReport(nil, options, reportRuntimeContext{defaultObservedAt: time.Now().UTC()}); err != nil {
 			b.Fatal(err)
 		}
 	}

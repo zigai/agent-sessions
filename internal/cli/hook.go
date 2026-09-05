@@ -81,7 +81,11 @@ func (app *application) runManagedHook(
 	return app.writeJSON(result.Response)
 }
 
-func reportManagedHook(ctx context.Context, store registry.Store, result harness.HookResult) error {
+type observationSink interface {
+	Observe(context.Context, registry.Observation) (registry.Session, error)
+}
+
+func reportManagedHook(ctx context.Context, store observationSink, result harness.HookResult) error {
 	if !result.ReportOK {
 		return nil
 	}

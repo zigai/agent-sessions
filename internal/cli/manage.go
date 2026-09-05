@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jedib0t/go-pretty/v6/text"
 	"github.com/spf13/cobra"
 
 	harnesspkg "github.com/zigai/aht/internal/harness/catalog"
@@ -118,7 +119,7 @@ func (defaultSessionStopSignaler) SendProcessInterrupt(pid int) error {
 
 func (app *application) newRegistryResetCommand() *cobra.Command {
 	force := false
-	command := &cobra.Command{Use: "reset", Short: "Reset stored session state", RunE: func(cmd *cobra.Command, _ []string) error {
+	command := &cobra.Command{Use: "reset", Short: "Reset stored session state", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
 		if !force {
 			return errStateResetForce
 		}
@@ -169,7 +170,7 @@ func (app *application) runStop(ctx context.Context, args []string, all bool, dr
 	if err != nil {
 		return err
 	}
-	result, err := app.runManageStopSessions(ctx, sessions, manageStopAllOptions{dryRun: dryRun})
+	result, err := runManageStopSessions(ctx, sessions, manageStopAllOptions{dryRun: dryRun})
 	if writeErr := app.writeManageStopAllResult(result); writeErr != nil {
 		return writeErr
 	}
@@ -184,6 +185,10 @@ func (app *application) runStop(ctx context.Context, args []string, all bool, dr
 }
 
 func (app *application) confirmStopAll(in io.Reader) (bool, error) {
+	return app.confirmAction(in, "Stop all live sessions? [y/N]: ")
+}
+
+func (app *application) confirmAction(in io.Reader, prompt string) (bool, error) {
 	if in == nil {
 		in = os.Stdin
 	}
@@ -191,7 +196,7 @@ func (app *application) confirmStopAll(in io.Reader) (bool, error) {
 	if out == nil {
 		out = io.Discard
 	}
-	if _, err := fmt.Fprint(out, "Stop all live sessions? [y/N]: "); err != nil {
+	if _, err := fmt.Fprint(out, prompt); err != nil {
 		return false, fmt.Errorf("writing confirmation prompt: %w", err)
 	}
 	reader := bufio.NewReader(in)
@@ -203,7 +208,7 @@ func (app *application) confirmStopAll(in io.Reader) (bool, error) {
 	return ans == "y" || ans == "yes", nil
 }
 
-func (app *application) runManageStopSessions(ctx context.Context, ss []registry.Session, o manageStopAllOptions) (manageStopAllResult, error) {
+func runManageStopSessions(ctx context.Context, ss []registry.Session, o manageStopAllOptions) (manageStopAllResult, error) {
 	if o.signaler == nil {
 		o.signaler = defaultSessionStopSignaler{}
 	}
@@ -380,15 +385,18 @@ func (app *application) writeManageStopAllResult(r manageStopAllResult) error {
 		return app.writeJSON(r)
 	}
 	rows := make([][]string, 0, len(r.Results))
+	idWidth, targetWidth := stopIDWidth, stopTargetWidth
 	for _, result := range r.Results {
+		idWidth = max(idWidth, text.StringWidth(result.ID))
+		targetWidth = max(targetWidth, text.StringWidth(result.Target))
 		detail := result.Reason
 		if result.Error != "" {
 			detail = result.Error
 		}
 		rows = append(rows, []string{result.ID, string(result.Harness), string(result.Presence), activityString(result.Activity), result.Status, result.Method, result.Target, detail})
 	}
-	if err := app.writeHumanTable(
-		[]humanColumn{{heading: "ID", width: stopIDWidth}, {heading: "Agent", width: stopAgentWidth}, {heading: "Presence", width: stopPresenceWidth}, {heading: "Activity", width: stopActivityWidth}, {heading: "Status", width: stopStatusWidth}, {heading: "Method", width: stopMethodWidth}, {heading: "Target", width: stopTargetWidth}, {heading: "Detail", width: stopDetailWidth}},
+	if err := app.writeWrappedHumanTable(
+		[]humanColumn{{heading: "ID", width: idWidth, wrap: wrapHumanIdentifier}, {heading: "Agent", width: stopAgentWidth}, {heading: "Presence", width: stopPresenceWidth}, {heading: "Activity", width: stopActivityWidth}, {heading: "Status", width: stopStatusWidth}, {heading: "Method", width: stopMethodWidth}, {heading: "Target", width: targetWidth, wrap: wrapHumanIdentifier}, {heading: "Detail", width: stopDetailWidth}},
 		rows,
 	); err != nil {
 		return err

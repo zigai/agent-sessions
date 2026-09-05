@@ -87,6 +87,10 @@ func TestBuiltBinaryTrackingWorkflow(t *testing.T) {
 		"--cwd", maliciousCWD,
 		"--raw-stdin-defaults-only",
 		"--no-tmux",
+		// Do not bind this synthetic observation to an actual coding-agent
+		// ancestor running the test: its process CWD legitimately wins over
+		// catalog metadata. Init has no coding-agent ancestor on supported hosts.
+		"--pid", "1",
 	)
 	transcript.Write(reportOutput)
 	var reported registry.Session
@@ -324,7 +328,6 @@ func receiveSessionWatchEvent(t *testing.T, process *runningTestCommand, results
 		}
 	}
 }
-
 
 func runSystemTestCommand(t *testing.T, binary string, directory string, environment []string, stdin io.Reader, args ...string) []byte {
 	t.Helper()

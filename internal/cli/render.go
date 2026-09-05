@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strings"
 	"unicode"
-	"unicode/utf8"
 
 	prettytable "github.com/jedib0t/go-pretty/v6/table"
 	"github.com/jedib0t/go-pretty/v6/text"
@@ -28,6 +27,7 @@ type humanColumn struct {
 	heading string
 	width   int
 	wrap    humanWrapFunc
+	align   text.Align
 }
 
 type humanDetail struct {
@@ -45,8 +45,21 @@ func (app *application) writeWrappedHumanTable(columns []humanColumn, rows [][]s
 }
 
 func (app *application) writeHumanTableRows(columns []humanColumn, rows [][]string, wrap bool) error {
+	for _, row := range rows {
+		if len(row) != len(columns) {
+			return fmt.Errorf("%w: got %d cells for %d columns", errHumanTableCellCount, len(row), len(columns))
+		}
+	}
+	if len(rows) == 0 {
+		return app.writeln("No results.")
+	}
 	if err := validateHumanColumns(columns, app.maxLineWidth()); err != nil {
-		return err
+		for _, column := range columns {
+			if column.width <= 0 {
+				return err
+			}
+		}
+		return app.writeStackedHumanRows(columns, rows)
 	}
 	writer := prettytable.NewWriter()
 	style := prettytable.StyleDefault
@@ -54,35 +67,21 @@ func (app *application) writeHumanTableRows(columns []humanColumn, rows [][]stri
 	style.Box.PaddingRight = "  "
 	style.Format.Header = text.FormatDefault
 	style.Options = prettytable.OptionsNoBordersAndSeparators
+	style.Options.SeparateHeader = true
+	style.Box.MiddleHorizontal = "─"
+	style.Box.MiddleSeparator = "─"
 	writer.SetStyle(style)
 
 	header := make(prettytable.Row, len(columns))
 	colConfigs := make([]prettytable.ColumnConfig, len(columns))
 	for i, col := range columns {
 		header[i] = col.heading
-		colConfigs[i] = prettytable.ColumnConfig{
-			Number:   i + 1,
-			WidthMax: col.width,
-		}
-		if wrap {
-			wrapCell := col.wrap
-			if wrapCell == nil {
-				wrapCell = wrapHumanText
-			}
-			colConfigs[i].WidthMaxEnforcer = func(value string, maxLen int) string {
-				return strings.Join(wrapCell(value, maxLen), "\n")
-			}
-		} else {
-			colConfigs[i].WidthMaxEnforcer = truncateHumanText
-		}
+		colConfigs[i] = col.tableConfig(i+1, wrap)
 	}
 	writer.SetColumnConfigs(colConfigs)
 	writer.AppendHeader(header)
 
 	for _, row := range rows {
-		if len(row) != len(columns) {
-			return fmt.Errorf("%w: got %d cells for %d columns", errHumanTableCellCount, len(row), len(columns))
-		}
 		tableRow := make(prettytable.Row, len(row))
 		for i, cell := range row {
 			tableRow[i] = sanitizeHumanText(cell)
@@ -95,17 +94,55 @@ func (app *application) writeHumanTableRows(columns []humanColumn, rows [][]stri
 	if rendered == "" {
 		return nil
 	}
-	lines := strings.Split(rendered, "\n")
-	for i, line := range lines {
-		lines[i] = strings.TrimRight(line, " ")
-	}
-	if _, err := fmt.Fprintln(app.stdout, strings.Join(lines, "\n")); err != nil {
+	if _, err := fmt.Fprintln(app.stdout, normalizeHumanTableLayout(rendered)); err != nil {
 		return fmt.Errorf("write human table: %w", err)
 	}
 	return nil
 }
 
+func normalizeHumanTableLayout(rendered string) string {
+	lines := strings.Split(rendered, "\n")
+	contentWidth := 0
+	separatorIndex := -1
+	for i, line := range lines {
+		lines[i] = strings.TrimRight(line, " ")
+		if separatorIndex == -1 && strings.Trim(line, "─") == "" {
+			separatorIndex = i
+			continue
+		}
+		contentWidth = max(contentWidth, text.StringWidth(lines[i]))
+	}
+	if separatorIndex >= 0 {
+		lines[separatorIndex] = strings.Repeat("─", contentWidth)
+	}
+	return strings.Join(lines, "\n")
+}
+
+func (col humanColumn) tableConfig(number int, wrap bool) prettytable.ColumnConfig {
+	config := prettytable.ColumnConfig{
+		Number:           number,
+		WidthMax:         col.width,
+		Align:            col.align,
+		AlignHeader:      col.align,
+		WidthMaxEnforcer: truncateHumanText,
+	}
+	if !wrap {
+		return config
+	}
+	wrapCell := col.wrap
+	if wrapCell == nil {
+		wrapCell = wrapHumanText
+	}
+	config.WidthMaxEnforcer = func(value string, maxLen int) string {
+		return strings.Join(wrapCell(value, maxLen), "\n")
+	}
+	return config
+}
+
 func (app *application) writeStackedHumanRows(columns []humanColumn, rows [][]string) error {
+	if len(rows) == 0 {
+		return app.writeln("No results.")
+	}
 	for rowIndex, row := range rows {
 		if len(row) != len(columns) {
 			return fmt.Errorf("%w: got %d cells for %d columns", errHumanTableCellCount, len(row), len(columns))
@@ -159,7 +196,7 @@ func validateHumanColumns(columns []humanColumn, maxLineWidth int) error {
 func (app *application) writeHumanDetails(details []humanDetail) error {
 	labelWidth := 0
 	for _, detail := range details {
-		labelWidth = max(labelWidth, utf8.RuneCountInString(detail.label)+1)
+		labelWidth = max(labelWidth, text.StringWidth(sanitizeHumanText(detail.label))+1)
 	}
 	maxWidth := app.maxLineWidth()
 	labelWidth = min(labelWidth, humanDetailLabelMax, max(1, maxWidth-humanColumnGap-1))
@@ -173,7 +210,8 @@ func (app *application) writeHumanDetails(details []humanDetail) error {
 		lines := wrapValue(detail.value, valueWidth)
 		for index, line := range lines {
 			if index == 0 {
-				if _, err := fmt.Fprintf(app.stdout, "%-*s  %s\n", labelWidth, label, line); err != nil {
+				padding := strings.Repeat(" ", max(0, labelWidth-text.StringWidth(label)))
+				if _, err := fmt.Fprintf(app.stdout, "%s%s  %s\n", label, padding, line); err != nil {
 					return fmt.Errorf("write human details: %w", err)
 				}
 				continue
@@ -208,7 +246,10 @@ func isBidiControl(character rune) bool {
 
 func truncateHumanText(value string, width int) string {
 	value = sanitizeHumanText(value)
-	if utf8.RuneCountInString(value) <= width {
+	if width <= 0 {
+		return ""
+	}
+	if text.StringWidth(value) <= width {
 		return value
 	}
 	if width <= 1 {
@@ -222,18 +263,7 @@ func wrapHumanText(value string, width int) []string {
 	if value == "" {
 		return []string{"-"}
 	}
-	wrapped := text.WrapSoft(value, width)
-	lines := strings.Split(wrapped, "\n")
-	result := make([]string, 0, len(lines))
-	for _, line := range lines {
-		if trimmed := strings.TrimSpace(line); trimmed != "" {
-			result = append(result, trimmed)
-		}
-	}
-	if len(result) == 0 {
-		return []string{"-"}
-	}
-	return result
+	return wrapDelimitedHumanText(value, width, " ")
 }
 
 func wrapHumanPath(value string, width int) []string {
@@ -257,25 +287,28 @@ func wrapDelimitedHumanText(value string, width int, delimiters string) []string
 		return []string{"-"}
 	}
 	var lines []string
-	for utf8.RuneCountInString(value) > width {
-		runes := []rune(value)
-		cut := width
-		for index := width; index > 0; index-- {
-			switch {
-			case runes[index-1] == ' ':
-				cut = index - 1
-			case strings.ContainsRune(delimiters, runes[index-1]):
-				cut = index
-			default:
-				continue
+	width = max(1, width)
+	for text.StringWidth(value) > width {
+		cut, delimiterCut := 0, 0
+		for index, character := range value {
+			end := index + len(string(character))
+			if text.StringWidth(value[:end]) > width {
+				// A single wide glyph cannot fit a one-cell viewport; preserve it.
+				if cut == 0 {
+					cut = end
+				}
+				break
 			}
-			break
+			cut = end
+			if character == ' ' || strings.ContainsRune(delimiters, character) {
+				delimiterCut = end
+			}
 		}
-		if cut == 0 {
-			cut = width
+		if delimiterCut > 0 {
+			cut = delimiterCut
 		}
-		lines = append(lines, strings.TrimSpace(string(runes[:cut])))
-		value = strings.TrimSpace(string(runes[cut:]))
+		lines = append(lines, strings.TrimSpace(value[:cut]))
+		value = strings.TrimSpace(value[cut:])
 	}
 	if value != "" {
 		lines = append(lines, value)

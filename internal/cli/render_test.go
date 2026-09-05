@@ -5,7 +5,8 @@ import (
 	"strings"
 	"testing"
 	"unicode"
-	"unicode/utf8"
+
+	"github.com/jedib0t/go-pretty/v6/text"
 )
 
 func TestHumanRenderersBoundEveryLine(t *testing.T) {
@@ -102,16 +103,90 @@ func TestGoPrettyStyleRendering(t *testing.T) {
 		t.Fatal(err)
 	}
 	output := out.String()
-	if strings.Contains(output, "─") || strings.Contains(output, "---") {
-		t.Fatalf("borderless table contains border characters: %q", output)
+	lines := strings.Split(strings.TrimSpace(output), "\n")
+	if len(lines) != 4 || lines[1] == "" || strings.Trim(lines[1], "─") != "" {
+		t.Fatalf("table lacks a continuous thin header rule: %q", output)
+	}
+	if strings.ContainsAny(output, "│+|") {
+		t.Fatalf("table contains vertical borders: %q", output)
 	}
 }
 
 func assertHumanLinesBounded(t *testing.T, output string) {
 	t.Helper()
 	for number, line := range strings.Split(strings.TrimSuffix(output, "\n"), "\n") {
-		if width := utf8.RuneCountInString(line); width > humanLineWidth {
+		if width := text.StringWidth(line); width > humanLineWidth {
 			t.Fatalf("line %d width = %d, want <= %d: %q", number+1, width, humanLineWidth, line)
+		}
+	}
+}
+
+func TestHumanTablesRenderEmptyState(t *testing.T) {
+	t.Parallel()
+	var output bytes.Buffer
+	app := &application{stdout: &output}
+	if err := app.writeHumanTable([]humanColumn{{heading: "ID", width: 12}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := output.String(); got != "No results.\n" {
+		t.Fatalf("empty output = %q", got)
+	}
+}
+
+func TestHumanTablesAlignNumericColumns(t *testing.T) {
+	t.Parallel()
+	var output bytes.Buffer
+	app := &application{stdout: &output}
+	columns := []humanColumn{{heading: "name", width: 10}, {heading: "count", width: 8, align: text.AlignRight}}
+	if err := app.writeHumanTable(columns, [][]string{{"small", "1"}, {"large", "200"}}); err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSuffix(output.String(), "\n"), "\n")
+	if text.StringWidth(lines[2]) != text.StringWidth(lines[3]) {
+		t.Fatalf("numeric column is not right aligned: %q", output.String())
+	}
+}
+
+func TestHumanTablesFallbackPreservesCompleteValues(t *testing.T) {
+	t.Parallel()
+	var output bytes.Buffer
+	app := &application{stdout: &output}
+	value := strings.Repeat("界", 90)
+	columns := []humanColumn{{heading: "identity", width: 100}, {heading: "reason", width: 100}}
+	if err := app.writeWrappedHumanTable(columns, [][]string{{"target-id", value}}); err != nil {
+		t.Fatal(err)
+	}
+	got := output.String()
+	if strings.Contains(got, "…") || !strings.Contains(got, "identity:") || strings.Count(got, "界") != 90 {
+		t.Fatalf("stacked fallback lost data: %q", got)
+	}
+	assertHumanLinesBounded(t, got)
+}
+
+func TestHumanWrappingUsesDisplayCells(t *testing.T) {
+	t.Parallel()
+	for _, value := range []string{"界世界世界世", "ab界cd界ef", "é/é/界/世界", "📦/🌍/directory"} {
+		for _, width := range []int{2, 3, 5, 8} {
+			got := truncateHumanText(value, width)
+			if text.StringWidth(got) > width {
+				t.Fatalf("truncate(%q, %d) = %q", value, width, got)
+			}
+			for _, wrap := range []humanWrapFunc{wrapHumanText, wrapHumanPath, wrapHumanIdentifier} {
+				assertHumanWrapPreservesCells(t, value, width, wrap)
+			}
+		}
+	}
+}
+
+func assertHumanWrapPreservesCells(t *testing.T, value string, width int, wrap humanWrapFunc) {
+	t.Helper()
+	lines := wrap(value, width)
+	if strings.Join(lines, "") != value {
+		t.Fatalf("wrap(%q, %d) lost data: %q", value, width, lines)
+	}
+	for _, line := range lines {
+		if text.StringWidth(line) > width {
+			t.Fatalf("wrap(%q, %d) contains over-wide line %q", value, width, line)
 		}
 	}
 }

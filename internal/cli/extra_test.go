@@ -5,7 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -17,6 +19,33 @@ import (
 )
 
 var errTestPaneList = errors.New("pane inventory unavailable")
+
+type failingGoneCollector struct {
+	err error
+}
+
+func (f failingGoneCollector) GC(context.Context, time.Duration) (registry.GCResult, error) {
+	return registry.GCResult{}, f.err
+}
+
+func TestObserverReportsAutoCleanFailures(t *testing.T) {
+	for _, once := range []bool{false, true} {
+		t.Run(strconv.FormatBool(once), func(t *testing.T) {
+			var stdout bytes.Buffer
+			app := &application{stdout: &stdout}
+			watcher := observer.New(observer.Options{
+				Store:       registry.NewFileStore(filepath.Join(t.TempDir(), "sessions.json")),
+				ProcessList: func(context.Context) ([]processinfo.Process, error) { return nil, nil },
+				PaneList:    func(context.Context) ([]mux.Pane, error) { return nil, nil },
+				CatalogList: func(context.Context) ([]observer.CatalogEntry, error) { return nil, nil },
+			})
+			err := app.runObserver(t.Context(), observeOptions{once: once, autoClean: true, store: failingGoneCollector{err: os.ErrPermission}}, watcher)
+			if !errors.Is(err, os.ErrPermission) || stdout.Len() != 0 {
+				t.Fatalf("cleanup failure = %v, output = %q", err, stdout.String())
+			}
+		})
+	}
+}
 
 func TestQuietLongRunningObserverStreamsRequestedJSONLines(t *testing.T) {
 	t.Parallel()

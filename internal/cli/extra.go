@@ -23,7 +23,11 @@ type observeOptions struct {
 	grace      time.Duration
 	autoClean  bool
 	maxGoneAge time.Duration
-	store      registry.Store
+	store      goneCollector
+}
+
+type goneCollector interface {
+	GC(context.Context, time.Duration) (registry.GCResult, error)
 }
 
 const (
@@ -38,6 +42,7 @@ func (app *application) newTrackerRunCommand() *cobra.Command {
 	command := &cobra.Command{
 		Use:   "run",
 		Short: "Observe agent processes and native sessions",
+		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cfg, err := app.loadConfig()
 			if err != nil {
@@ -54,12 +59,13 @@ func (app *application) newTrackerRunCommand() *cobra.Command {
 			}
 			if o.once {
 				watcher := observer.New(observer.Options{
-					StorePath:          app.resolvedStorePath(),
-					Interval:           o.interval,
-					GracePeriod:        o.grace,
-					HealthPath:         app.resolvedStorePath() + ".observer-health.json",
-					Quiet:              o.quiet,
-					DetectionConfigDir: cfg.Detection.ManifestsDir,
+					StorePath:               app.resolvedStorePath(),
+					Interval:                o.interval,
+					GracePeriod:             o.grace,
+					HealthPath:              app.resolvedStorePath() + ".observer-health.json",
+					Quiet:                   o.quiet,
+					DetectionConfigDir:      cfg.Detection.ManifestsDir,
+					DisableScreenInspection: cfg.Detection.ScreenInspection != nil && !*cfg.Detection.ScreenInspection,
 				})
 				o.store = app.store()
 				return app.runObserver(cmd.Context(), o, watcher)
@@ -70,13 +76,14 @@ func (app *application) newTrackerRunCommand() *cobra.Command {
 				return fmt.Errorf("opening in-memory registry: %w", err)
 			}
 			watcher := observer.New(observer.Options{
-				Store:              store,
-				StorePath:          store.Path(),
-				Interval:           o.interval,
-				GracePeriod:        o.grace,
-				HealthPath:         store.Path() + ".observer-health.json",
-				Quiet:              o.quiet,
-				DetectionConfigDir: cfg.Detection.ManifestsDir,
+				Store:                   store,
+				StorePath:               store.Path(),
+				Interval:                o.interval,
+				GracePeriod:             o.grace,
+				HealthPath:              store.Path() + ".observer-health.json",
+				Quiet:                   o.quiet,
+				DetectionConfigDir:      cfg.Detection.ManifestsDir,
+				DisableScreenInspection: cfg.Detection.ScreenInspection != nil && !*cfg.Detection.ScreenInspection,
 			})
 			server := brokerserver.New(brokerserver.Options{
 				Store:      store,
@@ -191,7 +198,9 @@ func (app *application) runObserver(ctx context.Context, options observeOptions,
 	}
 	handle := func(result observer.Result) error {
 		if options.autoClean {
-			_, _ = store.GC(ctx, options.maxGoneAge)
+			if _, err := store.GC(ctx, options.maxGoneAge); err != nil {
+				return fmt.Errorf("clean gone sessions: %w", err)
+			}
 		}
 		if app.outputJSON {
 			return app.writeJSONLine(result)
@@ -223,7 +232,9 @@ func (app *application) runObserverOnce(ctx context.Context, options observeOpti
 		if store == nil {
 			store = app.store()
 		}
-		_, _ = store.GC(ctx, options.maxGoneAge)
+		if _, err := store.GC(ctx, options.maxGoneAge); err != nil {
+			return fmt.Errorf("clean gone sessions: %w", err)
+		}
 	}
 	var writeErr error
 	if app.outputJSON {
@@ -299,4 +310,17 @@ func (app *application) parseServiceOptions(options serviceOptions) (service.Opt
 		return service.Options{}, errInvalidObserveGracePeriod
 	}
 	return service.Options{Binary: options.binary, StorePath: app.resolvedStorePath(), Interval: options.interval, GracePeriod: options.grace, DryRun: options.dryRun}, nil
+}
+
+func (app *application) configuredServiceOptions(cmd *cobra.Command, options serviceOptions) (service.Options, error) {
+	cfg, err := app.loadConfig()
+	if err != nil {
+		return service.Options{}, err
+	}
+	intervals := observeOptions{interval: options.interval, grace: options.grace}
+	if err := applyTrackerIntervals(&intervals, cmd, cfg); err != nil {
+		return service.Options{}, err
+	}
+	options.interval, options.grace = intervals.interval, intervals.grace
+	return app.parseServiceOptions(options)
 }

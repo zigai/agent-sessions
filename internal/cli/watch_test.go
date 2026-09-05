@@ -290,13 +290,13 @@ func TestFormatWatchTableAlignsColumns(t *testing.T) {
 	assertHumanLinesBounded(t, header)
 
 	// Columns start at fixed character offsets:
-	// time (0), action (22), harness (42), presence (54), activity (64), label (74)
+	// time (0), action (22), harness (42), presence (54), activity (64), label (77)
 	const (
 		actionOffset   = 22
 		harnessOffset  = 42
 		presenceOffset = 54
 		activityOffset = 64
-		labelOffset    = 74
+		labelOffset    = 77
 	)
 
 	for name, row := range map[string]struct {

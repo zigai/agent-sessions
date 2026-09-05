@@ -34,7 +34,7 @@ func TestDoctorHandlesInvalidDetectionManifests(t *testing.T) {
 				t.Fatal(err)
 			}
 			result := doctorResult{OK: true, Checks: nil, Capabilities: nil}
-			(&application{}).addDetectionManifestCheck(&result)
+			result.addDetectionManifestCheck()
 			if len(result.Checks) != 1 || result.Checks[0].Name != "detection.manifests" || result.Checks[0].Status != test.want {
 				t.Fatalf("detection doctor check = %#v, want status %q", result.Checks, test.want)
 			}

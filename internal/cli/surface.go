@@ -30,6 +30,7 @@ var (
 	errInfoConfig            = errors.New("--config-dir requires --explain")
 	errStopSelection         = errors.New("provide one or more sessions, or --all")
 	errStopAllConfirmation   = errors.New("stopping all sessions was not confirmed (pass -y to confirm)")
+	errCleanAllConfirmation  = errors.New("cleaning all gone sessions was not confirmed (pass -y to confirm)")
 	errIntegrationStatusFail = errors.New("one or more integrations could not be inspected")
 	errTargetBinaryNeedsShim = errors.New("--target-binary requires --shim")
 	errTargetBinaryWithAll   = errors.New("--target-binary cannot be used with all")
@@ -54,13 +55,16 @@ func (app *application) newSetupCommand() *cobra.Command {
 		Short: "Set up harness integrations and start background tracking",
 		Args:  cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			integrations, integrationErr := app.installIntegrations(cmd.Context(), args, options)
+			if _, err := selectedHarnesses(args, false); err != nil {
+				return err
+			}
 			serviceConfig.binary = options.binary
 			serviceConfig.dryRun = options.dryRun
-			serviceOptions, err := app.parseServiceOptions(serviceConfig)
+			serviceOptions, err := app.configuredServiceOptions(cmd, serviceConfig)
 			if err != nil {
-				return errors.Join(integrationErr, err)
+				return err
 			}
+			integrations, integrationErr := installIntegrations(cmd.Context(), args, options)
 			tracker, trackerErr := runServiceOperation(cmd.Context(), "update", serviceOptions)
 			if trackerErr != nil {
 				trackerErr = fmt.Errorf("enable tracker: %w", trackerErr)
@@ -103,7 +107,7 @@ func (app *application) newIntegrationsInstallCommand() *cobra.Command {
 		if cmd.Flags().Changed("target-binary") && len(args) == 1 && strings.EqualFold(args[0], "all") {
 			return errTargetBinaryWithAll
 		}
-		results, err := app.installIntegrations(cmd.Context(), args, options)
+		results, err := installIntegrations(cmd.Context(), args, options)
 		if app.outputJSON {
 			if writeErr := app.writeJSON(results); writeErr != nil {
 				return writeErr
@@ -219,7 +223,7 @@ func (app *application) writeIntegrationStatuses(results []install.IntegrationSt
 	)
 }
 
-func (app *application) installIntegrations(ctx context.Context, args []string, options integrationCommandOptions) ([]install.Result, error) {
+func installIntegrations(ctx context.Context, args []string, options integrationCommandOptions) ([]install.Result, error) {
 	harnesses, err := selectedHarnesses(args, false)
 	if err != nil {
 		return nil, err
@@ -331,26 +335,8 @@ func (app *application) newTrackerCommand() *cobra.Command {
 
 func (app *application) newTrackerEnableCommand() *cobra.Command {
 	options := serviceOptions{binary: defaultInstallBinary(), interval: serviceDefaultInterval}
-	command := &cobra.Command{Use: "enable", Short: "Install, update, and start background tracking", RunE: func(cmd *cobra.Command, _ []string) error {
-		cfg, err := app.loadConfig()
-		if err != nil {
-			return err
-		}
-		if !cmd.Flags().Changed("interval") && cfg.Tracker.Interval != "" {
-			d, err := config.ParseDuration(cfg.Tracker.Interval)
-			if err != nil {
-				return fmt.Errorf("parsing tracker interval: %w", err)
-			}
-			options.interval = d
-		}
-		if !cmd.Flags().Changed("grace-period") && cfg.Tracker.GracePeriod != "" {
-			d, err := config.ParseDuration(cfg.Tracker.GracePeriod)
-			if err != nil {
-				return fmt.Errorf("parsing tracker grace period: %w", err)
-			}
-			options.grace = d
-		}
-		parsed, err := app.parseServiceOptions(options)
+	command := &cobra.Command{Use: "enable", Short: "Install, update, and start background tracking", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
+		parsed, err := app.configuredServiceOptions(cmd, options)
 		if err != nil {
 			return err
 		}
@@ -370,7 +356,7 @@ func (app *application) newTrackerEnableCommand() *cobra.Command {
 
 func (app *application) newTrackerDisableCommand() *cobra.Command {
 	dryRun := false
-	command := &cobra.Command{Use: "disable", Short: "Stop and remove background tracking", RunE: func(cmd *cobra.Command, _ []string) error {
+	command := &cobra.Command{Use: "disable", Short: "Stop and remove background tracking", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
 		options, err := app.parseServiceOptions(serviceOptions{binary: defaultInstallBinary(), interval: serviceDefaultInterval, dryRun: dryRun})
 		if err != nil {
 			return err
@@ -387,8 +373,8 @@ func (app *application) newTrackerDisableCommand() *cobra.Command {
 
 func (app *application) newTrackerStatusCommand() *cobra.Command {
 	serviceConfig := serviceOptions{binary: defaultInstallBinary(), interval: serviceDefaultInterval}
-	command := &cobra.Command{Use: statusCommandName, Short: "Show background tracking state", RunE: func(cmd *cobra.Command, _ []string) error {
-		options, err := app.parseServiceOptions(serviceConfig)
+	command := &cobra.Command{Use: statusCommandName, Short: "Show background tracking state", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
+		options, err := app.configuredServiceOptions(cmd, serviceConfig)
 		if err != nil {
 			return err
 		}
@@ -439,12 +425,16 @@ type cleanOptions struct {
 
 func (app *application) newRegistryCleanCommand() *cobra.Command {
 	options := cleanOptions{}
-	command := &cobra.Command{Use: "clean", Short: "Delete gone session records", RunE: func(cmd *cobra.Command, _ []string) error {
+	var yes bool
+	command := &cobra.Command{Use: "clean", Short: "Delete gone session records", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
 		cfg, err := app.loadConfig()
 		if err != nil {
 			return err
 		}
 		options.ageSet = cmd.Flags().Changed("older-than")
+		if options.all && options.ageSet {
+			return errCleanSelection
+		}
 		if !options.all && !options.ageSet && cfg.Retention.MaxGoneAge != "" {
 			d, err := config.ParseDuration(cfg.Retention.MaxGoneAge)
 			if err != nil {
@@ -453,9 +443,19 @@ func (app *application) newRegistryCleanCommand() *cobra.Command {
 			options.olderThan = d
 			options.ageSet = true
 		}
+		if options.all && !yes {
+			confirmed, err := app.confirmAction(cmd.InOrStdin(), "Delete all gone session records? [y/N]: ")
+			if err != nil {
+				return err
+			}
+			if !confirmed {
+				return errCleanAllConfirmation
+			}
+		}
 		return app.runRegistryClean(cmd.Context(), options)
 	}}
 	command.Flags().BoolVar(&options.all, "all", false, "delete every gone session record")
+	command.Flags().BoolVarP(&yes, "yes", "y", false, "confirm deleting all gone records without prompting")
 	command.Flags().DurationVar(&options.olderThan, "older-than", 0, "delete gone records older than this age")
 	return command
 }
@@ -482,9 +482,10 @@ func (app *application) runRegistryClean(ctx context.Context, options cleanOptio
 }
 
 type infoOptions struct {
-	explain   bool
-	paneID    string
-	configDir string
+	explain                 bool
+	paneID                  string
+	configDir               string
+	disableScreenInspection bool
 }
 
 type explainedInfoResult struct {
@@ -502,6 +503,7 @@ func (app *application) newInfoCommand() *cobra.Command {
 		if !cmd.Flags().Changed("config-dir") && cfg.Detection.ManifestsDir != "" {
 			options.configDir = cfg.Detection.ManifestsDir
 		}
+		options.disableScreenInspection = cfg.Detection.ScreenInspection != nil && !*cfg.Detection.ScreenInspection
 		if (len(args) == 0) == (options.paneID == "") {
 			return errInfoReference
 		}
@@ -532,7 +534,7 @@ func (app *application) writeInfo(ctx context.Context, session registry.Session,
 		}
 		return app.writeSessionDetails(session)
 	}
-	explanation, explanationErr := evaluateExplanation(ctx, session, options.configDir)
+	explanation, explanationErr := evaluateExplanation(ctx, session, options)
 	if app.outputJSON {
 		if err := app.writeJSON(explainedInfoResult{Session: session, Explanation: explanation}); err != nil {
 			return err
@@ -578,7 +580,7 @@ func (app *application) newWatchCommand() *cobra.Command {
 	options := listOptions{}
 	var noSnapshot bool
 	var watchFormat string
-	command := &cobra.Command{Use: "watch", Short: "Stream session changes", RunE: func(cmd *cobra.Command, _ []string) error {
+	command := &cobra.Command{Use: "watch", Short: "Stream session changes", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
 		cfg, err := app.loadConfig()
 		if err != nil {
 			return err

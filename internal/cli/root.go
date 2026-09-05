@@ -17,8 +17,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
-	"unicode/utf8"
 
+	"github.com/jedib0t/go-pretty/v6/text"
 	"github.com/spf13/cobra"
 
 	"github.com/zigai/aht/internal/agentstate"
@@ -103,18 +103,27 @@ func (app *application) loadConfig() (config.Config, error) {
 	return app.cfg, app.cfgErr
 }
 
+func Execute() {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	code := executeCLI(ctx, os.Args[1:], os.Stdin, os.Stdout, os.Stderr)
+	stop()
+	if code != 0 {
+		os.Exit(code)
+	}
+}
+
+func NewRootCommand(stdout io.Writer, stderr io.Writer) *cobra.Command {
+	configureCobra()
+	return (&application{stdout: stdout, stderr: stderr}).newRootCommand()
+}
+
 func configureCobra() {
 	configureCobraOnce.Do(func() {
 		cobra.EnableCommandSorting = false
 	})
 }
 
-func NewRootCommand(stdout io.Writer, stderr io.Writer) *cobra.Command {
-	configureCobra()
-	return newRootCommand(&application{stdout: stdout, stderr: stderr})
-}
-
-func newRootCommand(app *application) *cobra.Command {
+func (app *application) newRootCommand() *cobra.Command {
 	var showVersion bool
 	root := &cobra.Command{Use: "aht", Short: "Track local coding-agent sessions and where they are running", SilenceErrors: true, SilenceUsage: true, RunE: func(cmd *cobra.Command, _ []string) error {
 		if showVersion {
@@ -158,15 +167,6 @@ func (app *application) newManageCommand() *cobra.Command {
 	return command
 }
 
-func Execute() {
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	code := executeCLI(ctx, os.Args[1:], os.Stdin, os.Stdout, os.Stderr)
-	stop()
-	if code != 0 {
-		os.Exit(code)
-	}
-}
-
 func executeCLI(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	//nolint:contextcheck // Cobra propagates ExecuteContext to every command operation.
 	root := NewRootCommand(stdout, stderr)
@@ -190,7 +190,7 @@ func (app *application) store() *registry.FileStore {
 	return registry.NewFileStore(app.resolvedStorePath())
 }
 
-func (app *application) registryStore() registry.Store {
+func (app *application) registryStore() *client.Client {
 	return client.New(client.Config{StorePath: app.resolvedStorePath()})
 }
 
@@ -232,7 +232,7 @@ func (app *application) warnf(format string, args ...any) {
 }
 
 func (app *application) newRegistryPathCommand() *cobra.Command {
-	return &cobra.Command{Use: "path", Short: "Print the registry state file path", RunE: func(_ *cobra.Command, _ []string) error {
+	return &cobra.Command{Use: "path", Short: "Print the registry state file path", Args: cobra.NoArgs, RunE: func(_ *cobra.Command, _ []string) error {
 		if app.outputJSON {
 			return app.writeJSON(map[string]string{"path": app.resolvedStorePath()})
 		}
@@ -356,7 +356,7 @@ func parseReportSequence(value string) (uint64, bool, error) {
 }
 
 func (app *application) runReport(ctx context.Context, stdin io.Reader, options reportOptions) error {
-	prepared, err := app.prepareReport(stdin, options, reportRuntimeContext{
+	prepared, err := prepareReport(stdin, options, reportRuntimeContext{
 		tmux:        reportTmuxContext(ctx, options.noTmux),
 		multiplexer: reportMultiplexerContext(),
 		processes:   reportProcessAncestors(ctx, options.pid),
@@ -381,7 +381,7 @@ func (app *application) runReport(ctx context.Context, stdin io.Reader, options 
 }
 
 //nolint:gocognit,cyclop,nestif // report preparation validates independent evidence dimensions in order
-func (app *application) prepareReport(stdin io.Reader, options reportOptions, runtime reportRuntimeContext) (preparedReport, error) {
+func prepareReport(stdin io.Reader, options reportOptions, runtime reportRuntimeContext) (preparedReport, error) {
 	if options.rawStdin && options.rawDefaultsOnly {
 		return preparedReport{}, errConflictingReportStdin
 	}
@@ -800,7 +800,7 @@ type listOptions struct {
 
 func (app *application) newListCommand() *cobra.Command {
 	o := listOptions{}
-	cmd := &cobra.Command{Use: listCommandName, Short: "Show known sessions", RunE: func(c *cobra.Command, _ []string) error {
+	cmd := &cobra.Command{Use: listCommandName, Short: "Show known sessions", Args: cobra.NoArgs, RunE: func(c *cobra.Command, _ []string) error {
 		cfg, err := app.loadConfig()
 		if err != nil {
 			return err
@@ -829,16 +829,12 @@ func applyListConfig(o *listOptions, cmd *cobra.Command, cfg config.Config) {
 	}
 	if !f.Changed("sort") && cfg.UI.Sort != "" {
 		o.sortBy = cfg.UI.Sort
-		o.sortSet = true
-	} else {
-		o.sortSet = f.Changed("sort")
 	}
+	o.sortSet = f.Changed("sort")
 	if !f.Changed("desc") && cfg.UI.SortDesc != nil {
 		o.desc = *cfg.UI.SortDesc
-		o.descSet = true
-	} else {
-		o.descSet = f.Changed("desc")
 	}
+	o.descSet = f.Changed("desc")
 	if !f.Changed("absolute-time") {
 		if (cfg.UI.AbsoluteTime != nil && *cfg.UI.AbsoluteTime) ||
 			cfg.UI.TimeFormat == "absolute" || cfg.UI.TimeFormat == "iso8601" {
@@ -1027,10 +1023,6 @@ func applyConfigFilter(sessions []registry.Session, filter config.FilterConfig, 
 
 func listTableColumns(rows [][]string, maxWidth int) []humanColumn {
 	const (
-		maxIDColumnWidth       = 16
-		maxAgentColumnWidth    = 10
-		maxPresenceColumnWidth = 8
-		maxActivityColumnWidth = 8
 		maxLocationColumnWidth = 24
 	)
 	if maxWidth <= 0 {
@@ -1039,20 +1031,20 @@ func listTableColumns(rows [][]string, maxWidth int) []humanColumn {
 	headings := []string{"ID", "Agent", "Session", "Presence", "Activity", "Location", "CWD", "Updated"}
 	maxLen := make([]int, len(headings))
 	for i, h := range headings {
-		maxLen[i] = utf8.RuneCountInString(h)
+		maxLen[i] = text.StringWidth(h)
 	}
 	for _, row := range rows {
 		for i, cell := range row {
 			if i < len(maxLen) {
-				maxLen[i] = max(maxLen[i], utf8.RuneCountInString(cell))
+				maxLen[i] = max(maxLen[i], text.StringWidth(cell))
 			}
 		}
 	}
 
-	idWidth := max(len("ID"), min(maxLen[0], maxIDColumnWidth))
-	agentWidth := max(len("Agent"), min(maxLen[1], maxAgentColumnWidth))
-	presenceWidth := max(len("Presence"), min(maxLen[3], maxPresenceColumnWidth))
-	activityWidth := max(len("Activity"), min(maxLen[4], maxActivityColumnWidth))
+	idWidth := maxLen[0]
+	agentWidth := maxLen[1]
+	presenceWidth := maxLen[3]
+	activityWidth := maxLen[4]
 	locationWidth := max(len("Location"), min(maxLen[5], maxLocationColumnWidth))
 	updatedWidth := max(len("Updated"), maxLen[7])
 
@@ -1101,12 +1093,12 @@ func listFullTableColumns(rows [][]string, maxWidth int) ([]humanColumn, bool) {
 	headings := []string{"ID", "Agent", "Session", "Presence", "Activity", "Location", "CWD", "Updated"}
 	maxLen := make([]int, len(headings))
 	for index, heading := range headings {
-		maxLen[index] = utf8.RuneCountInString(heading)
+		maxLen[index] = text.StringWidth(heading)
 	}
 	for _, row := range rows {
 		for index, cell := range row {
 			if index < len(maxLen) {
-				maxLen[index] = max(maxLen[index], utf8.RuneCountInString(cell))
+				maxLen[index] = max(maxLen[index], text.StringWidth(cell))
 			}
 		}
 	}
@@ -1281,7 +1273,7 @@ func (app *application) runListSummary(ctx context.Context, o listOptions) error
 	if e != nil {
 		return e
 	}
-	s, e := app.registryStore().SummaryByTmuxSessionWithOptions(ctx, registry.SummaryOptions{Filter: f})
+	s, e := app.registryStore().SummaryByTmuxSession(ctx, f)
 	if e != nil {
 		return fmt.Errorf("summarize sessions: %w", e)
 	}
@@ -1301,19 +1293,19 @@ func (app *application) writeSummaryTable(ss []registry.Summary, full bool) erro
 	labels := summaryTableLabels(ss)
 	rows := make([][]string, 0, len(ss))
 	for i, s := range ss {
-		rows = append(rows, []string{multiplexerSummaryKind(s), labels[i], strconv.Itoa(s.Total), strconv.Itoa(s.Live), strconv.Itoa(s.Gone), strconv.Itoa(s.PresenceUnknown), strconv.Itoa(s.Running), strconv.Itoa(s.Waiting), strconv.Itoa(s.Idle), strconv.Itoa(s.ActivityUnknown)})
+		rows = append(rows, []string{multiplexerSummaryKind(s), labels[i], s.MultiplexerServerID, strconv.Itoa(s.Total), strconv.Itoa(s.Live), strconv.Itoa(s.Gone), strconv.Itoa(s.PresenceUnknown), strconv.Itoa(s.Running), strconv.Itoa(s.Waiting), strconv.Itoa(s.Idle), strconv.Itoa(s.Failed), strconv.Itoa(s.Interrupted), strconv.Itoa(s.ActivityUnknown)})
 	}
-	columns := []humanColumn{{heading: "MUX", width: summaryMuxWidth}, {heading: "Session", width: summarySessionWidth, wrap: wrapHumanSession}, {heading: "Total", width: summaryCountWidth}, {heading: "Live", width: summaryCountWidth}, {heading: "Gone", width: summaryCountWidth}, {heading: "Pres?", width: summaryUnknownWidth}, {heading: "Run", width: summaryCountWidth}, {heading: "Wait", width: summaryCountWidth}, {heading: "Idle", width: summaryCountWidth}, {heading: "Act?", width: summaryCountWidth}}
-	if !full {
-		return app.writeHumanTable(columns, rows)
-	}
+	columns := []humanColumn{{heading: "MUX", width: summaryMuxWidth}, {heading: "Session", width: summarySessionWidth, wrap: wrapHumanSession}, {heading: "Server", width: summaryUnknownWidth, wrap: wrapHumanIdentifier}, {heading: "Total", width: summaryCountWidth, align: text.AlignRight}, {heading: "Live", width: summaryCountWidth, align: text.AlignRight}, {heading: "Gone", width: summaryCountWidth, align: text.AlignRight}, {heading: "Pres?", width: summaryUnknownWidth, align: text.AlignRight}, {heading: "Run", width: summaryCountWidth, align: text.AlignRight}, {heading: "Wait", width: summaryCountWidth, align: text.AlignRight}, {heading: "Idle", width: summaryCountWidth, align: text.AlignRight}, {heading: "Failed", width: summaryUnknownWidth, align: text.AlignRight}, {heading: "Interrupted", width: len("Interrupted"), align: text.AlignRight}, {heading: "Act?", width: summaryCountWidth, align: text.AlignRight}}
 	for columnIndex := range columns {
 		for _, row := range rows {
-			columns[columnIndex].width = max(columns[columnIndex].width, utf8.RuneCountInString(row[columnIndex]))
+			columns[columnIndex].width = max(columns[columnIndex].width, text.StringWidth(row[columnIndex]))
 		}
 	}
 	if validateHumanColumns(columns, app.maxLineWidth()) != nil {
 		return app.writeStackedHumanRows(columns, rows)
+	}
+	if full {
+		return app.writeWrappedHumanTable(columns, rows)
 	}
 	return app.writeHumanTable(columns, rows)
 }

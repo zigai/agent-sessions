@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jedib0t/go-pretty/v6/text"
+
 	"github.com/zigai/aht/pkg/client"
 	"github.com/zigai/aht/pkg/registry"
 )
@@ -150,6 +152,7 @@ func (app *application) runFilesystemWatch(ctx context.Context, o watchOptions) 
 	var previous []registry.Session
 	writer := &watchEventWriter{app: app, format: o.format}
 	err := s.Watch(ctx, registry.WatchOptions{
+		Filter:            o.filter,
 		Debounce:          o.debounce,
 		ReconcileInterval: 0,
 	}, func(result registry.WatchResult) error {
@@ -390,12 +393,6 @@ func (w *watchEventWriter) write(e []watchEvent) error {
 	if len(e) == 0 {
 		return nil
 	}
-	if w.format == watchFormatTable && !w.headerWritten {
-		if err := w.app.writeln(formatWatchTableHeader()); err != nil {
-			return err
-		}
-		w.headerWritten = true
-	}
 	for _, v := range e {
 		switch w.format {
 		case watchFormatJSON:
@@ -407,7 +404,7 @@ func (w *watchEventWriter) write(e []watchEvent) error {
 				return er
 			}
 		default:
-			if er := w.app.writeln(formatWatchTableEvent(v)); er != nil {
+			if er := w.writeTableEvent(v); er != nil {
 				return er
 			}
 		}
@@ -415,20 +412,47 @@ func (w *watchEventWriter) write(e []watchEvent) error {
 	return nil
 }
 
+func (w *watchEventWriter) writeTableEvent(event watchEvent) error {
+	line := formatWatchTableEvent(event)
+	header := formatWatchTableHeader()
+	if max(text.StringWidth(line), text.StringWidth(header)) > w.app.maxLineWidth() {
+		w.headerWritten = false
+		label := event.Label
+		if event.Action == watchActionSnapshotEmpty {
+			label = "no sessions"
+		}
+		return w.app.writeHumanDetails([]humanDetail{
+			{label: "Time", value: event.Time.UTC().Format(time.RFC3339)},
+			{label: "Event", value: event.Action},
+			{label: "Agent", value: string(event.Harness)},
+			{label: "Presence", value: string(event.Presence)},
+			{label: "Activity", value: activityString(event.Activity)},
+			{label: "Session", value: label, wrap: wrapHumanSession},
+		})
+	}
+	if !w.headerWritten {
+		if err := w.app.writeln(header + "\n" + strings.Repeat("─", text.StringWidth(header))); err != nil {
+			return err
+		}
+		w.headerWritten = true
+	}
+	return w.app.writeln(line)
+}
+
 func formatWatchTableHeader() string {
-	return fmt.Sprintf("%-20s  %-18s  %-10s  %-8s  %-8s  %s", "Time", "Event", "Agent", "Presence", "Activity", "Session")
+	return fmt.Sprintf("%-20s  %-18s  %-10s  %-8s  %-11s  %s", "Time", "Event", "Agent", "Presence", "Activity", "Session")
 }
 
 func formatWatchPlainEvent(e watchEvent) string {
 	if e.Action == watchActionSnapshotEmpty {
 		return e.Time.UTC().Format(time.RFC3339) + " snapshot_empty no sessions"
 	}
-	return truncateHumanText(strings.Join([]string{e.Time.UTC().Format(time.RFC3339), e.Action, string(e.Harness), string(e.Presence), appReportActivity(registry.Session{Activity: e.Activity}), "session=" + e.Label}, " "), humanLineWidth)
+	return sanitizeHumanText(strings.Join([]string{e.Time.UTC().Format(time.RFC3339), e.Action, string(e.Harness), string(e.Presence), appReportActivity(registry.Session{Activity: e.Activity}), "session=" + e.Label}, " "))
 }
 
 func formatWatchTableEvent(e watchEvent) string {
 	if e.Action == watchActionSnapshotEmpty {
 		return e.Time.UTC().Format(time.RFC3339) + "  snapshot_empty      no sessions"
 	}
-	return fmt.Sprintf("%s  %-18s  %-10s  %-8s  %-8s  %s", e.Time.UTC().Format(time.RFC3339), e.Action, e.Harness, e.Presence, appReportActivity(registry.Session{Activity: e.Activity}), sanitizeHumanText(e.Label))
+	return fmt.Sprintf("%s  %-18s  %-10s  %-8s  %-11s  %s", e.Time.UTC().Format(time.RFC3339), e.Action, e.Harness, e.Presence, appReportActivity(registry.Session{Activity: e.Activity}), sanitizeHumanText(e.Label))
 }

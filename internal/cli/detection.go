@@ -73,7 +73,7 @@ func (app *application) resolvePaneSession(ctx context.Context, paneID string) (
 	return match, nil
 }
 
-func evaluateExplanation(ctx context.Context, session registry.Session, configDir string) (explainResult, error) {
+func evaluateExplanation(ctx context.Context, session registry.Session, options infoOptions) (explainResult, error) {
 	now := time.Now().UTC()
 	policy := agentstate.PolicyFor(session.Harness)
 	hookEvaluation := agentstate.EvaluateHook(session, now)
@@ -91,7 +91,11 @@ func evaluateExplanation(ctx context.Context, session registry.Session, configDi
 		result.Hook.ObservedAt = native.ObservedAt
 		result.Hook.Age = now.Sub(native.ObservedAt).Round(time.Millisecond).String()
 	}
-	screen, finalActivity, screenErr := explanationScreen(ctx, session, configDir, authority, result.FinalActivity)
+	if options.disableScreenInspection {
+		result.Screen.UnavailableReason = "screen_inspection_disabled"
+		return result, nil
+	}
+	screen, finalActivity, screenErr := explanationScreen(ctx, session, options.configDir, authority, result.FinalActivity)
 	result.Screen = screen
 	result.FinalActivity = finalActivity
 	if screenErr != nil {
@@ -182,7 +186,7 @@ func evaluateLiveSessionScreen(ctx context.Context, session registry.Session, co
 		if err != nil {
 			return agentstate.Decision{}, false, fmt.Errorf("load detection manifest: %w", err)
 		}
-		return agentstate.Evaluate(manifest, agentstate.NormalizeSnapshot(snapshot.Text, snapshot.Title)), true, nil
+		return manifest.Evaluate(agentstate.NormalizeSnapshot(snapshot.Text, snapshot.Title)), true, nil
 	}
 	panes, err := tmux.ListPanes(ctx)
 	if err != nil {
@@ -200,7 +204,7 @@ func evaluateLiveSessionScreen(ctx context.Context, session registry.Session, co
 		if err != nil {
 			return agentstate.Decision{}, false, fmt.Errorf("load detection manifest: %w", err)
 		}
-		return agentstate.Evaluate(manifest, agentstate.NormalizeSnapshot(snapshot.Text, snapshot.Title)), true, nil
+		return manifest.Evaluate(agentstate.NormalizeSnapshot(snapshot.Text, snapshot.Title)), true, nil
 	}
 	return agentstate.Decision{}, false, fmt.Errorf("%w: %s", errTmuxPaneNotLive, session.Tmux.PaneID)
 }

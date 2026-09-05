@@ -20,8 +20,7 @@ const expectedSessionSchemaVersion = 2
 //nolint:cyclop // assertions independently verify each report dimension
 func TestPrepareReportCarriesIndependentDimensions(t *testing.T) {
 	t.Parallel()
-	app := &application{}
-	prepared, err := app.prepareReport(strings.NewReader(`{"session_id":"session-1","cwd":"/work","hook_event_name":"PermissionRequest","model":"gpt-5"}`), reportOptions{
+	prepared, err := prepareReport(strings.NewReader(`{"session_id":"session-1","cwd":"/work","hook_event_name":"PermissionRequest","model":"gpt-5"}`), reportOptions{
 		harness: "codex", presence: "live", activity: "waiting", sessionID: "session-1", event: "permission_prompt",
 		cwd: "/work", projectRoot: "/work", resumeCommand: []string{"codex", "resume", "session-1"}, rawStdin: true,
 	}, reportRuntimeContext{
@@ -51,7 +50,7 @@ func TestPrepareReportCarriesIndependentDimensions(t *testing.T) {
 func TestPrepareReportIncludesNativeMultiplexerContext(t *testing.T) {
 	t.Parallel()
 	location := registry.MultiplexerContext{Kind: registry.MultiplexerZellij, SessionName: "work", PaneID: "terminal_7"}
-	prepared, err := (&application{}).prepareReport(nil, reportOptions{
+	prepared, err := prepareReport(nil, reportOptions{
 		harness: "codex", sessionID: "session", event: "turn_complete",
 	}, reportRuntimeContext{multiplexer: location, defaultObservedAt: time.Now().UTC()})
 	if err != nil {
@@ -65,7 +64,7 @@ func TestPrepareReportIncludesNativeMultiplexerContext(t *testing.T) {
 func TestPrepareReportCarriesNativeLifecycle(t *testing.T) {
 	t.Parallel()
 
-	prepared, err := (&application{}).prepareReport(nil, reportOptions{
+	prepared, err := prepareReport(nil, reportOptions{
 		harness: "openclaw", lifecycle: "resume", presence: "live", activity: "idle",
 		sessionID: "native-session", event: "session_start",
 	}, reportRuntimeContext{defaultObservedAt: time.Date(2026, 7, 18, 12, 0, 0, 0, time.UTC)})
@@ -141,7 +140,7 @@ func TestPrepareReportInfersLifecycleFromNativeEvents(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			prepared, err := (&application{}).prepareReport(
+			prepared, err := prepareReport(
 				strings.NewReader(test.payload),
 				test.options,
 				reportRuntimeContext{defaultObservedAt: time.Now().UTC()},
@@ -167,11 +166,10 @@ func TestInferredNativeEndCannotBeResurrectedByProcessEvidence(t *testing.T) {
 	t.Parallel()
 
 	store := registry.NewFileStore(filepath.Join(t.TempDir(), "sessions.json"))
-	app := &application{}
 	at := time.Date(2026, 7, 30, 12, 0, 0, 0, time.UTC)
 	process := &registry.ProcessIdentity{PID: 42, StartIdentity: "boot:42"}
 
-	start, err := app.prepareReport(
+	start, err := prepareReport(
 		strings.NewReader(`{"session_id":"codex-session","cwd":"/work","hook_event_name":"SessionStart","source":"startup","model":"gpt-5"}`),
 		reportOptions{harness: "codex", activity: "idle", rawDefaultsOnly: true},
 		reportRuntimeContext{defaultObservedAt: at},
@@ -188,7 +186,7 @@ func TestInferredNativeEndCannotBeResurrectedByProcessEvidence(t *testing.T) {
 		t.Fatalf("start presence = %q, want live", session.Presence)
 	}
 
-	end, err := app.prepareReport(
+	end, err := prepareReport(
 		strings.NewReader(`{"session_id":"codex-session","cwd":"/work","hook_event_name":"SessionEnd","reason":"other","model":"gpt-5"}`),
 		reportOptions{harness: "codex", rawDefaultsOnly: true},
 		reportRuntimeContext{defaultObservedAt: at.Add(time.Second)},
@@ -241,7 +239,7 @@ func TestPrepareReportAddsNativeResumeCommand(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			prepared, err := (&application{}).prepareReport(nil, test.options, reportRuntimeContext{defaultObservedAt: time.Now().UTC()})
+			prepared, err := prepareReport(nil, test.options, reportRuntimeContext{defaultObservedAt: time.Now().UTC()})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -291,9 +289,8 @@ func testLifecycleReports(t *testing.T, harness string, base time.Time, tests []
 	t.Helper()
 
 	store := registry.NewFileStore(filepath.Join(t.TempDir(), "sessions.json"))
-	app := &application{}
 	for index, test := range tests {
-		prepared, err := app.prepareReport(nil, reportOptions{
+		prepared, err := prepareReport(nil, reportOptions{
 			harness: harness, lifecycle: test.lifecycle, presence: test.presence, activity: test.activity,
 			sessionID: harness + "-session", event: test.name,
 		}, reportRuntimeContext{defaultObservedAt: base.Add(time.Duration(index) * time.Second)})
@@ -320,7 +317,6 @@ func equalActivity(left, right *registry.Activity) bool {
 
 func TestPrepareReportAttachesMatchingAgentProcess(t *testing.T) {
 	t.Parallel()
-	app := &application{}
 	agent := processinfo.Process{
 		PID:            42,
 		PPID:           10,
@@ -331,7 +327,7 @@ func TestPrepareReportAttachesMatchingAgentProcess(t *testing.T) {
 		TTY:            "/dev/pts/4",
 		Args:           []string{"pi"},
 	}
-	prepared, err := app.prepareReport(nil, reportOptions{
+	prepared, err := prepareReport(nil, reportOptions{
 		harness: "pi", activity: "running", sessionPath: "/tmp/session.json",
 	}, reportRuntimeContext{processes: []processinfo.Process{
 		{PID: 50, PPID: 42, StartIdentity: "boot:50", Executable: "/bin/sh", Args: []string{"sh"}},
@@ -347,8 +343,7 @@ func TestPrepareReportAttachesMatchingAgentProcess(t *testing.T) {
 
 func TestPrepareReportProcessEvidenceRequiresCompleteIdentity(t *testing.T) {
 	t.Parallel()
-	app := &application{}
-	_, err := app.prepareReport(bytes.NewReader(nil), reportOptions{harness: "codex", evidence: "process", sessionID: "session-1", pid: 12}, reportRuntimeContext{})
+	_, err := prepareReport(bytes.NewReader(nil), reportOptions{harness: "codex", evidence: "process", sessionID: "session-1", pid: 12}, reportRuntimeContext{})
 	if err == nil {
 		t.Fatal("expected incomplete process identity error")
 	}
@@ -357,7 +352,7 @@ func TestPrepareReportProcessEvidenceRequiresCompleteIdentity(t *testing.T) {
 func TestPrepareReportProcessEvidenceDoesNotCarryNativeAuthority(t *testing.T) {
 	t.Parallel()
 	process := processinfo.Process{PID: 42, PPID: 10, ProcessGroupID: 42, StartIdentity: "boot:42", Executable: "/usr/bin/codex", CWD: "/work", TTY: "/dev/pts/4"}
-	prepared, err := (&application{}).prepareReport(nil, reportOptions{
+	prepared, err := prepareReport(nil, reportOptions{
 		harness: "codex", presence: "live", evidence: "process", pid: process.PID, event: "process.start",
 	}, reportRuntimeContext{processes: []processinfo.Process{process}, defaultObservedAt: time.Now().UTC()})
 	if err != nil {
@@ -367,7 +362,7 @@ func TestPrepareReportProcessEvidenceDoesNotCarryNativeAuthority(t *testing.T) {
 	if observation.Source != registry.ObservationSourceProcess || observation.ActivityAuthoritative != nil || observation.Activity != nil || observation.NativeEvent != "" {
 		t.Fatalf("process observation retained native fields: %#v", observation)
 	}
-	if err := registry.ValidateObservation(observation); err != nil {
+	if err := observation.Validate(); err != nil {
 		t.Fatalf("process observation is invalid: %v", err)
 	}
 }
@@ -406,8 +401,7 @@ func requireShimProcessTransition(
 	previousSessionID string,
 ) string {
 	t.Helper()
-	app := &application{}
-	prepared, err := app.prepareReport(nil, reportOptions{
+	prepared, err := prepareReport(nil, reportOptions{
 		harness: "droid", presence: presence, evidence: "process", pid: process.PID, event: "process." + name,
 	}, reportRuntimeContext{processes: []processinfo.Process{process}, defaultObservedAt: observedAt})
 	if err != nil {
@@ -444,8 +438,7 @@ func requireShimObservation(t *testing.T, observation registry.Observation, proc
 
 func TestPrepareReportRejectsConflictingStdinModes(t *testing.T) {
 	t.Parallel()
-	app := &application{}
-	_, err := app.prepareReport(strings.NewReader(`{}`), reportOptions{harness: "codex", rawStdin: true, rawDefaultsOnly: true}, reportRuntimeContext{})
+	_, err := prepareReport(strings.NewReader(`{}`), reportOptions{harness: "codex", rawStdin: true, rawDefaultsOnly: true}, reportRuntimeContext{})
 	if !errors.Is(err, errConflictingReportStdin) {
 		t.Fatalf("stdin mode error = %v", err)
 	}
@@ -454,8 +447,7 @@ func TestPrepareReportRejectsConflictingStdinModes(t *testing.T) {
 func TestPrepareReportRejectsOversizedPayload(t *testing.T) {
 	t.Parallel()
 
-	app := &application{}
-	_, err := app.prepareReport(
+	_, err := prepareReport(
 		strings.NewReader(strings.Repeat("x", maxPayloadInputBytes+1)),
 		reportOptions{harness: "codex", rawStdin: true},
 		reportRuntimeContext{},
@@ -470,7 +462,7 @@ func TestPrepareReportAcceptsLargeCodexPostToolUseDefaults(t *testing.T) {
 
 	payload := `{"session_id":"codex-image","transcript_path":null,"cwd":"/work","hook_event_name":"PostToolUse","model":"gpt-5","tool_name":"view_image","tool_response":"` +
 		strings.Repeat("x", maxPayloadInputBytes) + `"}`
-	prepared, err := (&application{}).prepareReport(
+	prepared, err := prepareReport(
 		strings.NewReader(payload),
 		reportOptions{harness: "codex", activity: "running", rawDefaultsOnly: true},
 		reportRuntimeContext{},

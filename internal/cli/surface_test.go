@@ -276,7 +276,7 @@ func TestStateCleanRequiresExplicitPolicy(t *testing.T) {
 
 	var stdout bytes.Buffer
 	root = NewRootCommand(&stdout, &bytes.Buffer{})
-	root.SetArgs([]string{"--store", path, "manage", "state", "clean", "--all"})
+	root.SetArgs([]string{"--store", path, "manage", "state", "clean", "--all", "--yes"})
 	if err := root.ExecuteContext(context.Background()); err != nil {
 		t.Fatal(err)
 	}

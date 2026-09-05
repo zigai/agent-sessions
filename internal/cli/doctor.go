@@ -62,6 +62,7 @@ func (app *application) newDoctorCommand() *cobra.Command {
 	command := &cobra.Command{
 		Use:   "doctor",
 		Short: "Check whether aht is set up and working",
+		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			result := app.runDoctor(cmd.Context(), verbose)
 			if err := app.writeDoctorResult(result); err != nil {
@@ -151,7 +152,7 @@ func (app *application) runDoctor(ctx context.Context, includeAll bool) doctorRe
 	} else {
 		add("observer.process-enumeration", doctorOK, "complete current-user process inventory available")
 	}
-	serviceResult, serviceErr := service.Status(ctx, service.Options{Binary: defaultInstallBinary(), StorePath: store.Path(), Interval: serviceDefaultInterval})
+	serviceResult, serviceErr := app.doctorServiceStatus(ctx)
 	if serviceErr != nil {
 		if errors.Is(serviceErr, service.ErrUnsupported) {
 			add("observer.service", doctorWarning, serviceErr.Error())
@@ -167,8 +168,8 @@ func (app *application) runDoctor(ctx context.Context, includeAll bool) doctorRe
 	} else {
 		add("observer.service", doctorOK, "managed tracker service is running")
 	}
-	app.addObserverReconciliationCheck(&result, store.Path())
-	app.addDetectionManifestCheck(&result)
+	result.addObserverReconciliationCheck(store.Path())
+	result.addDetectionManifestCheck()
 	app.addConfigFileCheck(&result)
 
 	for _, adapter := range harness.All() {
@@ -176,7 +177,7 @@ func (app *application) runDoctor(ctx context.Context, includeAll bool) doctorRe
 		if includeAll {
 			result.Capabilities = append(result.Capabilities, doctorCapability{Harness: string(definition.ID), SessionStart: definition.Capabilities.SessionStart, SessionEnd: definition.Capabilities.SessionEnd, RunningIdle: definition.Capabilities.RunningIdle, Waiting: definition.Capabilities.WaitingPermission, ProcessIdentity: definition.Capabilities.ProcessIdentity, NativeCatalog: definition.Capabilities.NativeCatalog, TTYTmuxContext: definition.Capabilities.TTYTmuxContext})
 		}
-		status, message, relevant := app.integrationStatus(ctx, definition.ID)
+		status, message, relevant := integrationStatus(ctx, definition.ID)
 		if includeAll || relevant {
 			add("integration."+string(definition.ID), status, message)
 		}
@@ -191,12 +192,24 @@ func (app *application) runDoctor(ctx context.Context, includeAll bool) doctorRe
 	return result
 }
 
+func (app *application) doctorServiceStatus(ctx context.Context) (service.Result, error) {
+	options, err := app.configuredServiceOptions(&cobra.Command{}, serviceOptions{binary: defaultInstallBinary(), interval: serviceDefaultInterval})
+	if err != nil {
+		return service.Result{}, err
+	}
+	result, err := service.Status(ctx, options)
+	if err != nil {
+		return result, fmt.Errorf("tracker status: %w", err)
+	}
+	return result, nil
+}
+
 type observerHealth struct {
 	LastSuccessAt        time.Time `json:"last_success_at"`
 	LastEnumerationError string    `json:"last_enumeration_error"`
 }
 
-func (app *application) addObserverReconciliationCheck(result *doctorResult, storePath string) {
+func (result *doctorResult) addObserverReconciliationCheck(storePath string) {
 	path := storePath + ".observer-health.json"
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -223,14 +236,9 @@ func (app *application) addObserverReconciliationCheck(result *doctorResult, sto
 	result.Checks = append(result.Checks, doctorCheck{Name: "observer.reconciliation", Status: doctorOK, Message: "last successful reconciliation at " + health.LastSuccessAt.Format(time.RFC3339)})
 }
 
-func (app *application) addDetectionManifestCheck(result *doctorResult) {
+func (result *doctorResult) addDetectionManifestCheck() {
 	loader := agentstate.Loader{}
-	harnesses := []registry.Harness{
-		registry.HarnessClaude, registry.HarnessCodex, registry.HarnessCursor, registry.HarnessCopilot,
-		registry.HarnessCline, registry.HarnessKimiCode, registry.HarnessGrok, registry.HarnessGoose,
-		registry.HarnessPi, registry.HarnessOmp, registry.HarnessOpenCode, registry.HarnessAgy,
-		registry.HarnessKilo, registry.HarnessDroid, registry.HarnessOpenClaw, registry.HarnessHermes,
-	}
+	harnesses := registry.AllHarnesses()
 	var warnings []string
 	for _, harnessID := range harnesses {
 		if !loader.Supports(harnessID) {
@@ -273,7 +281,7 @@ func (app *application) addConfigFileCheck(result *doctorResult) {
 	result.Checks = append(result.Checks, doctorCheck{Name: "config.file", Status: doctorOK, Message: fmt.Sprintf("config file is valid (%s)", path)})
 }
 
-func (app *application) integrationStatus(ctx context.Context, id registry.Harness) (doctorStatus, string, bool) {
+func integrationStatus(ctx context.Context, id registry.Harness) (doctorStatus, string, bool) {
 	status, err := install.InspectContext(ctx, id, defaultInstallBinary())
 	if err != nil {
 		return doctorError, err.Error(), true

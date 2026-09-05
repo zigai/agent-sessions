@@ -45,7 +45,6 @@ func (signaler *recordingStopSignaler) SendProcessInterrupt(pid int) error {
 func TestRunManageStopSessionsStopsUniqueValidatedLiveTargets(t *testing.T) {
 	t.Parallel()
 	signaler := &recordingStopSignaler{validation: stopTargetValidation{OK: true}}
-	app := &application{}
 	sessions := []registry.Session{
 		{ID: "a", Harness: registry.HarnessCodex, Presence: registry.PresenceLive, Process: &registry.ProcessIdentity{PID: 101}},
 		{ID: "b", Harness: registry.HarnessClaude, Presence: registry.PresenceLive, Tmux: registry.TmuxContext{ServerSocket: "-L:custom", PaneID: "%2"}},
@@ -53,7 +52,7 @@ func TestRunManageStopSessionsStopsUniqueValidatedLiveTargets(t *testing.T) {
 		{ID: "d", Harness: registry.HarnessCodex, Presence: registry.PresenceGone, Process: &registry.ProcessIdentity{PID: 202}},
 		{ID: "e", Harness: registry.HarnessClaude, Presence: registry.PresenceLive, Tmux: registry.TmuxContext{ServerSocket: "-L:other", PaneID: "%2"}},
 	}
-	result, err := app.runManageStopSessions(context.Background(), sessions, manageStopAllOptions{signaler: signaler})
+	result, err := runManageStopSessions(context.Background(), sessions, manageStopAllOptions{signaler: signaler})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,7 +125,7 @@ func TestRunManageStopSessionsValidatesBeforeDeduplicating(t *testing.T) {
 		{ID: "a-stale", Harness: registry.HarnessCodex, Presence: registry.PresenceLive, Process: &registry.ProcessIdentity{PID: 101}},
 		{ID: "b-current", Harness: registry.HarnessCodex, Presence: registry.PresenceLive, Process: &registry.ProcessIdentity{PID: 101}},
 	}
-	result, err := (&application{}).runManageStopSessions(context.Background(), sessions, manageStopAllOptions{signaler: signaler})
+	result, err := runManageStopSessions(context.Background(), sessions, manageStopAllOptions{signaler: signaler})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,7 +141,7 @@ func TestRunManageStopSessionsDryRunStillValidatesTargets(t *testing.T) {
 	sessions := []registry.Session{
 		{ID: "stale", Harness: registry.HarnessCodex, Presence: registry.PresenceLive, Process: &registry.ProcessIdentity{PID: 101}},
 	}
-	result, err := (&application{}).runManageStopSessions(
+	result, err := runManageStopSessions(
 		context.Background(),
 		sessions,
 		manageStopAllOptions{dryRun: true, signaler: signaler},
@@ -161,9 +160,8 @@ func TestRunManageStopSessionsDryRunStillValidatesTargets(t *testing.T) {
 func TestRunManageStopSessionsReportsSignalFailure(t *testing.T) {
 	t.Parallel()
 	signaler := &recordingStopSignaler{validation: stopTargetValidation{OK: true}, sendErr: errTestSignal}
-	app := &application{}
 	sessions := []registry.Session{{ID: "a", Harness: registry.HarnessCodex, Presence: registry.PresenceLive, Process: &registry.ProcessIdentity{PID: 101}}}
-	result, err := app.runManageStopSessions(context.Background(), sessions, manageStopAllOptions{signaler: signaler})
+	result, err := runManageStopSessions(context.Background(), sessions, manageStopAllOptions{signaler: signaler})
 	if !errors.Is(err, errManageStopAllFailed) || result.Failed != 1 || result.Stopped != 0 {
 		t.Fatalf("stop failure result = %+v, err=%v", result, err)
 	}

@@ -14,10 +14,11 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
 	harnesspkg "github.com/zigai/aht/internal/harness"
 	"github.com/zigai/aht/internal/processinfo"
-	"github.com/zigai/aht/pkg/tmux"
 	"github.com/zigai/aht/pkg/registry"
+	"github.com/zigai/aht/pkg/tmux"
 )
 
 type systemStopResult struct {
@@ -309,7 +310,6 @@ func sessionForTmuxSocket(t *testing.T, sessions []registry.Session, socket stri
 	t.Fatalf("no observed session for tmux socket %q: %#v", socket, sessions)
 	return registry.Session{}
 }
-
 
 func waitForTmuxSessionExit(t *testing.T, socket string, session string) {
 	t.Helper()
