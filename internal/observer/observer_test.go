@@ -104,6 +104,50 @@ func requireOnlySessionPresence(t *testing.T, store Store, want registry.Presenc
 	}
 }
 
+func assertDegradedResult(t *testing.T, result Result, err error, targetErr error, expectedSubstrings ...string) {
+	t.Helper()
+	if !errors.Is(err, targetErr) || !result.Degraded || !strings.Contains(result.Error, targetErr.Error()) {
+		t.Fatalf("RunOnce() error = %v, result = %#v, want degraded result wrapping %v", err, result, targetErr)
+	}
+	for _, substr := range expectedSubstrings {
+		if !strings.Contains(result.Error, substr) {
+			t.Fatalf("result.Error = %q, want substring %q", result.Error, substr)
+		}
+	}
+}
+
+func assertDegradedHealth(t *testing.T, health Health, targetErr error, expectedSubstrings ...string) {
+	t.Helper()
+	if !health.Degraded || !strings.Contains(health.LastEnumerationError, targetErr.Error()) {
+		t.Fatalf("watcher health = %#v, want degraded with error %v", health, targetErr)
+	}
+	for _, substr := range expectedSubstrings {
+		if !strings.Contains(health.LastEnumerationError, substr) {
+			t.Fatalf("health.LastEnumerationError = %q, want substring %q", health.LastEnumerationError, substr)
+		}
+	}
+}
+
+func assertGoneAndTrackedCounts(t *testing.T, result Result, wantGone int, watcher *Observer, wantTracked int) {
+	t.Helper()
+	if result.Gone != wantGone {
+		t.Fatalf("result gone = %d, want %d (result = %#v)", result.Gone, wantGone, result)
+	}
+	if len(watcher.tracked) != wantTracked {
+		t.Fatalf("tracked process count = %d, want %d (tracked = %#v)", len(watcher.tracked), wantTracked, watcher.tracked)
+	}
+}
+
+func assertPartialSuccessCounters(t *testing.T, result Result, wantPresent int) {
+	t.Helper()
+	if result.Present != wantPresent {
+		t.Fatalf("RunOnce() result = %#v, want %d processes observed", result, wantPresent)
+	}
+	if result.Observations == 0 || result.Sessions == 0 || result.Changed == 0 {
+		t.Fatalf("partial-success counters = %#v, want persisted independent observation", result)
+	}
+}
+
 //nolint:cyclop // lifecycle test covers the two-snapshot disappearance contract
 func TestObserverDefaultMissingRequiresTwoSnapshots(t *testing.T) {
 	t.Parallel()
@@ -181,27 +225,16 @@ func TestObserverRetriesFailedGoneObservationAndEvictsTrackedProcess(t *testing.
 	}
 	at = at.Add(time.Second)
 	failed, err := watcher.RunOnce(context.Background())
-	if !errors.Is(err, errFailGoneObservation) || failed.Gone != 1 {
-		t.Fatalf("failed gone cycle = %#v, err=%v", failed, err)
-	}
-	if len(watcher.tracked) != 1 {
-		t.Fatalf("failed gone cycle retired tracked process: %#v", watcher.tracked)
-	}
+	assertDegradedResult(t, failed, err, errFailGoneObservation, "recording observation batch")
+	assertDegradedHealth(t, watcher.Health(), errFailGoneObservation, "recording observation batch")
+	assertGoneAndTrackedCounts(t, failed, 1, watcher, 1)
 	at = at.Add(time.Second)
 	retried, err := watcher.RunOnce(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if retried.Gone != 1 || len(watcher.tracked) != 0 {
-		t.Fatalf("successful retry = %#v, tracked=%#v", retried, watcher.tracked)
-	}
-	sessions, err := baseStore.List(context.Background(), registry.Filter{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(sessions) != 1 || sessions[0].Presence != registry.PresenceGone {
-		t.Fatalf("sessions after retry = %#v", sessions)
-	}
+	assertGoneAndTrackedCounts(t, retried, 1, watcher, 0)
+	requireOnlySessionPresence(t, baseStore, registry.PresenceGone)
 }
 
 func TestObserverConflictDoesNotBlockIndependentObservation(t *testing.T) {
@@ -224,15 +257,9 @@ func TestObserverConflictDoesNotBlockIndependentObservation(t *testing.T) {
 	})
 
 	result, err := watcher.RunOnce(context.Background())
-	if !errors.Is(err, registry.ErrObservationConflict) {
-		t.Fatalf("RunOnce() error = %v, want observation conflict", err)
-	}
-	if result.Present != 2 {
-		t.Fatalf("RunOnce() result = %#v, want both processes observed", result)
-	}
-	if result.Observations == 0 || result.Sessions == 0 || result.Changed == 0 {
-		t.Fatalf("partial-success counters = %#v, want persisted independent observation", result)
-	}
+	assertDegradedResult(t, result, err, registry.ErrObservationConflict)
+	assertDegradedHealth(t, watcher.Health(), registry.ErrObservationConflict)
+	assertPartialSuccessCounters(t, result, 2)
 	if store.batchCalls != 1 || store.observeCalls == 0 {
 		t.Fatalf("store calls = batch %d, individual %d; want one atomic attempt followed by individual retries", store.batchCalls, store.observeCalls)
 	}
@@ -242,6 +269,55 @@ func TestObserverConflictDoesNotBlockIndependentObservation(t *testing.T) {
 	}
 	if len(sessions) != 1 || sessions[0].Process == nil || sessions[0].Process.PID != 5678 {
 		t.Fatalf("sessions after conflicted cycle = %#v, want independent process persisted", sessions)
+	}
+}
+
+func TestObserverRunWithResultsDeliversDegradedResultOnStoreFailure(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "sessions.json")
+	baseStore := registry.NewFileStore(path)
+	store := &failGoneOnceStore{Store: baseStore}
+	at := time.Now().UTC().Add(-time.Minute)
+	process := processinfo.Process{PID: 1234, PPID: 1, ProcessGroupID: 1234, StartIdentity: "boot:A", Executable: "/usr/bin/codex", CWD: "/work", TTY: "/dev/pts/1"}
+	processes := []processinfo.Process{process}
+	watcher := New(Options{
+		Store: store,
+		Now:   func() time.Time { return at },
+		ProcessList: func(context.Context) ([]processinfo.Process, error) {
+			return processes, nil
+		},
+		PaneList:    func(context.Context) ([]mux.Pane, error) { return nil, nil },
+		CatalogList: func(context.Context) ([]CatalogEntry, error) { return nil, nil },
+	})
+	if _, err := watcher.RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	processes = nil
+	at = at.Add(time.Second)
+	if _, err := watcher.RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	at = at.Add(time.Second)
+
+	var streamed []Result
+	ctx, cancel := context.WithCancel(context.Background())
+	handle := func(r Result) error {
+		streamed = append(streamed, r)
+		cancel()
+		return nil
+	}
+	_ = watcher.RunWithResults(ctx, handle)
+	if len(streamed) != 1 {
+		t.Fatalf("streamed results = %d, want 1", len(streamed))
+	}
+	r := streamed[0]
+	if !r.Degraded || !strings.Contains(r.Error, errFailGoneObservation.Error()) || !strings.Contains(r.Error, "recording observation batch") || r.Gone != 1 {
+		t.Fatalf("streamed result = %#v, want degraded with error and gone counter", r)
+	}
+	health := watcher.Health()
+	if !health.Degraded || !strings.Contains(health.LastEnumerationError, errFailGoneObservation.Error()) || !strings.Contains(health.LastEnumerationError, "recording observation batch") {
+		t.Fatalf("watcher health = %#v, want degraded with observation error", health)
 	}
 }
 

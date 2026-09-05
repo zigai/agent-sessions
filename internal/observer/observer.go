@@ -27,6 +27,7 @@ const (
 	defaultObserverInterval    = time.Second
 	defaultMissingSnapshots    = 2
 	commandArgumentPrefixCount = 2
+	initialScreenConfirmations = 2
 )
 
 var (
@@ -113,7 +114,6 @@ type processKey struct {
 }
 type trackedProcess struct {
 	process      processinfo.Process
-	seenAt       time.Time
 	missingSince time.Time
 	missingCount int
 }
@@ -123,11 +123,8 @@ type pendingScreenDecision struct {
 	confirmations uint8
 }
 
-const initialScreenConfirmations = 2
-
 type Observer struct {
 	store                   Store
-	storePath               string
 	interval                time.Duration
 	grace                   time.Duration
 	healthPath              string
@@ -204,7 +201,7 @@ func New(options Options) *Observer {
 		screenCapture = captureMultiplexerPane
 	}
 	return &Observer{
-		store: store, storePath: storePath, interval: interval, grace: options.GracePeriod,
+		store: store, interval: interval, grace: options.GracePeriod,
 		healthPath: healthPath, processList: processList, paneList: paneList, catalogList: catalogList,
 		screenCapture: screenCapture, manifestLoader: agentstate.Loader{ConfigDir: options.DetectionConfigDir},
 		disableScreenInspection: options.DisableScreenInspection,
@@ -277,17 +274,11 @@ func (o *Observer) runCycle(ctx context.Context) (Result, error) {
 	at := o.now().UTC()
 	result := Result{ObservedAt: at, Observations: 0, Sessions: 0, Processes: 0, Panes: 0, Catalog: 0, Present: 0, Gone: 0, Changed: 0, Degraded: false, Error: ""}
 	if err := o.initializeTracked(ctx); err != nil {
-		result.Degraded = true
-		result.Error = err.Error()
-		healthErr := o.recordHealth(at, true, "registry", err, result)
-		return result, joinObserverHealthError(fmt.Errorf("initializing observer state: %w", err), healthErr)
+		return o.failCycle(at, "registry", err, "initializing observer state", result)
 	}
 	processes, err := o.processList(ctx)
 	if err != nil {
-		result.Degraded = true
-		result.Error = err.Error()
-		healthErr := o.recordHealth(at, true, "process-enumeration", err, result)
-		return result, joinObserverHealthError(fmt.Errorf("listing processes: %w", err), healthErr)
+		return o.failCycle(at, "process-enumeration", err, "listing processes", result)
 	}
 	result.Processes = len(processes)
 	panes, paneErr := o.paneList(ctx)
@@ -308,10 +299,7 @@ func (o *Observer) runCycle(ctx context.Context) (Result, error) {
 	result.Catalog = len(catalog)
 	knownSessions, sessionErr := o.store.List(ctx, registry.Filter{Harness: "", Presence: "", Activity: "", TmuxSession: "", MultiplexerSession: ""})
 	if sessionErr != nil {
-		result.Degraded = true
-		result.Error = sessionErr.Error()
-		healthErr := o.recordHealth(at, true, "registry", sessionErr, result)
-		return result, joinObserverHealthError(fmt.Errorf("listing sessions for state detection: %w", sessionErr), healthErr)
+		return o.failCycle(at, "registry", sessionErr, "listing sessions for state detection", result)
 	}
 
 	catalogByPID := make(map[int]CatalogEntry)
@@ -363,7 +351,7 @@ func (o *Observer) runCycle(ctx context.Context) (Result, error) {
 			continue
 		}
 		key := processKey{harness: harnessID, pid: process.PID, start: process.StartIdentity}
-		current[key] = trackedProcess{process: process, seenAt: at, missingSince: time.Time{}, missingCount: 0}
+		current[key] = trackedProcess{process: process, missingSince: time.Time{}, missingCount: 0}
 		present := true
 		identity := registry.ObservationIdentity{SessionID: "", SessionPath: ""}
 		if entry, ok := catalogByPID[process.PID]; ok && entry.Harness == harnessID {
@@ -428,35 +416,32 @@ func (o *Observer) runCycle(ctx context.Context) (Result, error) {
 		})
 	}
 	retiredKeys := make([]processKey, 0)
-	nextTracked := current
-	if o.initialized {
-		nextTracked = make(map[processKey]trackedProcess, len(current)+len(o.tracked))
-		maps.Copy(nextTracked, current)
-		for key, old := range o.tracked {
-			if _, ok := current[key]; ok {
-				continue
-			}
-			old.missingCount++
-			if old.missingSince.IsZero() {
-				old.missingSince = at
-			}
-			eligible := o.grace > 0 && at.Sub(old.missingSince) >= o.grace
-			if o.grace == 0 {
-				eligible = old.missingCount >= defaultMissingSnapshots
-			}
-			if eligible {
-				present := false
-				observations = append(observations, registry.Observation{ //nolint:exhaustruct // absence observations intentionally omit unrelated evidence dimensions
-					Source: registry.ObservationSourceProcess, Evidence: registry.ObservationEvidenceProcessPresence,
-					Harness: key.harness, ProcessPresent: &present, Process: processIdentity(old.process), ObservedAt: at,
-				})
-				result.Gone++
-				nextTracked[key] = old
-				retiredKeys = append(retiredKeys, key)
-				continue
-			}
-			nextTracked[key] = old
+	nextTracked := make(map[processKey]trackedProcess, len(current)+len(o.tracked))
+	maps.Copy(nextTracked, current)
+	for key, old := range o.tracked {
+		if _, ok := current[key]; ok {
+			continue
 		}
+		old.missingCount++
+		if old.missingSince.IsZero() {
+			old.missingSince = at
+		}
+		eligible := o.grace > 0 && at.Sub(old.missingSince) >= o.grace
+		if o.grace == 0 {
+			eligible = old.missingCount >= defaultMissingSnapshots
+		}
+		if eligible {
+			present := false
+			observations = append(observations, registry.Observation{ //nolint:exhaustruct // absence observations intentionally omit unrelated evidence dimensions
+				Source: registry.ObservationSourceProcess, Evidence: registry.ObservationEvidenceProcessPresence,
+				Harness: key.harness, ProcessPresent: &present, Process: processIdentity(old.process), ObservedAt: at,
+			})
+			result.Gone++
+			nextTracked[key] = old
+			retiredKeys = append(retiredKeys, key)
+			continue
+		}
+		nextTracked[key] = old
 	}
 	absences := absenceObservationsForUnobservedSessions(knownSessions, processByPID, at)
 	observations = append(observations, absences...)
@@ -470,23 +455,28 @@ func (o *Observer) runCycle(ctx context.Context) (Result, error) {
 		if observeErr != nil {
 			if errors.Is(observeErr, registry.ErrObservationConflict) {
 				o.tracked = nextTracked
-				o.initialized = true
 			}
-			healthErr := o.recordHealth(at, true, "registry", observeErr, result)
-			return result, joinObserverHealthError(fmt.Errorf("recording observations: %w", observeErr), healthErr)
+			return o.failCycle(at, "registry", observeErr, "recording observations", result)
 		}
 	}
 	for _, key := range retiredKeys {
 		delete(nextTracked, key)
 	}
 	o.tracked = nextTracked
-	o.initialized = true
 	if err := o.recordCycleHealth(at, result); err != nil {
 		result.Degraded = true
 		result.Error = err.Error()
 		return result, fmt.Errorf("recording observer health: %w", err)
 	}
 	return result, nil
+}
+
+//nolint:funcorder // cycle failure finalization stays next to reconciliation
+func (o *Observer) failCycle(at time.Time, component string, err error, wrapMsg string, result Result) (Result, error) {
+	result.Degraded = true
+	result.Error = err.Error()
+	healthErr := o.recordHealth(at, true, component, err, result)
+	return result, joinObserverHealthError(fmt.Errorf("%s: %w", wrapMsg, err), healthErr)
 }
 
 //nolint:funcorder // cycle health handling stays next to reconciliation
@@ -910,7 +900,6 @@ func (o *Observer) initializeTracked(ctx context.Context) error {
 		key := processKey{harness: session.Harness, pid: process.PID, start: process.StartIdentity}
 		o.tracked[key] = trackedProcess{
 			process:      process,
-			seenAt:       observation.ObservedAt,
 			missingSince: observation.ObservedAt,
 			missingCount: defaultMissingSnapshots - 1,
 		}
