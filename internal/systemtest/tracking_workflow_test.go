@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -401,6 +402,7 @@ func assertHumanWatchSafe(t *testing.T, transcript *bytes.Buffer, binary string,
 	process := &runningTestCommand{command: exec.Command(binary, "--store", storePath, "watch", "--format", "plain"), done: make(chan error, 1)}
 	process.command.Dir = directory
 	process.command.Env = environment
+	process.command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	stdout, err := process.command.StdoutPipe()
 	if err != nil {
 		t.Fatalf("create human watch stdout pipe: %v", err)
@@ -409,17 +411,36 @@ func assertHumanWatchSafe(t *testing.T, transcript *bytes.Buffer, binary string,
 	if err := process.command.Start(); err != nil {
 		t.Fatalf("start human watch: %v", err)
 	}
+	waitDone := make(chan struct{})
+	var doneOnce sync.Once
 	go func() {
-		process.done <- process.command.Wait()
+		waitErr := process.command.Wait()
+		doneOnce.Do(func() { close(waitDone) })
+		process.done <- waitErr
 	}()
 	scanner := bufio.NewScanner(stdout)
 	line := make(chan []byte, 1)
+	scannerDone := make(chan struct{})
 	go func() {
+		defer close(scannerDone)
 		if scanner.Scan() {
 			line <- bytes.Clone(scanner.Bytes())
 		}
 		close(line)
 	}()
+	t.Cleanup(func() {
+		select {
+		case <-waitDone:
+			<-scannerDone
+			return
+		default:
+		}
+		if process.command.Process != nil && process.command.Process.Pid > 0 {
+			_ = syscall.Kill(-process.command.Process.Pid, syscall.SIGKILL)
+			<-waitDone
+		}
+		<-scannerDone
+	})
 	timer := time.NewTimer(5 * time.Second)
 	defer timer.Stop()
 	select {
@@ -438,6 +459,7 @@ func assertHumanWatchSafe(t *testing.T, transcript *bytes.Buffer, binary string,
 		t.Fatalf("timed out waiting for human watch snapshot; stderr=%q", process.stderr.String())
 	}
 	stopSystemTestCommand(t, process)
+	<-scannerDone
 }
 
 func assertTerminalSafe(t *testing.T, output []byte) {
