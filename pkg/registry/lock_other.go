@@ -13,7 +13,7 @@ type storeLock struct {
 	path string
 }
 
-func openStoreLock(ctx context.Context, path string) (*storeLock, error) {
+func openStoreLock(ctx context.Context, path string, _ ...func()) (*storeLock, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("opening store lock: %w", err)
 	}

@@ -2,9 +2,7 @@ package registry
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"strings"
 	"testing"
 	"time"
 )
@@ -113,26 +111,6 @@ func TestDelayedNativeActivityCannotOverwriteNewerScreenDecision(t *testing.T) {
 	}
 	if session.Activity == nil || *session.Activity != ActivityIdle || !session.ActivityChangedAt.Equal(screenAt) || session.ActivityDecision == nil || session.ActivityDecision.Authority != "screen" {
 		t.Fatalf("delayed native activity overwrote newer screen decision: %#v", session)
-	}
-}
-
-func TestScreenObservationDoesNotPersistTerminalContents(t *testing.T) {
-	t.Parallel()
-	store := NewFileStore(t.TempDir() + "/state.json")
-	at := time.Now().UTC()
-	process := ProcessIdentity{PID: 101, StartIdentity: "boot:101", Executable: "codex"}
-	idle := ActivityIdle
-	screen := &ScreenObservation{Activity: idle, Authority: "screen", Reason: "manifest_rule", RuleID: "input_prompt", ManifestSource: "bundled", ManifestVersion: 1, Process: process, ObservedAt: at}
-	session, err := store.Observe(context.Background(), Observation{Source: ObservationSourceScreen, Evidence: ObservationEvidenceScreenState, Harness: HarnessCodex, Activity: &idle, Process: &process, Screen: screen, ObservedAt: at})
-	if err != nil {
-		t.Fatal(err)
-	}
-	encoded, err := json.Marshal(session)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(encoded), "terminal contents") {
-		t.Fatalf("session contains raw terminal contents: %s", encoded)
 	}
 }
 

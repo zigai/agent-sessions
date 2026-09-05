@@ -52,6 +52,13 @@ type fileStoreWatch struct {
 	haveBaseline      bool
 }
 
+type watchRunState struct {
+	watch         *fileStoreWatch
+	debounceTimer *time.Timer
+	debounce      <-chan time.Time
+	reconcile     <-chan time.Time
+}
+
 // Watch yields serialized snapshots until ctx is canceled or yield returns an
 // error. It observes the store directory before the initial scan and keeps its
 // parent watched so atomic replacement and directory recreation remain visible.
@@ -130,9 +137,7 @@ func (watch *fileStoreWatch) yieldError(watchErr error) error {
 
 func (watch *fileStoreWatch) run(ctx context.Context) error {
 	debounceTimer := time.NewTimer(time.Hour)
-	if !debounceTimer.Stop() {
-		<-debounceTimer.C
-	}
+	debounceTimer.Stop()
 	defer debounceTimer.Stop()
 	reconcile := time.NewTicker(watch.options.ReconcileInterval)
 	defer reconcile.Stop()
@@ -144,13 +149,6 @@ func (watch *fileStoreWatch) run(ctx context.Context) error {
 			return err
 		}
 	}
-}
-
-type watchRunState struct {
-	watch         *fileStoreWatch
-	debounceTimer *time.Timer
-	debounce      <-chan time.Time
-	reconcile     <-chan time.Time
 }
 
 func (state *watchRunState) step(ctx context.Context) (bool, error) {
@@ -168,7 +166,7 @@ func (state *watchRunState) step(ctx context.Context) (bool, error) {
 			}
 		}
 		if isFileStoreWatchEvent(event, state.watch.target, state.watch.directory) {
-			resetWatchDebounceTimer(state.debounceTimer, state.watch.options.Debounce)
+			state.debounceTimer.Reset(state.watch.options.Debounce)
 			state.debounce = state.debounceTimer.C
 		}
 		return false, nil
@@ -193,16 +191,6 @@ func (watch *fileStoreWatch) handleWatcherError(watchErr error) error {
 		return err
 	}
 	return watch.scan()
-}
-
-func resetWatchDebounceTimer(timer *time.Timer, debounce time.Duration) {
-	if !timer.Stop() {
-		select {
-		case <-timer.C:
-		default:
-		}
-	}
-	timer.Reset(debounce)
 }
 
 func normalizeFileStoreWatchOptions(options WatchOptions) WatchOptions {

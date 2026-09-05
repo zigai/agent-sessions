@@ -14,8 +14,6 @@ import (
 	"time"
 )
 
-type Harness string
-
 const (
 	HarnessClaude   Harness = "claude"
 	HarnessCodex    Harness = "codex"
@@ -27,7 +25,6 @@ const (
 	HarnessGoose    Harness = "goose"
 	HarnessPi       Harness = "pi"
 	HarnessOmp      Harness = "omp"
-	HarnessOhMyPi   Harness = HarnessOmp
 	HarnessOpenCode Harness = "opencode"
 	HarnessAgy      Harness = "agy"
 	HarnessKilo     Harness = "kilo"
@@ -36,21 +33,50 @@ const (
 	HarnessHermes   Harness = "hermes"
 )
 
-func (h Harness) IsValid() bool {
-	switch h {
-	case HarnessClaude, HarnessCodex, HarnessCursor, HarnessCopilot, HarnessCline,
-		HarnessKimiCode, HarnessGrok, HarnessGoose, HarnessPi, HarnessOmp,
-		HarnessOpenCode, HarnessAgy, HarnessKilo, HarnessDroid, HarnessOpenClaw,
-		HarnessHermes:
-		return true
-	}
-	return false
-}
+const (
+	PresenceLive    Presence = "live"
+	PresenceGone    Presence = "gone"
+	PresenceUnknown Presence = "unknown"
+)
 
-// AllHarnesses returns a slice containing every canonical harness.
-func AllHarnesses() []Harness {
-	return slices.Clone(allHarnesses)
-}
+const (
+	ActivityRunning     Activity = "running"
+	ActivityWaiting     Activity = "waiting"
+	ActivityIdle        Activity = "idle"
+	ActivityFailed      Activity = "failed"
+	ActivityInterrupted Activity = "interrupted"
+	ActivityUnknown     Activity = "unknown"
+)
+
+const (
+	ObservationSourceNative      ObservationSource = "native"
+	ObservationSourceProcess     ObservationSource = "process"
+	ObservationSourceTmux        ObservationSource = "tmux"
+	ObservationSourceMultiplexer ObservationSource = "multiplexer"
+	ObservationSourceCatalog     ObservationSource = "catalog"
+	ObservationSourceScreen      ObservationSource = "screen"
+)
+
+const (
+	ObservationEvidenceNativeEvent         ObservationEvidence = "native_event"
+	ObservationEvidenceProcessPresence     ObservationEvidence = "process_presence"
+	ObservationEvidenceTmuxLocation        ObservationEvidence = "tmux_location"
+	ObservationEvidenceMultiplexerLocation ObservationEvidence = "multiplexer_location"
+	ObservationEvidenceCatalogMetadata     ObservationEvidence = "catalog_metadata"
+	ObservationEvidenceScreenState         ObservationEvidence = "screen_state"
+)
+
+const (
+	NativeLifecycleStart  NativeLifecycle = "start"
+	NativeLifecycleResume NativeLifecycle = "resume"
+	NativeLifecycleEnd    NativeLifecycle = "end"
+)
+
+const (
+	MultiplexerTmux   MultiplexerKind = "tmux"
+	MultiplexerZellij MultiplexerKind = "zellij"
+	MultiplexerHerdr  MultiplexerKind = "herdr"
+)
 
 var (
 	ErrUnknownHarness     = errors.New("unknown harness")
@@ -68,97 +94,17 @@ var (
 	}
 )
 
+type Harness string
+
 type Presence string
-
-const (
-	PresenceLive    Presence = "live"
-	PresenceGone    Presence = "gone"
-	PresenceUnknown Presence = "unknown"
-)
-
-func (p Presence) IsValid() bool {
-	switch p {
-	case PresenceLive, PresenceGone, PresenceUnknown:
-		return true
-	}
-	return false
-}
 
 type Activity string
 
-const (
-	ActivityRunning     Activity = "running"
-	ActivityWaiting     Activity = "waiting"
-	ActivityIdle        Activity = "idle"
-	ActivityFailed      Activity = "failed"
-	ActivityInterrupted Activity = "interrupted"
-	ActivityUnknown     Activity = "unknown"
-)
-
-func (a Activity) IsValid() bool {
-	switch a {
-	case ActivityRunning, ActivityWaiting, ActivityIdle, ActivityFailed, ActivityInterrupted, ActivityUnknown:
-		return true
-	}
-	return false
-}
-
 type ObservationSource string
-
-const (
-	ObservationSourceNative      ObservationSource = "native"
-	ObservationSourceProcess     ObservationSource = "process"
-	ObservationSourceTmux        ObservationSource = "tmux"
-	ObservationSourceMultiplexer ObservationSource = "multiplexer"
-	ObservationSourceCatalog     ObservationSource = "catalog"
-	ObservationSourceScreen      ObservationSource = "screen"
-)
-
-func (s ObservationSource) IsValid() bool {
-	switch s {
-	case ObservationSourceNative, ObservationSourceProcess, ObservationSourceTmux,
-		ObservationSourceMultiplexer, ObservationSourceCatalog, ObservationSourceScreen:
-		return true
-	}
-	return false
-}
 
 type ObservationEvidence string
 
-const (
-	ObservationEvidenceNativeEvent         ObservationEvidence = "native_event"
-	ObservationEvidenceProcessPresence     ObservationEvidence = "process_presence"
-	ObservationEvidenceTmuxLocation        ObservationEvidence = "tmux_location"
-	ObservationEvidenceMultiplexerLocation ObservationEvidence = "multiplexer_location"
-	ObservationEvidenceCatalogMetadata     ObservationEvidence = "catalog_metadata"
-	ObservationEvidenceScreenState         ObservationEvidence = "screen_state"
-)
-
-func (e ObservationEvidence) IsValid() bool {
-	switch e {
-	case ObservationEvidenceNativeEvent, ObservationEvidenceProcessPresence,
-		ObservationEvidenceTmuxLocation, ObservationEvidenceMultiplexerLocation,
-		ObservationEvidenceCatalogMetadata, ObservationEvidenceScreenState:
-		return true
-	}
-	return false
-}
-
 type NativeLifecycle string
-
-const (
-	NativeLifecycleStart  NativeLifecycle = "start"
-	NativeLifecycleResume NativeLifecycle = "resume"
-	NativeLifecycleEnd    NativeLifecycle = "end"
-)
-
-func (l NativeLifecycle) IsValid() bool {
-	switch l {
-	case NativeLifecycleStart, NativeLifecycleResume, NativeLifecycleEnd:
-		return true
-	}
-	return false
-}
 
 type TmuxContext struct {
 	Inside          bool   `json:"inside"`
@@ -176,23 +122,7 @@ type TmuxContext struct {
 	ClientTTY       string `json:"client_tty,omitempty"`
 }
 
-func (c TmuxContext) Empty() bool { return c == (TmuxContext{}) } //nolint:exhaustruct // comparing against the zero value is intentional
-
 type MultiplexerKind string
-
-const (
-	MultiplexerTmux   MultiplexerKind = "tmux"
-	MultiplexerZellij MultiplexerKind = "zellij"
-	MultiplexerHerdr  MultiplexerKind = "herdr"
-)
-
-func (k MultiplexerKind) IsValid() bool {
-	switch k {
-	case MultiplexerTmux, MultiplexerZellij, MultiplexerHerdr:
-		return true
-	}
-	return false
-}
 
 // MultiplexerContext identifies an addressable terminal pane. Window fields
 // represent tmux windows, while workspace and tab fields represent native
@@ -218,35 +148,6 @@ type MultiplexerContext struct {
 	ClientTTY       string          `json:"client_tty,omitempty"`
 }
 
-func (c MultiplexerContext) Empty() bool { return c == (MultiplexerContext{}) } //nolint:exhaustruct // comparing against the zero value is intentional
-
-func MultiplexerFromTmux(c TmuxContext) MultiplexerContext {
-	if c.Empty() {
-		var empty MultiplexerContext
-		return empty
-	}
-	return MultiplexerContext{
-		Kind: MultiplexerTmux, ServerID: c.ServerSocket, SessionID: c.SessionID, SessionName: c.SessionName,
-		WorkspaceID: "", WorkspaceName: "", TabID: "", TabIndex: "", TabName: "",
-		WindowID: c.WindowID, WindowIndex: c.WindowIndex, WindowName: c.WindowName,
-		PaneID: c.PaneID, PaneIndex: c.PaneIndex, PaneCurrentPath: c.PaneCurrentPath,
-		PanePID: c.PanePID, PaneTTY: c.PaneTTY, ClientTTY: c.ClientTTY,
-	}
-}
-
-func (c MultiplexerContext) TmuxContext() TmuxContext {
-	if c.Kind != MultiplexerTmux {
-		var empty TmuxContext
-		return empty
-	}
-	return TmuxContext{
-		Inside: true, ServerSocket: c.ServerID, SessionID: c.SessionID, SessionName: c.SessionName,
-		WindowID: c.WindowID, WindowIndex: c.WindowIndex, WindowName: c.WindowName,
-		PaneID: c.PaneID, PaneIndex: c.PaneIndex, PaneCurrentPath: c.PaneCurrentPath,
-		PanePID: c.PanePID, PaneTTY: c.PaneTTY, ClientTTY: c.ClientTTY,
-	}
-}
-
 type ProcessIdentity struct {
 	PID            int    `json:"pid"`
 	PPID           int    `json:"ppid"`
@@ -256,12 +157,6 @@ type ProcessIdentity struct {
 	Executable     string `json:"executable"`
 	CWD            string `json:"cwd"`
 	TTY            string `json:"tty"`
-}
-
-func (p ProcessIdentity) Complete() bool { return p.PID > 0 && p.StartIdentity != "" }
-
-func (p ProcessIdentity) Equal(other ProcessIdentity) bool {
-	return p.PID == other.PID && p.StartIdentity != "" && p.StartIdentity == other.StartIdentity
 }
 
 type NativeObservation struct {
@@ -425,6 +320,110 @@ type Summary struct {
 }
 
 type SummaryOptions struct{ Filter Filter }
+
+func (h Harness) IsValid() bool {
+	switch h {
+	case HarnessClaude, HarnessCodex, HarnessCursor, HarnessCopilot, HarnessCline,
+		HarnessKimiCode, HarnessGrok, HarnessGoose, HarnessPi, HarnessOmp,
+		HarnessOpenCode, HarnessAgy, HarnessKilo, HarnessDroid, HarnessOpenClaw,
+		HarnessHermes:
+		return true
+	}
+	return false
+}
+
+// AllHarnesses returns a slice containing every canonical harness.
+func AllHarnesses() []Harness {
+	return slices.Clone(allHarnesses)
+}
+
+func (p Presence) IsValid() bool {
+	switch p {
+	case PresenceLive, PresenceGone, PresenceUnknown:
+		return true
+	}
+	return false
+}
+
+func (a Activity) IsValid() bool {
+	switch a {
+	case ActivityRunning, ActivityWaiting, ActivityIdle, ActivityFailed, ActivityInterrupted, ActivityUnknown:
+		return true
+	}
+	return false
+}
+
+func (s ObservationSource) IsValid() bool {
+	switch s {
+	case ObservationSourceNative, ObservationSourceProcess, ObservationSourceTmux,
+		ObservationSourceMultiplexer, ObservationSourceCatalog, ObservationSourceScreen:
+		return true
+	}
+	return false
+}
+
+func (e ObservationEvidence) IsValid() bool {
+	switch e {
+	case ObservationEvidenceNativeEvent, ObservationEvidenceProcessPresence,
+		ObservationEvidenceTmuxLocation, ObservationEvidenceMultiplexerLocation,
+		ObservationEvidenceCatalogMetadata, ObservationEvidenceScreenState:
+		return true
+	}
+	return false
+}
+
+func (l NativeLifecycle) IsValid() bool {
+	switch l {
+	case NativeLifecycleStart, NativeLifecycleResume, NativeLifecycleEnd:
+		return true
+	}
+	return false
+}
+
+func (k MultiplexerKind) IsValid() bool {
+	switch k {
+	case MultiplexerTmux, MultiplexerZellij, MultiplexerHerdr:
+		return true
+	}
+	return false
+}
+
+func (c TmuxContext) Empty() bool { return c == (TmuxContext{}) } //nolint:exhaustruct // comparing against the zero value is intentional
+
+func (c MultiplexerContext) Empty() bool { return c == (MultiplexerContext{}) } //nolint:exhaustruct // comparing against the zero value is intentional
+
+func MultiplexerFromTmux(c TmuxContext) MultiplexerContext {
+	if c.Empty() {
+		var empty MultiplexerContext
+		return empty
+	}
+	return MultiplexerContext{
+		Kind: MultiplexerTmux, ServerID: c.ServerSocket, SessionID: c.SessionID, SessionName: c.SessionName,
+		WorkspaceID: "", WorkspaceName: "", TabID: "", TabIndex: "", TabName: "",
+		WindowID: c.WindowID, WindowIndex: c.WindowIndex, WindowName: c.WindowName,
+		PaneID: c.PaneID, PaneIndex: c.PaneIndex, PaneCurrentPath: c.PaneCurrentPath,
+		PanePID: c.PanePID, PaneTTY: c.PaneTTY, ClientTTY: c.ClientTTY,
+	}
+}
+
+func (c MultiplexerContext) TmuxContext() TmuxContext {
+	if c.Kind != MultiplexerTmux {
+		var empty TmuxContext
+		return empty
+	}
+	return TmuxContext{
+		Inside: true, ServerSocket: c.ServerID, SessionID: c.SessionID, SessionName: c.SessionName,
+		WindowID: c.WindowID, WindowIndex: c.WindowIndex, WindowName: c.WindowName,
+		PaneID: c.PaneID, PaneIndex: c.PaneIndex, PaneCurrentPath: c.PaneCurrentPath,
+		PanePID: c.PanePID, PaneTTY: c.PaneTTY, ClientTTY: c.ClientTTY,
+	}
+}
+
+func (p ProcessIdentity) Complete() bool { return p.PID > 0 && p.StartIdentity != "" }
+
+func (p ProcessIdentity) Equal(other ProcessIdentity) bool {
+	return p.PID == other.PID && p.StartIdentity != "" && p.StartIdentity == other.StartIdentity
+}
 
 func NormalizePresence(value string) (Presence, error) {
 	switch strings.ToLower(strings.TrimSpace(value)) {
@@ -591,7 +590,7 @@ func (observation Observation) Validate() error {
 			return fmt.Errorf("%w: process_present is required", ErrInvalidObservation)
 		}
 		if *observation.ProcessPresent {
-			if observation.Process == nil || !observation.Process.Complete() {
+			if observation.Process == nil {
 				return fmt.Errorf("%w: complete process identity is required", ErrInvalidObservation)
 			}
 		}
@@ -600,7 +599,7 @@ func (observation Observation) Validate() error {
 		if observation.Tmux == nil {
 			return fmt.Errorf("%w: tmux context is required", ErrInvalidObservation)
 		}
-		if observation.Process == nil || !observation.Process.Complete() {
+		if observation.Process == nil {
 			return fmt.Errorf("%w: complete process identity is required", ErrInvalidObservation)
 		}
 	}
@@ -608,7 +607,7 @@ func (observation Observation) Validate() error {
 		if observation.Multiplexer == nil {
 			return fmt.Errorf("%w: multiplexer context is required", ErrInvalidObservation)
 		}
-		if observation.Process == nil || !observation.Process.Complete() {
+		if observation.Process == nil {
 			return fmt.Errorf("%w: complete process identity is required", ErrInvalidObservation)
 		}
 	}
@@ -619,14 +618,14 @@ func (observation Observation) Validate() error {
 		if observation.Activity == nil || observation.Screen == nil {
 			return fmt.Errorf("%w: screen activity and evidence are required", ErrInvalidObservation)
 		}
-		if observation.Process == nil || !observation.Process.Complete() {
+		if observation.Process == nil {
 			return fmt.Errorf("%w: complete process identity is required", ErrInvalidObservation)
 		}
 		if !observation.Screen.Process.Equal(*observation.Process) {
 			return fmt.Errorf("%w: screen process does not match observation process", ErrInvalidObservation)
 		}
 	}
-	if observation.Identity.SessionID == "" && observation.Identity.SessionPath == "" && (observation.Process == nil || !observation.Process.Complete()) {
+	if observation.Identity.SessionID == "" && observation.Identity.SessionPath == "" && observation.Process == nil {
 		return fmt.Errorf("%w: identity is required", ErrInvalidObservation)
 	}
 	return nil

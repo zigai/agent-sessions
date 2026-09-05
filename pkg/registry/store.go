@@ -21,11 +21,11 @@ const (
 	maxObservedAtFutureSkew = 5 * time.Minute
 	automaticGoneRetention  = 5 * time.Minute
 	maxSnapshotBytes        = 64 << 20
-)
 
-// IntegrationActivityLease is the maximum age of a matching integration
-// transition before multiplexer screen evidence becomes authoritative again.
-const IntegrationActivityLease = 30 * time.Second
+	// IntegrationActivityLease is the maximum age of a matching integration
+	// transition before multiplexer screen evidence becomes authoritative again.
+	IntegrationActivityLease = 30 * time.Second
+)
 
 var (
 	ErrSessionNotFound     = errors.New("session not found")
@@ -34,19 +34,13 @@ var (
 	ErrObservationConflict = errors.New("observation conflicts with accepted evidence")
 	ErrCorruptStore        = errors.New("corrupt registry store")
 	ErrStoreTooLarge       = errors.New("registry store exceeds size limit")
+
+	_ Store = (*FileStore)(nil)
 )
 
 type UnsupportedSchemaError struct {
 	Path    string
 	Version int
-}
-
-func (e *UnsupportedSchemaError) Error() string {
-	version := "missing"
-	if e.Version != 0 {
-		version = strconv.Itoa(e.Version)
-	}
-	return fmt.Sprintf("unsupported store schema %s at %s; run aht --store %s manage state reset --force or move/remove the file", version, e.Path, e.Path)
 }
 
 type snapshot struct {
@@ -60,23 +54,38 @@ type GCResult struct {
 	Deleted   int `json:"deleted"`
 	Remaining int `json:"remaining"`
 }
+
 type ResetResult struct {
 	Cleared   int `json:"cleared"`
 	Remaining int `json:"remaining"`
 }
 
 type FileStore struct {
-	path string
-	now  func() time.Time
+	path             string
+	now              func() time.Time
+	onLockContention func()
 }
 
-var _ Store = (*FileStore)(nil)
+type summaryKey struct {
+	kind   MultiplexerKind
+	server string
+	id     string
+	name   string
+}
+
+func (e *UnsupportedSchemaError) Error() string {
+	version := "missing"
+	if e.Version != 0 {
+		version = strconv.Itoa(e.Version)
+	}
+	return fmt.Sprintf("unsupported store schema %s at %s; run aht --store %s manage state reset --force or move/remove the file", version, e.Path, e.Path)
+}
 
 func NewFileStore(path string) *FileStore {
 	if path == "" {
 		path = DefaultStorePath()
 	}
-	return &FileStore{path: path, now: func() time.Time { return time.Now().UTC() }}
+	return &FileStore{path: path, now: func() time.Time { return time.Now().UTC() }, onLockContention: nil}
 }
 
 func (s *FileStore) Path() string { return s.path }
@@ -141,7 +150,7 @@ func applyObservationBatch(
 			return nil, err
 		}
 
-		at, _ := observationTime(observation.ObservedAt, receivedAt)
+		at := observationTime(observation.ObservedAt, receivedAt)
 		retireConflictingProcessSessions(snap.Sessions, observation, at, receivedAt)
 		id := findAndReconcileMatchingSession(snap.Sessions, observation)
 		if id == "" &&
@@ -213,15 +222,15 @@ func newSession(id string, harness Harness, now time.Time) Session {
 	}
 }
 
-func observationTime(observedAt, receivedAt time.Time) (time.Time, bool) {
+func observationTime(observedAt, receivedAt time.Time) time.Time {
 	if observedAt.IsZero() {
-		return receivedAt, true
+		return receivedAt
 	}
 	observedAt = observedAt.UTC()
 	if observedAt.After(receivedAt.Add(maxObservedAtFutureSkew)) {
-		return receivedAt, false
+		return receivedAt
 	}
-	return observedAt, true
+	return observedAt
 }
 
 //nolint:cyclop // each source owns an independent timestamp slot
@@ -483,22 +492,6 @@ func applyIdentity(session *Session, observation Observation) {
 	if observation.Identity.SessionPath != "" {
 		session.SessionPath = filepath.Clean(observation.Identity.SessionPath)
 	}
-	if observation.Source == ObservationSourceNative && session.Observations.Native != nil {
-		if session.Observations.Native.SessionID != "" {
-			session.SessionID = session.Observations.Native.SessionID
-		}
-		if session.Observations.Native.SessionPath != "" {
-			session.SessionPath = filepath.Clean(session.Observations.Native.SessionPath)
-		}
-	}
-	if observation.Source == ObservationSourceCatalog && session.Observations.Catalog != nil {
-		if session.SessionID == "" {
-			session.SessionID = session.Observations.Catalog.SessionID
-		}
-		if session.SessionPath == "" && session.Observations.Catalog.SessionPath != "" {
-			session.SessionPath = filepath.Clean(session.Observations.Catalog.SessionPath)
-		}
-	}
 }
 
 //nolint:cyclop // metadata dimensions are reduced independently
@@ -573,11 +566,11 @@ func applyPresenceAndActivity(session *Session, observation Observation, at time
 			case PresenceGone:
 				setGone(session, at)
 			case PresenceLive:
-				if !nativeEndAfter(session, at) && !at.Before(session.PresenceChangedAt) {
+				if !hasNativeEnd(session) && !at.Before(session.PresenceChangedAt) {
 					session.Presence = PresenceLive
 				}
 			case PresenceUnknown:
-				if !nativeEndAfter(session, at) && !at.Before(session.PresenceChangedAt) {
+				if !hasNativeEnd(session) && !at.Before(session.PresenceChangedAt) {
 					session.Presence = PresenceUnknown
 				}
 			}
@@ -592,7 +585,7 @@ func applyPresenceAndActivity(session *Session, observation Observation, at time
 			return
 		}
 		if process.Present {
-			if !nativeEndAfter(session, at) && !at.Before(session.PresenceChangedAt) {
+			if !hasNativeEnd(session) && !at.Before(session.PresenceChangedAt) {
 				session.Presence = PresenceLive
 				if session.Activity == nil {
 					session.Activity = new(ActivityUnknown)
@@ -637,7 +630,7 @@ func screenFallbackSuperseded(session Session, screen ScreenObservation) bool {
 	return native.Lifecycle == nil || *native.Lifecycle != NativeLifecycleEnd
 }
 
-func nativeEndAfter(session *Session, _ time.Time) bool {
+func hasNativeEnd(session *Session) bool {
 	return session.Observations.Native != nil && session.Observations.Native.Lifecycle != nil && *session.Observations.Native.Lifecycle == NativeLifecycleEnd
 }
 
@@ -974,17 +967,8 @@ func (s *FileStore) List(ctx context.Context, filter Filter) ([]Session, error) 
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("checking context: %w", err)
 	}
-	snap, err := s.load()
-	if err != nil {
-		return nil, err
-	}
-	sessions := make([]Session, 0, len(snap.Sessions))
-	for _, session := range snap.Sessions {
-		session.SchemaVersion = storeSchemaVersion
-		populateMultiplexerProjection(&session)
-		sessions = append(sessions, session)
-	}
-	return filterSessions(sessions, filter), nil
+	sessions, _, err := s.watchSnapshot(filter)
+	return sessions, err
 }
 
 func (s *FileStore) Get(ctx context.Context, id string) (Session, error) {
@@ -1087,13 +1071,6 @@ func (s *Summary) addSession(session Session) {
 	}
 }
 
-type summaryKey struct {
-	kind   MultiplexerKind
-	server string
-	id     string
-	name   string
-}
-
 func summaryKeyForSession(session Session) summaryKey {
 	populateMultiplexerProjection(&session)
 	key := summaryKey{kind: session.Multiplexer.Kind, server: session.Multiplexer.ServerID, id: "", name: ""}
@@ -1161,7 +1138,7 @@ func (s *FileStore) Reset(ctx context.Context) (ResetResult, error) {
 	if err := os.MkdirAll(filepath.Dir(s.path), 0o700); err != nil {
 		return ResetResult{}, fmt.Errorf("creating state directory: %w", err)
 	}
-	lock, err := openStoreLock(ctx, s.path+".lock")
+	lock, err := openStoreLock(ctx, s.path+".lock", s.onLockContention)
 	if err != nil {
 		return ResetResult{}, err
 	}
@@ -1184,7 +1161,8 @@ func (s *FileStore) Reset(ctx context.Context) (ResetResult, error) {
 	return result, nil
 }
 
-func (s *FileStore) setNowForTest(now func() time.Time) { s.now = now }
+func (s *FileStore) setNowForTest(now func() time.Time)   { s.now = now }
+func (s *FileStore) setOnLockContentionForTest(fn func()) { s.onLockContention = fn }
 
 func storedSessionCount(data []byte) int {
 	if len(data) == 0 {
@@ -1210,7 +1188,7 @@ func (s *FileStore) withSnapshot(ctx context.Context, mutator func(*snapshot) er
 	if err := os.MkdirAll(filepath.Dir(s.path), 0o700); err != nil {
 		return fmt.Errorf("creating state directory: %w", err)
 	}
-	lock, err := openStoreLock(ctx, s.path+".lock")
+	lock, err := openStoreLock(ctx, s.path+".lock", s.onLockContention)
 	if err != nil {
 		return err
 	}
@@ -1355,7 +1333,7 @@ func storedSessionIdentityCorruption(id string, session Session) string {
 }
 
 func storedSessionStateCorruption(session Session) string {
-	if !validStoredPresence(session.Presence) {
+	if !session.Presence.IsValid() {
 		return "invalid presence"
 	}
 	if reason := storedSessionActivityCorruption(session); reason != "" {
@@ -1383,7 +1361,7 @@ func storedSessionActivityCorruption(session Session) string {
 		return "non-gone session has null activity"
 	case session.Activity != nil && session.Presence == PresenceGone:
 		return "gone session has activity"
-	case session.Activity != nil && !validStoredActivity(*session.Activity):
+	case session.Activity != nil && !session.Activity.IsValid():
 		return "invalid activity"
 	default:
 		return ""
@@ -1443,7 +1421,7 @@ func validStoredNativeObservation(observation NativeObservation) bool {
 func validStoredScreenObservation(observation ScreenObservation) bool {
 	return !observation.ObservedAt.IsZero() &&
 		validStoredProcess(observation.Process, false) &&
-		validStoredActivity(observation.Activity) &&
+		observation.Activity.IsValid() &&
 		observation.ManifestVersion >= 0
 }
 
@@ -1451,24 +1429,16 @@ func validStoredActivityDecision(decision ActivityDecision) bool {
 	return !decision.ObservedAt.IsZero() && validStoredProcess(decision.Process, true) && decision.ManifestVersion >= 0
 }
 
-func validStoredPresence(presence Presence) bool {
-	return presence.IsValid()
-}
-
-func validStoredActivity(activity Activity) bool {
-	return activity.IsValid()
-}
-
 func validStoredLifecycle(lifecycle *NativeLifecycle) bool {
 	return lifecycle == nil || lifecycle.IsValid()
 }
 
 func validStoredOptionalPresence(presence *Presence) bool {
-	return presence == nil || validStoredPresence(*presence)
+	return presence == nil || presence.IsValid()
 }
 
 func validStoredOptionalActivity(activity *Activity) bool {
-	return activity == nil || validStoredActivity(*activity)
+	return activity == nil || activity.IsValid()
 }
 
 func validStoredProcess(process ProcessIdentity, allowZero bool) bool {

@@ -17,12 +17,16 @@ type storeLock struct {
 	file *os.File
 }
 
-func openStoreLock(ctx context.Context, path string) (*storeLock, error) {
+func openStoreLock(ctx context.Context, path string, onContention ...func()) (*storeLock, error) {
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("opening store lock: %w", err)
 	}
-	if err := acquireStoreLock(ctx, file); err != nil {
+	var cb func()
+	if len(onContention) > 0 {
+		cb = onContention[0]
+	}
+	if err := acquireStoreLock(ctx, file, cb); err != nil {
 		if closeErr := file.Close(); closeErr != nil {
 			return nil, errors.Join(
 				fmt.Errorf("locking store: %w", err),
@@ -36,7 +40,7 @@ func openStoreLock(ctx context.Context, path string) (*storeLock, error) {
 	return &storeLock{file: file}, nil
 }
 
-func acquireStoreLock(ctx context.Context, file *os.File) error {
+func acquireStoreLock(ctx context.Context, file *os.File, onContention func()) error {
 	for {
 		if err := ctx.Err(); err != nil {
 			return fmt.Errorf("waiting for store lock: %w", err)
@@ -47,6 +51,10 @@ func acquireStoreLock(ctx context.Context, file *os.File) error {
 		}
 		if !errors.Is(err, syscall.EWOULDBLOCK) && !errors.Is(err, syscall.EINTR) {
 			return fmt.Errorf("acquiring file lock: %w", err)
+		}
+		if onContention != nil {
+			onContention()
+			onContention = nil
 		}
 		select {
 		case <-ctx.Done():

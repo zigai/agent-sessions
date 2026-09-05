@@ -14,6 +14,8 @@ const (
 	defaultPersistenceMaxDelay = 250 * time.Millisecond
 )
 
+var _ Store = (*MemoryStore)(nil)
+
 // StateSnapshot is an immutable, filtered view of the effective registry state.
 // Revision advances only when state visible to consumers changes; observation
 // heartbeats that merely refresh evidence timestamps do not advance it.
@@ -38,8 +40,6 @@ type MemoryStore struct {
 	dirty             chan struct{}
 	flush             chan struct{}
 }
-
-var _ Store = (*MemoryStore)(nil)
 
 // OpenMemoryStore loads path once and returns an in-memory authoritative store.
 func OpenMemoryStore(path string) (*MemoryStore, error) {
@@ -338,21 +338,20 @@ func (s *MemoryStore) RunPersistence(ctx context.Context, settle, maximumDelay t
 		for !ready {
 			select {
 			case <-ctx.Done():
-				stopAndDrainTimer(settleTimer)
-				stopAndDrainTimer(maximumTimer)
+				settleTimer.Stop()
+				maximumTimer.Stop()
 
 				return s.flushOnShutdown(ctx)
 			case <-s.dirty:
-				resetTimer(settleTimer, settle)
+				settleTimer.Reset(settle)
 			case <-settleTimer.C:
 				ready = true
 			case <-maximumTimer.C:
 				ready = true
 			}
 		}
-		stopAndDrainTimer(settleTimer)
-		stopAndDrainTimer(maximumTimer)
-
+		settleTimer.Stop()
+		maximumTimer.Stop()
 		if err := s.Flush(ctx); err != nil {
 			if ctx.Err() != nil {
 				return s.flushOnShutdown(ctx)
@@ -390,22 +389,6 @@ func (s *MemoryStore) flushOnShutdown(ctx context.Context) error {
 func (s *MemoryStore) signalDirty() {
 	select {
 	case s.dirty <- struct{}{}:
-	default:
-	}
-}
-
-func resetTimer(timer *time.Timer, duration time.Duration) {
-	stopAndDrainTimer(timer)
-	timer.Reset(duration)
-}
-
-func stopAndDrainTimer(timer *time.Timer) {
-	if timer.Stop() {
-		return
-	}
-
-	select {
-	case <-timer.C:
 	default:
 	}
 }
