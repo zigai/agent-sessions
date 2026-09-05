@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -92,24 +93,29 @@ func (b *darwinBackend) restart(ctx context.Context, executor CommandExecutor) e
 
 func (b *darwinBackend) unload(ctx context.Context, executor CommandExecutor) error {
 	output, err := executor.Run(ctx, "launchctl", "bootout", b.domain, b.path)
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return fmt.Errorf("unload launchd service: %w", err)
+	}
 	if err != nil && !managerMissing(output) {
-		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			return fmt.Errorf("unload launchd service: %w", err)
-		}
 		return wrapManagerError("launchctl bootout observer", output, err)
 	}
 	return nil
 }
 
 func (b *darwinBackend) running(ctx context.Context, executor CommandExecutor) (bool, string, error) {
-	_, err := executor.Run(ctx, "launchctl", "print", b.domain+"/"+darwinLabel)
+	output, err := executor.Run(ctx, "launchctl", "print", b.domain+"/"+darwinLabel)
 	if err == nil {
 		return true, "running", nil
 	}
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return false, "", fmt.Errorf("checking launchd service status: %w", err)
 	}
-	return false, "not running", nil
+	// Missing-service diagnostics are distinct from an unavailable GUI domain,
+	// insufficient privileges, or a failure to execute launchctl itself.
+	if _, exited := errors.AsType[*exec.ExitError](err); exited && strings.Contains(strings.ToLower(string(output)), "could not find service") {
+		return false, "not running", nil
+	}
+	return false, "", wrapManagerError("checking launchd service status", output, err)
 }
 
 func xmlEscape(value string) string {

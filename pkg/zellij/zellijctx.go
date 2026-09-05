@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/zigai/aht/internal/command"
 	"github.com/zigai/aht/pkg/mux"
 	"github.com/zigai/aht/pkg/registry"
 )
@@ -172,8 +173,7 @@ func normalizePaneID(value string) string {
 }
 
 func runZellij(ctx context.Context, args ...string) (string, error) {
-	command := exec.CommandContext(ctx, "zellij", args...)
-	output, err := command.CombinedOutput()
+	output, err := command.Run(ctx, "zellij", nil, args...)
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return string(output), fmt.Errorf("run zellij command: %w", ctxErr)

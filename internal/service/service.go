@@ -9,14 +9,18 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/zigai/aht/internal/command"
 )
 
 const (
-	ManagedVersion       = 7
-	ManagedMarker        = "aht managed observer service"
-	defaultInterval      = 300 * time.Millisecond
-	serviceDirectoryMode = 0o755
-	serviceRollbackTime  = 10 * time.Second
+	ManagedVersion            = 7
+	ManagedMarker             = "aht managed observer service"
+	defaultInterval           = 300 * time.Millisecond
+	serviceDirectoryMode      = 0o755
+	serviceRollbackTime       = 10 * time.Second
+	serviceCommandTimeout     = 30 * time.Second
+	serviceCommandOutputLimit = 4 << 20
 )
 
 var (
@@ -65,10 +69,9 @@ type Service struct {
 type osCommandExecutor struct{}
 
 func (osCommandExecutor) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
-	command := exec.CommandContext(ctx, name, args...)
-	output, err := command.CombinedOutput()
+	output, err := command.RunWithLimits(ctx, serviceCommandTimeout, serviceCommandOutputLimit, name, nil, args...)
 	if err != nil {
-		return output, fmt.Errorf("execute %s: %w", name, err)
+		return output, fmt.Errorf("execute service manager: %w", err)
 	}
 	return output, nil
 }
@@ -372,7 +375,15 @@ func normalizeOptions(options Options) (Options, error) {
 	if options.StorePath == "" {
 		return options, errStorePathRequired
 	}
-	binary, err := filepath.Abs(options.Binary)
+	binary := options.Binary
+	if filepath.Base(binary) == binary {
+		resolved, err := exec.LookPath(binary)
+		if err != nil {
+			return options, fmt.Errorf("find binary %q: %w", binary, err)
+		}
+		binary = resolved
+	}
+	binary, err := filepath.Abs(binary)
 	if err != nil {
 		return options, fmt.Errorf("resolve binary: %w", err)
 	}

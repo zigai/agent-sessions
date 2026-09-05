@@ -7,11 +7,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os/exec"
 	"strconv"
 	"strings"
 
 	"golang.org/x/sys/unix"
+
+	"github.com/zigai/aht/internal/command"
 )
 
 const darwinPSMinimumFieldCount = 6
@@ -61,7 +62,7 @@ func List(ctx context.Context) ([]Process, error) {
 }
 
 func darwinPSInventory(ctx context.Context, pids []string) (map[int]darwinPSRow, error) {
-	output, err := exec.CommandContext(ctx, "/bin/ps", "-o", "pid=,ppid=,pgid=,tpgid=,tty=,comm=,args=", "-p", strings.Join(pids, ",")).Output()
+	output, err := command.Run(ctx, "/bin/ps", nil, "-o", "pid=,ppid=,pgid=,tpgid=,tty=,comm=,args=", "-p", strings.Join(pids, ","))
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return nil, fmt.Errorf("wait for ps process inventory: %w", ctxErr)
@@ -201,7 +202,7 @@ func parseDarwinPSRow(fields []string) (darwinPSRow, error) {
 }
 
 func darwinLsofCWD(ctx context.Context, pids []string) (map[int]string, error) {
-	output, err := exec.CommandContext(ctx, "/usr/sbin/lsof", "-a", "-d", "cwd", "-p", strings.Join(pids, ","), "-Fn").Output()
+	output, err := command.Run(ctx, "/usr/sbin/lsof", nil, "-a", "-d", "cwd", "-p", strings.Join(pids, ","), "-Fn")
 	if err != nil {
 		return nil, fmt.Errorf("run lsof process inventory: %w", err)
 	}
@@ -273,7 +274,7 @@ func CommandName(ctx context.Context, pid int) (string, error) {
 	if pid <= 0 {
 		return "", nil
 	}
-	output, err := exec.CommandContext(ctx, "/bin/ps", "-o", "comm=", "-p", strconv.Itoa(pid)).Output()
+	output, err := command.Run(ctx, "/bin/ps", nil, "-o", "comm=", "-p", strconv.Itoa(pid))
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return "", fmt.Errorf("checking context: %w", ctxErr)

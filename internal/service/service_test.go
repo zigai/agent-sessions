@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -13,10 +14,7 @@ import (
 	"time"
 )
 
-var (
-	errInactive           = errors.New("inactive")
-	errManagerTestFailure = errors.New("manager test failure")
-)
+var errManagerTestFailure = errors.New("manager test failure")
 
 type recordingExecutor struct {
 	calls  [][]string
@@ -39,7 +37,7 @@ func (r *recordingExecutor) Run(_ context.Context, name string, args ...string) 
 func TestDefaultObserverServiceIntervalIsResponsive(t *testing.T) {
 	t.Parallel()
 
-	options, err := normalizeOptions(Options{Binary: "aht", StorePath: "state.json"})
+	options, err := normalizeOptions(Options{Binary: "/bin/aht", StorePath: "state.json"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,7 +71,7 @@ func TestInstallUsesAtomicContentAndManagerArgv(t *testing.T) {
 	config := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", config)
 	executor := &recordingExecutor{}
-	options := Options{Binary: "aht", StorePath: filepath.Join(config, "store.json"), Interval: 3 * time.Second}
+	options := Options{Binary: "/bin/aht", StorePath: filepath.Join(config, "store.json"), Interval: 3 * time.Second}
 	result, err := New(executor).Install(context.Background(), options)
 	if err != nil {
 		t.Fatal(err)
@@ -138,7 +136,10 @@ func TestStatusManagerStoppedIsRepresented(t *testing.T) {
 	if _, err := New(executor).Install(context.Background(), options); err != nil {
 		t.Fatal(err)
 	}
-	executor.err = errInactive
+	executor.err = exec.CommandContext(t.Context(), "sh", "-c", "exit 3").Run()
+	if executor.err == nil {
+		t.Fatal("expected inactive exit status")
+	}
 	result, err := New(executor).Status(context.Background(), options)
 	if err != nil {
 		t.Fatal(err)

@@ -128,6 +128,45 @@ func Find(ctx context.Context, pid int) (Process, bool, error) {
 	return process, true, nil
 }
 
+// StartIdentity returns a boot-qualified process start identity for pid.
+func StartIdentity(ctx context.Context, pid int) string {
+	if pid <= 0 || ctx.Err() != nil {
+		return ""
+	}
+	bootID, err := os.ReadFile(filepath.Join(procRoot, "sys/kernel/random/boot_id"))
+	if err != nil {
+		return ""
+	}
+	data, err := os.ReadFile(fmt.Sprintf("%s/%d/stat", procRoot, pid))
+	if err != nil {
+		return ""
+	}
+	start := linuxStartTimeFromStat(string(data))
+	if start == "" {
+		return ""
+	}
+	return strings.TrimSpace(string(bootID)) + ":" + start
+}
+
+// CommandName returns the executable command name for pid on Linux.
+func CommandName(ctx context.Context, pid int) (string, error) {
+	if pid <= 0 {
+		return "", nil
+	}
+	if err := ctx.Err(); err != nil {
+		return "", fmt.Errorf("checking context: %w", err)
+	}
+
+	data, err := os.ReadFile(fmt.Sprintf("%s/%d/comm", procRoot, pid))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", nil
+		}
+		return "", fmt.Errorf("reading process command: %w", err)
+	}
+	return strings.TrimSpace(string(data)), nil
+}
+
 func linuxBootIdentity() (string, error) {
 	path := filepath.Join(procRoot, "sys/kernel/random/boot_id")
 	bootID, err := os.ReadFile(path)
@@ -272,45 +311,6 @@ func classifyProcessError(path string, err error) error {
 		return &PermissionError{Path: path, Err: err}
 	}
 	return &TableError{Path: path, Err: err}
-}
-
-// StartIdentity returns a boot-qualified process start identity for pid.
-func StartIdentity(ctx context.Context, pid int) string {
-	if pid <= 0 || ctx.Err() != nil {
-		return ""
-	}
-	bootID, err := os.ReadFile(filepath.Join(procRoot, "sys/kernel/random/boot_id"))
-	if err != nil {
-		return ""
-	}
-	data, err := os.ReadFile(fmt.Sprintf("%s/%d/stat", procRoot, pid))
-	if err != nil {
-		return ""
-	}
-	start := linuxStartTimeFromStat(string(data))
-	if start == "" {
-		return ""
-	}
-	return strings.TrimSpace(string(bootID)) + ":" + start
-}
-
-// CommandName returns the executable command name for pid on Linux.
-func CommandName(ctx context.Context, pid int) (string, error) {
-	if pid <= 0 {
-		return "", nil
-	}
-	if err := ctx.Err(); err != nil {
-		return "", fmt.Errorf("checking context: %w", err)
-	}
-
-	data, err := os.ReadFile(fmt.Sprintf("%s/%d/comm", procRoot, pid))
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return "", nil
-		}
-		return "", fmt.Errorf("reading process command: %w", err)
-	}
-	return strings.TrimSpace(string(data)), nil
 }
 
 func linuxStartTimeFromStat(stat string) string {

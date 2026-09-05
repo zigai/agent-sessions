@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -18,22 +19,6 @@ type linuxBackend struct {
 	options  Options
 	path     string
 	rendered string
-}
-
-func platformBackend(options Options) (backend, error) {
-	normalized, err := normalizeOptions(options)
-	if err != nil {
-		return nil, err
-	}
-	rendered, err := RenderSystemdUnit(normalized)
-	if err != nil {
-		return nil, err
-	}
-	path, err := systemdUnitPath()
-	if err != nil {
-		return nil, err
-	}
-	return &linuxBackend{options: normalized, path: path, rendered: rendered}, nil
 }
 
 // RenderSystemdUnit returns the exact managed user unit for options.
@@ -56,6 +41,22 @@ func RenderSystemdUnit(options Options) (string, error) {
 		"WantedBy=default.target",
 		"",
 	}, "\n"), nil
+}
+
+func platformBackend(options Options) (backend, error) {
+	normalized, err := normalizeOptions(options)
+	if err != nil {
+		return nil, err
+	}
+	rendered, err := RenderSystemdUnit(normalized)
+	if err != nil {
+		return nil, err
+	}
+	path, err := systemdUnitPath()
+	if err != nil {
+		return nil, err
+	}
+	return &linuxBackend{options: normalized, path: path, rendered: rendered}, nil
 }
 
 func systemdUnitPath() (string, error) {
@@ -94,6 +95,9 @@ func (b *linuxBackend) restart(ctx context.Context, executor CommandExecutor) er
 
 func (b *linuxBackend) unload(ctx context.Context, executor CommandExecutor) error {
 	output, err := executor.Run(ctx, "systemctl", "--user", "disable", "--now", linuxUnitName)
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return fmt.Errorf("unload systemd service: %w", err)
+	}
 	if err != nil && !managerMissing(output) {
 		return wrapManagerError("systemctl disable observer", output, err)
 	}
@@ -101,14 +105,22 @@ func (b *linuxBackend) unload(ctx context.Context, executor CommandExecutor) err
 }
 
 func (b *linuxBackend) running(ctx context.Context, executor CommandExecutor) (bool, string, error) {
-	_, err := executor.Run(ctx, "systemctl", "--user", "is-active", "--quiet", linuxUnitName)
+	output, err := executor.Run(ctx, "systemctl", "--user", "is-active", "--quiet", linuxUnitName)
 	if err == nil {
 		return true, "running", nil
 	}
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return false, "", fmt.Errorf("checking systemd service status: %w", err)
 	}
-	return false, "not running", nil
+	// systemctl uses LSB status codes: 3 is inactive and 4 is an unknown unit.
+	const (
+		inactive = 3
+		unknown  = 4
+	)
+	if exitErr, ok := errors.AsType[*exec.ExitError](err); ok && (exitErr.ExitCode() == inactive || exitErr.ExitCode() == unknown) {
+		return false, "not running", nil
+	}
+	return false, "", wrapManagerError("checking systemd service status", output, err)
 }
 
 func systemdArg(value string) string {

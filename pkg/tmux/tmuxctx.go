@@ -5,12 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"strconv"
 	"strings"
 
 	"github.com/google/shlex"
 
+	"github.com/zigai/aht/internal/command"
 	"github.com/zigai/aht/pkg/registry"
 )
 
@@ -121,15 +121,6 @@ func ContextFromEnv(env Env) registry.TmuxContext {
 	}
 }
 
-func currentDisplayMessageArgs(format string, paneID string) []string {
-	args := []string{"display-message", "-p"}
-	if paneID != "" {
-		args = append(args, "-t", paneID)
-	}
-
-	return append(args, "-F", format)
-}
-
 func ListPanes(ctx context.Context) ([]Pane, error) {
 	return ListPanesWithOptions(ctx, ListOptions{ //nolint:exhaustruct // default options leave Run and ServerProcesses nil
 		Env: Env{TMUX: os.Getenv("TMUX"), TMUXPane: os.Getenv("TMUX_PANE")},
@@ -174,6 +165,64 @@ func ListPanesWithOptions(ctx context.Context, options ListOptions) ([]Pane, err
 	}
 
 	return panes, nil
+}
+
+// SendInterruptTo sends an interrupt to a pane on the identified tmux server.
+func SendInterruptTo(ctx context.Context, serverIdentity, paneID string) error {
+	return sendInterrupt(ctx, serverIdentity, paneID, runTmuxWithEnv)
+}
+
+func ParseCurrent(output string) (registry.TmuxContext, error) {
+	const expectedFields = 11
+	fields, err := parseTmuxFields(output, expectedFields)
+	if err != nil {
+		return registry.TmuxContext{}, err
+	}
+	if len(fields) != expectedFields {
+		return registry.TmuxContext{}, fmt.Errorf("%w: expected %d, got %d", ErrInvalidFieldCount, expectedFields, len(fields))
+	}
+
+	return registry.TmuxContext{
+		Inside:          true,
+		ServerSocket:    "",
+		SessionID:       fields[0],
+		SessionName:     fields[1],
+		WindowID:        fields[2],
+		WindowIndex:     fields[3],
+		WindowName:      fields[4],
+		PaneID:          fields[5],
+		PaneIndex:       fields[6],
+		PaneCurrentPath: fields[7],
+		PanePID:         parsePositiveInt(fields[8]),
+		PaneTTY:         fields[9],
+		ClientTTY:       fields[10],
+	}, nil
+}
+
+func ParseListPanes(output string) ([]Pane, error) {
+	trimmed := strings.TrimRight(output, "\r\n")
+	if trimmed == "" {
+		return nil, nil
+	}
+
+	fields, ok, err := parseEscapedFields(trimmed)
+	if err != nil {
+		return nil, err
+	}
+	if ok {
+		return panesFromFields(fields)
+	}
+
+	return parseLegacyListPanes(trimmed)
+}
+
+func currentDisplayMessageArgs(format string, paneID string) []string {
+	args := []string{"display-message", "-p"}
+	if paneID != "" {
+		args = append(args, "-t", paneID)
+	}
+
+	return append(args, "-F", format)
 }
 
 func appendCanonicalPanes(panes, serverPanes []Pane, fallbackIdentity string, seen map[string]struct{}) []Pane {
@@ -226,11 +275,6 @@ func listPanesFormat() string {
 	})
 }
 
-// SendInterruptTo sends an interrupt to a pane on the identified tmux server.
-func SendInterruptTo(ctx context.Context, serverIdentity, paneID string) error {
-	return sendInterrupt(ctx, serverIdentity, paneID, runTmuxWithEnv)
-}
-
 func sendInterrupt(ctx context.Context, serverIdentity, paneID string, run CommandRunner) error {
 	if strings.TrimSpace(paneID) == "" {
 		return errMissingTmuxPaneID
@@ -247,50 +291,6 @@ func sendInterrupt(ctx context.Context, serverIdentity, paneID string, run Comma
 	}
 
 	return nil
-}
-
-func ParseCurrent(output string) (registry.TmuxContext, error) {
-	const expectedFields = 11
-	fields, err := parseTmuxFields(output, expectedFields)
-	if err != nil {
-		return registry.TmuxContext{}, err
-	}
-	if len(fields) != expectedFields {
-		return registry.TmuxContext{}, fmt.Errorf("%w: expected %d, got %d", ErrInvalidFieldCount, expectedFields, len(fields))
-	}
-
-	return registry.TmuxContext{
-		Inside:          true,
-		ServerSocket:    "",
-		SessionID:       fields[0],
-		SessionName:     fields[1],
-		WindowID:        fields[2],
-		WindowIndex:     fields[3],
-		WindowName:      fields[4],
-		PaneID:          fields[5],
-		PaneIndex:       fields[6],
-		PaneCurrentPath: fields[7],
-		PanePID:         parsePositiveInt(fields[8]),
-		PaneTTY:         fields[9],
-		ClientTTY:       fields[10],
-	}, nil
-}
-
-func ParseListPanes(output string) ([]Pane, error) {
-	trimmed := strings.TrimRight(output, "\r\n")
-	if trimmed == "" {
-		return nil, nil
-	}
-
-	fields, ok, err := parseEscapedFields(trimmed)
-	if err != nil {
-		return nil, err
-	}
-	if ok {
-		return panesFromFields(fields)
-	}
-
-	return parseLegacyListPanes(trimmed)
 }
 
 func panesFromFields(fields []string) ([]Pane, error) {
@@ -516,9 +516,7 @@ func parsePositiveInt(value string) int {
 }
 
 func runTmuxWithEnv(ctx context.Context, env Env, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, "tmux", args...)
-	cmd.Env = tmuxCommandEnv(env)
-	output, err := cmd.Output()
+	output, err := command.Run(ctx, "tmux", tmuxCommandEnv(env), args...)
 	if err != nil {
 		return "", fmt.Errorf("running tmux %s: %w", strings.Join(args, " "), err)
 	}

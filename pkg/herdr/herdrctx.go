@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"strings"
 
+	"github.com/zigai/aht/internal/command"
 	"github.com/zigai/aht/pkg/mux"
 	"github.com/zigai/aht/pkg/registry"
 )
@@ -473,18 +474,17 @@ func herdrUnavailable(output string) bool {
 }
 
 func runHerdr(ctx context.Context, env map[string]string, args ...string) (string, error) {
-	command := exec.CommandContext(ctx, "herdr", args...)
-	command.Env = make([]string, 0, len(os.Environ())+len(env))
+	commandEnv := make([]string, 0, len(os.Environ())+len(env))
 	for _, entry := range os.Environ() {
 		key, _, _ := strings.Cut(entry, "=")
 		if _, overridden := env[key]; !overridden {
-			command.Env = append(command.Env, entry)
+			commandEnv = append(commandEnv, entry)
 		}
 	}
 	for key, value := range env {
-		command.Env = append(command.Env, key+"="+value)
+		commandEnv = append(commandEnv, key+"="+value)
 	}
-	output, err := command.CombinedOutput()
+	output, err := command.Run(ctx, "herdr", commandEnv, args...)
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return string(output), fmt.Errorf("run herdr command: %w", ctxErr)

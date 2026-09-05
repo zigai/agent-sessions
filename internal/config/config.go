@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -12,7 +13,6 @@ import (
 	"github.com/go-viper/mapstructure/v2"
 	"github.com/knadh/koanf/parsers/toml/v2"
 	"github.com/knadh/koanf/providers/env/v2"
-	"github.com/knadh/koanf/providers/file"
 	"github.com/knadh/koanf/providers/structs"
 	"github.com/knadh/koanf/v2"
 
@@ -94,10 +94,6 @@ type DetectionConfig struct {
 	ScreenInspection *bool  `json:"screen_inspection,omitempty" koanf:"screen_inspection" toml:"screen_inspection"`
 }
 
-func defaultConfig() Config {
-	return Config{}
-}
-
 // DefaultPath returns the default path to the user's config file.
 func DefaultPath() string {
 	if val := strings.TrimSpace(os.Getenv(ConfigEnv)); val != "" {
@@ -175,20 +171,16 @@ func WriteConfigFile(path string) error {
 	if path == "" {
 		path = DefaultPath()
 	}
-	if err := os.MkdirAll(filepath.Dir(path), defaultDirMode); err != nil {
-		return fmt.Errorf("%w %s: %w", ErrAccessConfig, path, err)
-	}
-	if err := os.WriteFile(path, []byte(DefaultConfigTemplate()), defaultFileMode); err != nil {
-		return fmt.Errorf("%w %s: %w", ErrAccessConfig, path, err)
-	}
-	return nil
+	_, err := publishConfigFile(path, true)
+	return err
 }
 
 // EnsureConfigFile ensures that a configuration file exists at path.
 // If path is empty, DefaultPath() is used.
 // If the file already exists, it returns created=false, nil.
 // If the file does not exist, it creates the parent directories and writes DefaultConfigTemplate()
-// with 0o644 permissions, returning created=true, nil.
+// with 0o600 permissions, returning created=true, nil. Publication is atomic and
+// never overwrites a file created by another process.
 func EnsureConfigFile(path string) (bool, error) {
 	if path == "" {
 		path = DefaultPath()
@@ -204,10 +196,7 @@ func EnsureConfigFile(path string) (bool, error) {
 		return false, fmt.Errorf("%w %s: %w", ErrAccessConfig, path, err)
 	}
 
-	if err := WriteConfigFile(path); err != nil {
-		return false, err
-	}
-	return true, nil
+	return publishConfigFile(path, false)
 }
 
 // ParseDuration parses duration strings including day suffixes (e.g. "7d", "24h", "10s").
@@ -222,7 +211,11 @@ func ParseDuration(s string) (time.Duration, error) {
 		if err != nil {
 			return 0, fmt.Errorf("invalid day duration %q: %w", s, err)
 		}
-		return time.Duration(days) * 24 * time.Hour, nil
+		const day = 24 * time.Hour
+		if days > math.MaxInt64/int64(day) || days < math.MinInt64/int64(day) {
+			return 0, fmt.Errorf("%w: day duration %q is out of range", ErrInvalidDuration, s)
+		}
+		return time.Duration(days) * day, nil
 	}
 	d, err := time.ParseDuration(s)
 	if err != nil {
@@ -334,6 +327,90 @@ func (c Config) validateTracker() error {
 	return nil
 }
 
+// Load loads, parses, and validates the configuration file from path.
+// If path is empty, DefaultPath() is used.
+// A missing default config file is silently skipped; a missing explicitly specified path is an error.
+func Load(path string) (Config, string, error) {
+	explicit := path != ""
+	resolvedPath := path
+	if !explicit {
+		resolvedPath = DefaultPath()
+	}
+
+	k := koanf.New(".")
+
+	// Layer 1: Base defaults
+	if err := k.Load(structs.Provider(defaultConfig(), "koanf"), nil); err != nil {
+		return Config{}, resolvedPath, fmt.Errorf("%w: %w", ErrLoadDefaults, err)
+	}
+
+	// Layer 2: TOML file
+	info, err := os.Stat(resolvedPath)
+	switch {
+	case err == nil:
+		if info.IsDir() {
+			return Config{}, resolvedPath, fmt.Errorf("%w: %s", ErrConfigIsDirectory, resolvedPath)
+		}
+		if info.Size() > maxConfigFileSize {
+			return Config{}, resolvedPath, fmt.Errorf("%w (%d bytes): %s", ErrConfigFileTooLarge, info.Size(), resolvedPath)
+		}
+		if err := k.Load(boundedConfigFile(resolvedPath), toml.Parser()); err != nil {
+			return Config{}, resolvedPath, fmt.Errorf("%w %s: %w", ErrParseConfig, resolvedPath, err)
+		}
+	case explicit && errors.Is(err, os.ErrNotExist):
+		return Config{}, resolvedPath, fmt.Errorf("%w %s: %w", ErrConfigNotFound, resolvedPath, err)
+	case !errors.Is(err, os.ErrNotExist):
+		return Config{}, resolvedPath, fmt.Errorf("%w %s: %w", ErrAccessConfig, resolvedPath, err)
+	}
+
+	// Layer 3: Environment overrides
+	if err := k.Load(env.Provider(".", env.Opt{
+		Prefix:        "AHT_",
+		TransformFunc: envTransform,
+	}), nil); err != nil {
+		return Config{}, resolvedPath, fmt.Errorf("%w: %w", ErrLoadEnv, err)
+	}
+
+	// Layer 4: Unmarshal & Validate
+	var cfg Config
+	decoderConfig := &mapstructure.DecoderConfig{
+		ErrorUnused:      true,
+		WeaklyTypedInput: true,
+		TagName:          "koanf",
+		Result:           &cfg,
+	}
+	if err := k.UnmarshalWithConf("", &cfg, koanf.UnmarshalConf{
+		Tag:           "koanf",
+		DecoderConfig: decoderConfig,
+	}); err != nil {
+		return Config{}, resolvedPath, fmt.Errorf("%w: %w", ErrUnmarshalConfig, err)
+	}
+
+	cfg, err = normalizeConfig(cfg)
+	return cfg, resolvedPath, err
+}
+
+func normalizeConfig(cfg Config) (Config, error) {
+	if err := cfg.Validate(); err != nil {
+		return Config{}, err
+	}
+	cfg.UI.DefaultPresence = strings.ToLower(strings.TrimSpace(cfg.UI.DefaultPresence))
+	cfg.UI.TimeFormat = strings.ToLower(strings.TrimSpace(cfg.UI.TimeFormat))
+	if cfg.UI.Sort != "" {
+		var err error
+		cfg.UI.Sort, err = NormalizeSort(cfg.UI.Sort)
+		if err != nil {
+			return Config{}, err
+		}
+	}
+
+	return cfg, nil
+}
+
+func defaultConfig() Config {
+	return Config{}
+}
+
 func envTransform(k, v string) (string, any) {
 	trimmed := strings.TrimPrefix(k, "AHT_")
 	parts := strings.SplitN(trimmed, "_", envSplitParts)
@@ -367,70 +444,4 @@ func envTransform(k, v string) (string, any) {
 	}
 
 	return key, v
-}
-
-// Load loads, parses, and validates the configuration file from path.
-// If path is empty, DefaultPath() is used.
-// A missing default config file is silently skipped; a missing explicitly specified path is an error.
-func Load(path string) (Config, string, error) {
-	explicit := path != ""
-	resolvedPath := path
-	if !explicit {
-		resolvedPath = DefaultPath()
-	}
-
-	k := koanf.New(".")
-
-	// Layer 1: Base defaults
-	if err := k.Load(structs.Provider(defaultConfig(), "koanf"), nil); err != nil {
-		return Config{}, resolvedPath, fmt.Errorf("%w: %w", ErrLoadDefaults, err)
-	}
-
-	// Layer 2: TOML file
-	info, err := os.Stat(resolvedPath)
-	switch {
-	case err == nil:
-		if info.IsDir() {
-			return Config{}, resolvedPath, fmt.Errorf("%w: %s", ErrConfigIsDirectory, resolvedPath)
-		}
-		if info.Size() > maxConfigFileSize {
-			return Config{}, resolvedPath, fmt.Errorf("%w (%d bytes): %s", ErrConfigFileTooLarge, info.Size(), resolvedPath)
-		}
-		if err := k.Load(file.Provider(resolvedPath), toml.Parser()); err != nil {
-			return Config{}, resolvedPath, fmt.Errorf("%w %s: %w", ErrParseConfig, resolvedPath, err)
-		}
-	case explicit:
-		return Config{}, resolvedPath, fmt.Errorf("%w: %s", ErrConfigNotFound, resolvedPath)
-	case !errors.Is(err, os.ErrNotExist):
-		return Config{}, resolvedPath, fmt.Errorf("%w %s: %w", ErrAccessConfig, resolvedPath, err)
-	}
-
-	// Layer 3: Environment overrides
-	if err := k.Load(env.Provider(".", env.Opt{
-		Prefix:        "AHT_",
-		TransformFunc: envTransform,
-	}), nil); err != nil {
-		return Config{}, resolvedPath, fmt.Errorf("%w: %w", ErrLoadEnv, err)
-	}
-
-	// Layer 4: Unmarshal & Validate
-	var cfg Config
-	decoderConfig := &mapstructure.DecoderConfig{
-		ErrorUnused:      true,
-		WeaklyTypedInput: true,
-		TagName:          "koanf",
-		Result:           &cfg,
-	}
-	if err := k.UnmarshalWithConf("", &cfg, koanf.UnmarshalConf{
-		Tag:           "koanf",
-		DecoderConfig: decoderConfig,
-	}); err != nil {
-		return Config{}, resolvedPath, fmt.Errorf("%w: %w", ErrUnmarshalConfig, err)
-	}
-
-	if err := cfg.Validate(); err != nil {
-		return Config{}, resolvedPath, err
-	}
-
-	return cfg, resolvedPath, nil
 }
