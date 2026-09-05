@@ -10,9 +10,10 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
+	"syscall"
 	"testing"
 	"time"
-
 	harnesspkg "github.com/zigai/aht/internal/harness"
 	"github.com/zigai/aht/internal/processinfo"
 	"github.com/zigai/aht/pkg/tmux"
@@ -130,8 +131,6 @@ func testStopOwnedTmuxTarget(t *testing.T) {
 	controlSocket := filepath.Join(socketDirectory, "control.sock")
 	startTmuxAgentSession(t, targetSocket, "target", codexBinary, filepath.Join(stateDir, "target-pane.json"))
 	startTmuxAgentSession(t, controlSocket, "control", codexBinary, filepath.Join(stateDir, "control-pane.json"))
-	t.Cleanup(func() { killTmuxServer(targetSocket) })
-	t.Cleanup(func() { killTmuxServer(controlSocket) })
 
 	targetPane := requireTmuxPane(t, targetSocket)
 	controlPane := requireTmuxPane(t, controlSocket)
@@ -249,6 +248,7 @@ func startTmuxAgentSession(t *testing.T, socket string, session string, binary s
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("start tmux session %q: %v; output=%q", session, err, output)
 	}
+	t.Cleanup(func() { killTmuxServer(socket) })
 }
 
 func requireTmuxPane(t *testing.T, socket string) tmux.Pane {
@@ -341,5 +341,11 @@ func assertTmuxSessionRunning(t *testing.T, socket string, session string) {
 func killTmuxServer(socket string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
+	pidOut, _ := exec.CommandContext(ctx, "tmux", "-S", socket, "display-message", "-p", "#{pid}").Output()
 	_ = exec.CommandContext(ctx, "tmux", "-S", socket, "kill-server").Run()
+	if pidStr := strings.TrimSpace(string(pidOut)); pidStr != "" {
+		if pid, err := strconv.Atoi(pidStr); err == nil && pid > 0 {
+			_ = syscall.Kill(pid, syscall.SIGKILL)
+		}
+	}
 }

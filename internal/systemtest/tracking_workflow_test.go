@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 	"unicode"
@@ -179,6 +180,7 @@ func startSystemTestCommand(t *testing.T, binary string, directory string, envir
 	process := &runningTestCommand{command: exec.Command(binary, args...), done: make(chan error, 1)}
 	process.command.Dir = directory
 	process.command.Env = environment
+	process.command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	process.command.Stdout = &process.stdout
 	process.command.Stderr = &process.stderr
 	if err := process.command.Start(); err != nil {
@@ -188,8 +190,8 @@ func startSystemTestCommand(t *testing.T, binary string, directory string, envir
 		process.done <- process.command.Wait()
 	}()
 	t.Cleanup(func() {
-		if process.command.ProcessState == nil {
-			_ = process.command.Process.Kill()
+		if process.command.ProcessState == nil && process.command.Process != nil && process.command.Process.Pid > 0 {
+			_ = syscall.Kill(-process.command.Process.Pid, syscall.SIGKILL)
 			<-process.done
 		}
 	})
