@@ -50,20 +50,30 @@ type CatalogEntry struct {
 }
 type CatalogLister func(context.Context) ([]CatalogEntry, error)
 
+// Store is the observation and inventory capability required by an Observer.
+type Store interface {
+	Observe(ctx context.Context, observation registry.Observation) (registry.Session, error)
+	ObserveBatch(ctx context.Context, observations []registry.Observation) ([]registry.Session, error)
+	List(ctx context.Context, filter registry.Filter) ([]registry.Session, error)
+}
+
 type Options struct {
-	Store              registry.Store
-	StorePath          string
-	Interval           time.Duration
-	GracePeriod        time.Duration
-	HealthPath         string
-	ProcessList        ProcessLister
-	PaneList           mux.PaneLister
-	CatalogList        CatalogLister
-	ScreenCapture      mux.ScreenCapturer
-	DetectionConfigDir string
-	Now                func() time.Time
-	ErrorWriter        io.Writer
-	Quiet              bool
+	Store         Store
+	StorePath     string
+	Interval      time.Duration
+	GracePeriod   time.Duration
+	HealthPath    string
+	ProcessList   ProcessLister
+	PaneList      mux.PaneLister
+	CatalogList   CatalogLister
+	ScreenCapture mux.ScreenCapturer
+	// DisableScreenInspection disables terminal capture and screen-derived state.
+	// Native multiplexer activity remains available without reading screen text.
+	DisableScreenInspection bool
+	DetectionConfigDir      string
+	Now                     func() time.Time
+	ErrorWriter             io.Writer
+	Quiet                   bool
 }
 
 type Result struct {
@@ -116,19 +126,20 @@ type pendingScreenDecision struct {
 const initialScreenConfirmations = 2
 
 type Observer struct {
-	store          registry.Store
-	storePath      string
-	interval       time.Duration
-	grace          time.Duration
-	healthPath     string
-	processList    ProcessLister
-	paneList       mux.PaneLister
-	catalogList    CatalogLister
-	screenCapture  mux.ScreenCapturer
-	manifestLoader agentstate.Loader
-	now            func() time.Time
-	errorWriter    io.Writer
-	quiet          bool
+	store                   Store
+	storePath               string
+	interval                time.Duration
+	grace                   time.Duration
+	healthPath              string
+	processList             ProcessLister
+	paneList                mux.PaneLister
+	catalogList             CatalogLister
+	screenCapture           mux.ScreenCapturer
+	disableScreenInspection bool
+	manifestLoader          agentstate.Loader
+	now                     func() time.Time
+	errorWriter             io.Writer
+	quiet                   bool
 
 	mu              sync.Mutex
 	startedAt       time.Time
@@ -196,7 +207,8 @@ func New(options Options) *Observer {
 		store: store, storePath: storePath, interval: interval, grace: options.GracePeriod,
 		healthPath: healthPath, processList: processList, paneList: paneList, catalogList: catalogList,
 		screenCapture: screenCapture, manifestLoader: agentstate.Loader{ConfigDir: options.DetectionConfigDir},
-		now: now, errorWriter: errorWriter, quiet: options.Quiet,
+		disableScreenInspection: options.DisableScreenInspection,
+		now:                     now, errorWriter: errorWriter, quiet: options.Quiet,
 		tracked: make(map[processKey]trackedProcess), screenPending: make(map[processKey]pendingScreenDecision),
 		mu: sync.Mutex{}, startedAt: time.Time{}, initialized: false, health: Health{PID: 0, StartIdentity: "", Interval: 0, GracePeriod: 0, StartedAt: time.Time{}, LastAttemptAt: time.Time{}, LastSuccessAt: time.Time{}, LastEnumerationErrorCategory: "", LastEnumerationError: "", Cycles: 0, Observations: 0, Sessions: 0, Degraded: false},
 		lastHealthWrite: time.Time{}, lockPath: lockPath, lockFile: nil, running: false, continuous: false,
@@ -402,7 +414,7 @@ func (o *Observer) runCycle(ctx context.Context) (Result, error) {
 		locationPIDs[process.PID] = true
 	}
 	if paneErr == nil {
-		observations = append(observations, observationsForUnlocatedProcesses(o.manifestLoader, knownSessions, processByPID, harnessByPID, locationPIDs, at)...)
+		observations = append(observations, observationsForUnlocatedProcesses(o.manifestLoader, knownSessions, processByPID, harnessByPID, locationPIDs, at, !o.disableScreenInspection)...)
 	}
 	for _, entry := range catalog {
 		if entry.Harness == "" || entry.SessionID == "" {
@@ -591,7 +603,7 @@ func isAgentWrapper(process processinfo.Process) bool {
 	}
 }
 
-func observationsForUnlocatedProcesses(manifestLoader agentstate.Loader, sessions []registry.Session, processByPID map[int]processinfo.Process, harnessByPID map[int]registry.Harness, locationPIDs map[int]bool, at time.Time) []registry.Observation {
+func observationsForUnlocatedProcesses(manifestLoader agentstate.Loader, sessions []registry.Session, processByPID map[int]processinfo.Process, harnessByPID map[int]registry.Harness, locationPIDs map[int]bool, at time.Time, inspectScreen bool) []registry.Observation {
 	observations := make([]registry.Observation, 0, len(harnessByPID))
 	for pid, harnessID := range harnessByPID {
 		if locationPIDs[pid] {
@@ -606,6 +618,9 @@ func observationsForUnlocatedProcesses(manifestLoader agentstate.Loader, session
 			Source: registry.ObservationSourceMultiplexer, Evidence: registry.ObservationEvidenceMultiplexerLocation,
 			Harness: harnessID, Process: processIdentity(process), Multiplexer: &emptyContext, ObservedAt: at,
 		})
+		if !inspectScreen {
+			continue
+		}
 		if screenObservation, detected := unavailableScreenState(manifestLoader, sessions, harnessID, process, at, "screen_not_in_supported_multiplexer"); detected {
 			observations = append(observations, screenObservation)
 		}
@@ -749,33 +764,11 @@ func (o *Observer) detectScreenState(ctx context.Context, sessions []registry.Se
 		}
 		return observation, true, nil
 	}
-	manifest, err := o.manifestLoader.Load(harnessID)
-	if err != nil {
-		return registry.Observation{}, false, fmt.Errorf("loading %s detection manifest: %w", harnessID, err)
-	}
-	snapshot, captureErr := o.screenCapture(ctx, pane)
-	if captureErr != nil {
-		return registry.Observation{}, false, fmt.Errorf("capturing %s pane %s for detection: %w", harnessID, pane.Location.PaneID, captureErr)
-	}
-	decision := agentstate.Evaluate(manifest, agentstate.NormalizeSnapshot(snapshot.Text, snapshot.Title))
-	if decision.Activity == registry.ActivityUnknown &&
-		decision.Reason == "no_rule_matched" &&
-		session.Activity != nil &&
-		*session.Activity != registry.ActivityUnknown {
+	if o.disableScreenInspection {
 		var empty registry.Observation
 		return empty, false, nil
 	}
-	observedAt := screenObservationTime(at, o.now().UTC())
-	fallback, fallbackReason := screenFallbackMetadata(session, harnessID, at)
-	screen := &registry.ScreenObservation{Activity: decision.Activity, Authority: string(agentstate.AuthorityScreen), Reason: decision.Reason, RuleID: decision.RuleID, ManifestSource: decision.ManifestSource, ManifestVersion: decision.ManifestVersion, FallbackForIntegration: fallback, FallbackReason: fallbackReason, Process: *identity, ObservedAt: observedAt}
-	observation := registry.Observation{ //nolint:exhaustruct // screen observations intentionally contain no terminal contents
-		Source: registry.ObservationSourceScreen, Evidence: registry.ObservationEvidenceScreenState, Harness: harnessID,
-		Activity: &decision.Activity, Process: identity, Screen: screen, ObservedAt: observedAt,
-	}
-	if manifest.Warning != "" {
-		return observation, true, fmt.Errorf("%w: %s", errDetectionOverrideInvalid, manifest.Warning)
-	}
-	return observation, true, nil
+	return o.captureScreenState(ctx, session, harnessID, identity, pane, at)
 }
 
 //nolint:funcorder // screen stabilization stays beside screen detection.
@@ -1038,6 +1031,36 @@ func (o *Observer) Health() Health {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	return o.health
+}
+
+func (o *Observer) captureScreenState(ctx context.Context, session registry.Session, harnessID registry.Harness, identity *registry.ProcessIdentity, pane mux.Pane, at time.Time) (registry.Observation, bool, error) {
+	manifest, err := o.manifestLoader.Load(harnessID)
+	if err != nil {
+		return registry.Observation{}, false, fmt.Errorf("loading %s detection manifest: %w", harnessID, err)
+	}
+	snapshot, captureErr := o.screenCapture(ctx, pane)
+	if captureErr != nil {
+		return registry.Observation{}, false, fmt.Errorf("capturing %s pane %s for detection: %w", harnessID, pane.Location.PaneID, captureErr)
+	}
+	decision := manifest.Evaluate(agentstate.NormalizeSnapshot(snapshot.Text, snapshot.Title))
+	if decision.Activity == registry.ActivityUnknown &&
+		decision.Reason == "no_rule_matched" &&
+		session.Activity != nil &&
+		*session.Activity != registry.ActivityUnknown {
+		var empty registry.Observation
+		return empty, false, nil
+	}
+	observedAt := screenObservationTime(at, o.now().UTC())
+	fallback, fallbackReason := screenFallbackMetadata(session, harnessID, at)
+	screen := &registry.ScreenObservation{Activity: decision.Activity, Authority: string(agentstate.AuthorityScreen), Reason: decision.Reason, RuleID: decision.RuleID, ManifestSource: decision.ManifestSource, ManifestVersion: decision.ManifestVersion, FallbackForIntegration: fallback, FallbackReason: fallbackReason, Process: *identity, ObservedAt: observedAt}
+	observation := registry.Observation{ //nolint:exhaustruct // screen observations intentionally contain no terminal contents
+		Source: registry.ObservationSourceScreen, Evidence: registry.ObservationEvidenceScreenState, Harness: harnessID,
+		Activity: &decision.Activity, Process: identity, Screen: screen, ObservedAt: observedAt,
+	}
+	if manifest.Warning != "" {
+		return observation, true, fmt.Errorf("%w: %s", errDetectionOverrideInvalid, manifest.Warning)
+	}
+	return observation, true, nil
 }
 
 func (o *Observer) observeBatch(ctx context.Context, observations []registry.Observation) ([]registry.Session, error) {

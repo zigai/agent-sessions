@@ -38,10 +38,10 @@ func NormalizeSnapshot(text string, title string) Snapshot {
 	return Snapshot{Lines: lines, Title: ansiEscapePattern.ReplaceAllString(title, "")}
 }
 
-func Evaluate(manifest Manifest, snapshot Snapshot) Decision {
+func (manifest *Manifest) Evaluate(snapshot Snapshot) Decision {
 	decision := Decision{Activity: registry.ActivityUnknown, Reason: "no_rule_matched", RuleID: "", ManifestSource: manifest.Source, ManifestVersion: manifest.Version, Warning: manifest.Warning, Evidence: make([]RuleEvidence, 0, len(manifest.Rules))}
 	for _, rule := range sortedRules(manifest.Rules) {
-		matched := matchesRule(rule, snapshot)
+		matched := rule.matches(snapshot)
 		decision.Evidence = append(decision.Evidence, RuleEvidence{RuleID: rule.ID, Matched: matched})
 		if !matched {
 			continue
@@ -55,7 +55,7 @@ func Evaluate(manifest Manifest, snapshot Snapshot) Decision {
 	return decision
 }
 
-func matchesRule(rule Rule, snapshot Snapshot) bool {
+func (rule Rule) matches(snapshot Snapshot) bool {
 	region, err := selectRegion(rule.Region, snapshot.Lines)
 	if err != nil {
 		return false
@@ -66,10 +66,10 @@ func matchesRule(rule Rule, snapshot Snapshot) bool {
 		text = strings.ToLower(text)
 		title = strings.ToLower(title)
 	}
-	return matchesText(rule, text) && matchesTitle(rule, title)
+	return rule.matchesText(text) && rule.matchesTitle(title)
 }
 
-func matchesText(rule Rule, text string) bool {
+func (rule Rule) matchesText(text string) bool {
 	for _, literal := range rule.All {
 		if !strings.Contains(text, normalizedLiteral(literal, rule.CaseSensitive)) {
 			return false
@@ -87,7 +87,7 @@ func matchesText(rule Rule, text string) bool {
 	return !matchesAnyRegex(text, rule.regexNoneCompiled)
 }
 
-func matchesTitle(rule Rule, title string) bool {
+func (rule Rule) matchesTitle(title string) bool {
 	if len(rule.TitleAny) > 0 && !containsAny(title, rule.TitleAny, rule.CaseSensitive) {
 		return false
 	}

@@ -38,7 +38,7 @@ func TestGoldenScreenFixtures(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			decision := Evaluate(manifest, NormalizeSnapshot(fixture.Screen, fixture.Agent))
+			decision := manifest.Evaluate(NormalizeSnapshot(fixture.Screen, fixture.Agent))
 			if decision.Activity != fixture.Want {
 				t.Fatalf("decision = %#v, want %s", decision, fixture.Want)
 			}
@@ -83,7 +83,7 @@ func TestBundledManifestsClassifyTargetAgents(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			decision := Evaluate(manifest, NormalizeSnapshot(test.screen, ""))
+			decision := manifest.Evaluate(NormalizeSnapshot(test.screen, ""))
 			if decision.Activity != test.want || decision.RuleID != test.rule {
 				t.Fatalf("decision = %#v, want activity %q rule %q", decision, test.want, test.rule)
 			}
@@ -152,7 +152,7 @@ func TestBundledManifestScenarioBoundaries(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			decision := Evaluate(manifest, NormalizeSnapshot(test.screen, ""))
+			decision := manifest.Evaluate(NormalizeSnapshot(test.screen, ""))
 			if decision.Activity != test.want || decision.RuleID != test.rule {
 				t.Fatalf("decision = %#v, want activity %q rule %q", decision, test.want, test.rule)
 			}
@@ -183,7 +183,7 @@ func TestDetectorIsConservativeWhenNoRuleMatches(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	decision := Evaluate(manifest, NormalizeSnapshot("ordinary shell output", "shell"))
+	decision := manifest.Evaluate(NormalizeSnapshot("ordinary shell output", "shell"))
 	if decision.Activity != registry.ActivityUnknown || decision.Reason != "no_rule_matched" {
 		t.Fatalf("decision = %#v, want unknown/no_rule_matched", decision)
 	}
@@ -215,16 +215,16 @@ title_regex_any=["^CODEX"]
 	if err != nil {
 		t.Fatal(err)
 	}
-	decision := Evaluate(manifest, NormalizeSnapshot("READY\nApproval needed: Allow or Deny", "Codex task"))
+	decision := manifest.Evaluate(NormalizeSnapshot("READY\nApproval needed: Allow or Deny", "Codex task"))
 	if decision.RuleID != "high" || decision.Activity != registry.ActivityWaiting {
 		t.Fatalf("decision = %#v, want high/waiting", decision)
 	}
-	if excluded := Evaluate(manifest, NormalizeSnapshot("READY\nApproval needed: Allow or Deny; do not prompt", "Codex task")); excluded.RuleID != "low" {
+	if excluded := manifest.Evaluate(NormalizeSnapshot("READY\nApproval needed: Allow or Deny; do not prompt", "Codex task")); excluded.RuleID != "low" {
 		t.Fatalf("literal exclusion did not reject high rule: %#v", excluded)
 	}
 	manifest.Rules[0].Priority = 20
 	manifest.Rules[1].Priority = 20
-	if stable := Evaluate(manifest, NormalizeSnapshot("READY\nApproval needed: Allow or Deny", "Codex task")); stable.RuleID != "low" {
+	if stable := manifest.Evaluate(NormalizeSnapshot("READY\nApproval needed: Allow or Deny", "Codex task")); stable.RuleID != "low" {
 		t.Fatalf("equal-priority order was not stable: %#v", stable)
 	}
 }
@@ -278,7 +278,7 @@ func TestLoaderUsesValidOverrideAndFallsBackFromInvalidOverride(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if manifest.Source != path || Evaluate(manifest, NormalizeSnapshot("CUSTOM READY", "")).RuleID != "custom" {
+	if manifest.Source != path || manifest.Evaluate(NormalizeSnapshot("CUSTOM READY", "")).RuleID != "custom" {
 		t.Fatalf("valid override not used: %#v", manifest)
 	}
 	if err := os.WriteFile(path, []byte("not valid ["), 0o600); err != nil {
@@ -315,7 +315,7 @@ func TestLoaderUsesLocalOnlyAgyOverrideWithoutChangingDefaultSupport(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if manifest.Source != path || Evaluate(manifest, NormalizeSnapshot("ready", "")).RuleID != "custom_footer" {
+	if manifest.Source != path || manifest.Evaluate(NormalizeSnapshot("ready", "")).RuleID != "custom_footer" {
 		t.Fatalf("local-only Agy override not used: %#v", manifest)
 	}
 }
@@ -327,7 +327,7 @@ func TestDecisionJSONNeverContainsScreenContents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	encoded, err := json.Marshal(Evaluate(manifest, NormalizeSnapshot(secret, secret)))
+	encoded, err := json.Marshal(manifest.Evaluate(NormalizeSnapshot(secret, secret)))
 	if err != nil {
 		t.Fatal(err)
 	}

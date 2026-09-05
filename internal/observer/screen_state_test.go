@@ -55,6 +55,36 @@ func TestObserverDetectsScreenStateForTargetAgents(t *testing.T) {
 	}
 }
 
+func TestObserverDisablesScreenInspection(t *testing.T) {
+	t.Parallel()
+	for _, located := range []bool{true, false} {
+		t.Run(fmt.Sprintf("located=%t", located), func(t *testing.T) {
+			t.Parallel()
+			store := registry.NewFileStore(filepath.Join(t.TempDir(), "state.json"))
+			process, pane := detectionProcessPane(198, "codex")
+			options := detectionObserverOptions(store, process, pane, t.TempDir())
+			options.DisableScreenInspection = true
+			options.ScreenCapture = func(context.Context, mux.Pane) (mux.ScreenSnapshot, error) {
+				t.Error("screen capture called with inspection disabled")
+				return mux.ScreenSnapshot{}, nil
+			}
+			if !located {
+				options.PaneList = func(context.Context) ([]mux.Pane, error) { return nil, nil }
+			}
+			if _, err := New(options).RunOnce(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			sessions, err := store.List(t.Context(), registry.Filter{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(sessions) != 1 || sessions[0].Observations.Screen != nil {
+				t.Fatalf("sessions = %#v, want process without screen evidence", sessions)
+			}
+		})
+	}
+}
+
 func TestObserverUsesBundledOmpFallbackWhenNativeIntegrationIsMissing(t *testing.T) {
 	t.Parallel()
 	store := registry.NewFileStore(filepath.Join(t.TempDir(), "state.json"))
@@ -298,7 +328,7 @@ func TestObserverPreservesKnownActivityAcrossPaneEnumerationFailure(t *testing.T
 	assertIdleSince(t, store, at.Add(-2*time.Minute))
 }
 
-func assertIdleSince(t *testing.T, store registry.Store, wantSince time.Time) {
+func assertIdleSince(t *testing.T, store Store, wantSince time.Time) {
 	t.Helper()
 
 	sessions, err := store.List(context.Background(), registry.Filter{})
@@ -397,7 +427,7 @@ func TestScreenFallbackCannotOverrideConcurrentCompleteIntegration(t *testing.T)
 	}
 }
 
-func detectionObserverOptions(store registry.Store, process processinfo.Process, pane mux.Pane, configDir string) Options {
+func detectionObserverOptions(store Store, process processinfo.Process, pane mux.Pane, configDir string) Options {
 	return Options{
 		Store:              store,
 		ProcessList:        func(context.Context) ([]processinfo.Process, error) { return []processinfo.Process{process}, nil },

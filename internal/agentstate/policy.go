@@ -13,6 +13,14 @@ const (
 	AuthorityScreen Authority = "screen"
 )
 
+func (a Authority) IsValid() bool {
+	switch a {
+	case AuthorityHook, AuthorityScreen:
+		return true
+	}
+	return false
+}
+
 type Policy struct {
 	Primary          Authority
 	ScreenFallback   bool
@@ -75,6 +83,18 @@ func EvaluateHook(session registry.Session, now time.Time) HookEvaluation {
 	return HookEvaluation{Active: true, Fresh: true, ProcessMatches: true, Reason: "matching_live_process_report"}
 }
 
+func HookIsActive(session registry.Session, now time.Time) bool {
+	return EvaluateHook(session, now).Active
+}
+
+func ShouldDetectScreen(session registry.Session, now time.Time) bool {
+	policy := PolicyFor(session.Harness)
+	if policy.Primary == AuthorityScreen {
+		return true
+	}
+	return policy.ScreenFallback && !HookIsActive(session, now)
+}
+
 func matchingHookObservation(session registry.Session, policy Policy) (*registry.NativeObservation, HookEvaluation, bool) {
 	if policy.Primary != AuthorityHook || policy.IntegrationValue == "" {
 		return nil, HookEvaluation{Active: false, Fresh: false, ProcessMatches: false, Reason: "hook_not_activity_authority"}, false
@@ -109,18 +129,6 @@ func invalidHookTimeReason(observedAt time.Time, now time.Time) string {
 		return "integration_report_stale"
 	}
 	return ""
-}
-
-func HookIsActive(session registry.Session, now time.Time) bool {
-	return EvaluateHook(session, now).Active
-}
-
-func ShouldDetectScreen(session registry.Session, now time.Time) bool {
-	policy := PolicyFor(session.Harness)
-	if policy.Primary == AuthorityScreen {
-		return true
-	}
-	return policy.ScreenFallback && !HookIsActive(session, now)
 }
 
 func nativeEnded(native *registry.NativeObservation) bool {

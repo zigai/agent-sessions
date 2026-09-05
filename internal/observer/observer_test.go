@@ -28,7 +28,7 @@ func TestResultStringIncludesDegradedStateAndError(t *testing.T) {
 var errFailGoneObservation = errors.New("fail gone observation once")
 
 type failGoneOnceStore struct {
-	registry.Store
+	Store
 
 	failed bool
 }
@@ -52,7 +52,7 @@ func (store *failGoneOnceStore) ObserveBatch(ctx context.Context, observations [
 }
 
 type conflictObservationStore struct {
-	registry.Store
+	Store
 
 	conflictPID  int
 	enabled      bool
@@ -93,7 +93,7 @@ func (store *conflictObservationStore) conflicts(observation registry.Observatio
 	return store.enabled && observation.Process != nil && observation.Process.PID == store.conflictPID
 }
 
-func requireOnlySessionPresence(t *testing.T, store registry.Store, want registry.Presence) {
+func requireOnlySessionPresence(t *testing.T, store Store, want registry.Presence) {
 	t.Helper()
 	sessions, err := store.List(context.Background(), registry.Filter{})
 	if err != nil {

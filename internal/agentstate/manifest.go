@@ -99,7 +99,7 @@ func (l Loader) Load(harness registry.Harness) (Manifest, error) {
 		}
 	}
 
-	manifest, err := l.loadUncached(harness, path)
+	manifest, err := loadUncached(harness, path)
 	manifestCache.Store(key, manifestCacheEntry{
 		fingerprint: fingerprint,
 		manifest:    manifest,
@@ -109,7 +109,39 @@ func (l Loader) Load(harness registry.Harness) (Manifest, error) {
 	return manifest, err
 }
 
-func (l Loader) loadUncached(harness registry.Harness, path string) (Manifest, error) {
+func (l Loader) overridePath(harness registry.Harness) string {
+	configDir := l.ConfigDir
+	if configDir == "" {
+		configDir = DefaultConfigDir()
+	}
+	if configDir == "" {
+		return ""
+	}
+	return filepath.Join(configDir, string(harness)+".toml")
+}
+
+func ParseManifest(data []byte, harness registry.Harness) (Manifest, error) {
+	if len(data) > maxManifestBytes {
+		return Manifest{}, errManifestTooLarge
+	}
+	var manifest Manifest
+	if err := toml.NewDecoder(bytes.NewReader(data)).DisallowUnknownFields().Decode(&manifest); err != nil {
+		return Manifest{}, fmt.Errorf("%w: parsing TOML: %w", errManifestInvalid, err)
+	}
+	if manifest.Agent != string(harness) {
+		return Manifest{}, fmt.Errorf("%w: agent %q does not match %q", errManifestInvalid, manifest.Agent, harness)
+	}
+	if err := manifest.validate(); err != nil {
+		return Manifest{}, err
+	}
+	if err := manifest.compileRules(); err != nil {
+		return Manifest{}, err
+	}
+
+	return manifest, nil
+}
+
+func loadUncached(harness registry.Harness, path string) (Manifest, error) {
 	var bundled Manifest
 	if SupportsScreen(harness) {
 		var err error
@@ -168,17 +200,6 @@ func manifestFileFingerprint(path string) string {
 	return fmt.Sprintf("%d:%d:%d", info.ModTime().UnixNano(), info.Size(), info.Mode())
 }
 
-func (l Loader) overridePath(harness registry.Harness) string {
-	configDir := l.ConfigDir
-	if configDir == "" {
-		configDir = DefaultConfigDir()
-	}
-	if configDir == "" {
-		return ""
-	}
-	return filepath.Join(configDir, string(harness)+".toml")
-}
-
 func readManifestFile(path string) ([]byte, error) {
 	file, err := os.Open(path)
 	if err != nil {
@@ -195,28 +216,7 @@ func readManifestFile(path string) ([]byte, error) {
 	return data, nil
 }
 
-func ParseManifest(data []byte, harness registry.Harness) (Manifest, error) {
-	if len(data) > maxManifestBytes {
-		return Manifest{}, errManifestTooLarge
-	}
-	var manifest Manifest
-	if err := toml.NewDecoder(bytes.NewReader(data)).DisallowUnknownFields().Decode(&manifest); err != nil {
-		return Manifest{}, fmt.Errorf("%w: parsing TOML: %w", errManifestInvalid, err)
-	}
-	if manifest.Agent != string(harness) {
-		return Manifest{}, fmt.Errorf("%w: agent %q does not match %q", errManifestInvalid, manifest.Agent, harness)
-	}
-	if err := validateManifest(manifest); err != nil {
-		return Manifest{}, err
-	}
-	if err := compileManifestRules(&manifest); err != nil {
-		return Manifest{}, err
-	}
-
-	return manifest, nil
-}
-
-func compileManifestRules(manifest *Manifest) error {
+func (manifest *Manifest) compileRules() error {
 	for index := range manifest.Rules {
 		rule := &manifest.Rules[index]
 		var err error
@@ -267,7 +267,7 @@ func loadBundled(harnessID registry.Harness) (Manifest, error) {
 	return manifest, nil
 }
 
-func validateManifest(manifest Manifest) error {
+func (manifest *Manifest) validate() error {
 	if manifest.Version != manifestSchemaVersion || len(manifest.Rules) == 0 {
 		return fmt.Errorf("%w: schema version %d or empty rules", errManifestInvalid, manifest.Version)
 	}
@@ -280,14 +280,14 @@ func validateManifest(manifest Manifest) error {
 			return fmt.Errorf("%w: duplicate rule id %q", errManifestInvalid, rule.ID)
 		}
 		seen[rule.ID] = struct{}{}
-		if err := validateRule(rule); err != nil {
+		if err := rule.validate(); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func validateRule(rule Rule) error {
+func (rule Rule) validate() error {
 	activity, err := registry.NormalizeActivity(rule.State)
 	if err != nil || activity == registry.ActivityUnknown || activity == "" {
 		return fmt.Errorf("%w: rule %q has unsupported state %q", errManifestInvalid, rule.ID, rule.State)
@@ -295,17 +295,17 @@ func validateRule(rule Rule) error {
 	if _, err := selectRegion(rule.Region, nil); err != nil {
 		return fmt.Errorf("%w: rule %q: %w", errManifestInvalid, rule.ID, err)
 	}
-	if !hasPositiveMatcher(rule) {
+	if !rule.hasPositiveMatcher() {
 		return fmt.Errorf("%w: rule %q has no positive matcher", errManifestInvalid, rule.ID)
 	}
-	return validateRuleMatchers(rule)
+	return rule.validateMatchers()
 }
 
-func hasPositiveMatcher(rule Rule) bool {
+func (rule Rule) hasPositiveMatcher() bool {
 	return len(rule.All)+len(rule.Any)+len(rule.RegexAll)+len(rule.RegexAny)+len(rule.TitleAny)+len(rule.TitleRegexAny) > 0
 }
 
-func validateRuleMatchers(rule Rule) error {
+func (rule Rule) validateMatchers() error {
 	groups := []struct {
 		name   string
 		values []string
