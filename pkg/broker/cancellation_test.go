@@ -6,9 +6,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
-	"path/filepath"
+	"os"
 	"testing"
 	"time"
 
@@ -94,7 +95,11 @@ func TestSubscriptionCloseJoinsReader(t *testing.T) {
 
 func socketClient(t *testing.T, serve func(net.Conn)) *broker.Client {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "broker.sock")
+	path, err := shortSocketPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Remove(path) })
 	var listenConfig net.ListenConfig
 	listener, err := listenConfig.Listen(t.Context(), "unix", path)
 	if err != nil {
@@ -116,4 +121,21 @@ func socketClient(t *testing.T, serve func(net.Conn)) *broker.Client {
 		serve(connection)
 	}()
 	return broker.NewClientForSocket(path)
+}
+
+// shortSocketPath keeps test listeners below Darwin's Unix socket path limit.
+func shortSocketPath() (string, error) {
+	socketFile, err := os.CreateTemp("", "aht-broker-")
+	if err != nil {
+		return "", fmt.Errorf("creating temporary socket path: %w", err)
+	}
+	path := socketFile.Name()
+	if err := socketFile.Close(); err != nil {
+		_ = os.Remove(path)
+		return "", fmt.Errorf("closing temporary socket path: %w", err)
+	}
+	if err := os.Remove(path); err != nil {
+		return "", fmt.Errorf("removing temporary socket path: %w", err)
+	}
+	return path, nil
 }

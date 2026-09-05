@@ -6,7 +6,7 @@ import (
 	"context"
 	"errors"
 	"net"
-	"path/filepath"
+	"os"
 	"testing"
 	"time"
 
@@ -34,13 +34,21 @@ func (l *failingListener) Accept() (net.Conn, error) {
 }
 
 func TestAcceptFailureStopsActiveSubscriptions(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "state.json")
+	path, err := shortStatePath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	socketPath := broker.SocketPath(path)
+	t.Cleanup(func() {
+		_ = os.Remove(path)
+		_ = os.Remove(socketPath)
+	})
 	store, err := registry.OpenMemoryStore(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	var listenConfig net.ListenConfig
-	listener, err := listenConfig.Listen(t.Context(), "unix", broker.SocketPath(path))
+	listener, err := listenConfig.Listen(t.Context(), "unix", socketPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,7 +56,7 @@ func TestAcceptFailureStopsActiveSubscriptions(t *testing.T) {
 	fail := make(chan struct{})
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
-	server := New(Options{Store: store, SocketPath: broker.SocketPath(path)})
+	server := New(Options{Store: store, SocketPath: socketPath})
 	result := make(chan error, 1)
 	go func() {
 		result <- server.serve(ctx, &failingListener{Listener: listener, fail: fail})
