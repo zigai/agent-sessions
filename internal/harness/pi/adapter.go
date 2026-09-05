@@ -15,7 +15,7 @@ const (
 	piIntegrationID       = "pi"
 	piIntegrationSourceID = "pi-extension"
 	piSessionFlag         = "--session"
-	integrationVersion    = 11
+	integrationVersion    = 12
 )
 
 //go:embed assets/aht-state.ts.tmpl
@@ -23,7 +23,7 @@ var piExtensionTemplate string
 
 type piHarness struct{ harness.BaseAdapter }
 
-func New() harness.Adapter {
+func New() piHarness {
 	return piHarness{BaseAdapter: harness.NewBaseAdapter(harness.Definition{
 		ID:           registry.HarnessPi,
 		Aliases:      nil,

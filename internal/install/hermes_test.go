@@ -37,7 +37,7 @@ if [ "$1 $2" = "plugins list" ]; then
   fi
   status="not enabled"
   if [ -f "$state/enabled" ]; then status=enabled; fi
-  printf '[{"name":"aht-state","status":"%s","version":"0.0.7","description":"test","source":"user"}]\n' "$status"
+  printf '[{"name":"aht-state","status":"%s","version":"0.0.8","description":"test","source":"user"}]\n' "$status"
   exit 0
 fi
 if [ "$1 $2" = "plugins enable" ]; then
@@ -145,7 +145,7 @@ func TestHermesPluginShapeUsesDocumentedHooksWithoutSensitiveContent(t *testing.
 	for _, required := range []string{
 		`transition["lifecycle"] = "resume"`, `"lifecycle": "end"`, `"activity": "waiting"`,
 		`"activity": "running"`, `"activity": "idle"`, `"--no-tmux"`,
-		`"hermes", "--resume", session_id`, "start_new_session=True",
+		`"hermes", "--resume", session_id`, "child.wait(timeout=",
 	} {
 		if !strings.Contains(source, required) {
 			t.Fatalf("expected Hermes plugin source to contain %q", required)

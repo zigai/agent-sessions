@@ -207,6 +207,35 @@ func RawStdinDefaultsReportHookCommand[T Transition](
 	return reportHookCommand(binary, harness, transition, event, source, "--raw-stdin-defaults-only")
 }
 
+// State returns the activity or presence state represented by the transition.
+func (transition HookTransition) State() string {
+	_, state := hookTransitionArgument(transition)
+
+	return state
+}
+
+func ShellQuote(value string) string {
+	if value == "" {
+		return "''"
+	}
+
+	if isSafeShellWord(value) {
+		return value
+	}
+
+	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
+}
+
+func RenderScriptTemplate(template string, integrationID string, binary string, source string, version int) string {
+	return strings.NewReplacer(
+		"{{MANAGED_MARKER}}", ManagedMarker,
+		"{{INTEGRATION_ID}}", integrationID,
+		"{{INTEGRATION_VERSION}}", strconv.Itoa(version),
+		"{{BINARY}}", strconv.Quote(binary),
+		"{{SOURCE}}", strconv.Quote(source),
+	).Replace(template)
+}
+
 func reportHookCommand[T Transition](
 	binary string,
 	harness registry.Harness,
@@ -283,34 +312,6 @@ func storedHookTransitionArgument(value HookTransition) (string, string) {
 	default:
 		panic("invalid stored hook transition")
 	}
-}
-
-func StringTransition(value HookTransition) string {
-	_, state := hookTransitionArgument(value)
-
-	return state
-}
-
-func ShellQuote(value string) string {
-	if value == "" {
-		return "''"
-	}
-
-	if isSafeShellWord(value) {
-		return value
-	}
-
-	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
-}
-
-func RenderScriptTemplate(template string, integrationID string, binary string, source string, version int) string {
-	return strings.NewReplacer(
-		"{{MANAGED_MARKER}}", ManagedMarker,
-		"{{INTEGRATION_ID}}", integrationID,
-		"{{INTEGRATION_VERSION}}", strconv.Itoa(version),
-		"{{BINARY}}", strconv.Quote(binary),
-		"{{SOURCE}}", strconv.Quote(source),
-	).Replace(template)
 }
 
 func isSafeShellWord(value string) bool {

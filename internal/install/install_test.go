@@ -585,7 +585,7 @@ func requireClineAgentPlugin(t *testing.T, pluginDir string) {
 		"snapshot.runId",
 		"--pid",
 		"aht_integration=cline-plugin",
-		"child.on(\"error\", () => {})",
+		"child.once(\"error\", warnReporting)",
 	}, "Cline AgentPlugin")
 	if strings.Contains(text, "context.input") || strings.Contains(text, "context.result") || strings.Contains(text, "outputText") {
 		t.Fatalf("Cline plugin reads content-bearing fields: %q", text)
@@ -598,7 +598,7 @@ func requireClinePluginMarker(t *testing.T, pluginDir string) {
 	requireTextContainsAll(t, marker, []string{
 		managedMarker,
 		"AHT_INTEGRATION_ID=cline",
-		"AHT_INTEGRATION_VERSION=8",
+		"AHT_INTEGRATION_VERSION=9",
 		"AHT_SOURCE=cline-plugin",
 	}, "Cline plugin marker")
 }
@@ -887,14 +887,14 @@ func TestInstallPiWritesExtension(t *testing.T) {
 		t.Fatalf("unexpected path %q", result.Path)
 	}
 	requireTextContainsAll(t, result.Snippet, []string{
-		`pi.on("agent_start"`,
-		`pi.on("before_agent_start"`,
-		`pi.on("ui_prompt_start"`,
+		`on("agent_start"`,
+		`on("before_agent_start"`,
+		`on("ui_prompt_start"`,
 		`report("waiting", ctx, event)`,
-		`pi.on("ui_prompt_end"`,
-		`report(ctx.isIdle() ? "idle" : "running", ctx, event)`,
+		`on("ui_prompt_end"`,
+		`report(ctx.isIdle?.() ? "idle" : "running", ctx, event)`,
 		"AHT_INTEGRATION_ID=pi",
-		"AHT_INTEGRATION_VERSION=11",
+		"AHT_INTEGRATION_VERSION=12",
 		`"report", "pi"`,
 		`"--observed-at", observedAt`,
 		"addEvent(args, event?.type)",
@@ -902,7 +902,7 @@ func TestInstallPiWritesExtension(t *testing.T) {
 		`args.push("--session-id", currentSessionId)`,
 		`args.push("--session-path", currentSessionPath)`,
 	}, "pi extension")
-	if strings.Contains(result.Snippet, `pi.on("tool_approval_`) {
+	if strings.Contains(result.Snippet, `on("tool_approval_`) {
 		t.Fatalf("Pi extension must use documented UI prompt events: %q", result.Snippet)
 	}
 }
@@ -930,15 +930,15 @@ func TestInstallOmpWritesExtension(t *testing.T) {
 	}
 	requireTextContainsAll(t, result.Snippet, []string{
 		"AHT_INTEGRATION_ID=omp",
-		`pi.on("session_start"`,
-		`pi.on("agent_end"`,
+		`on("session_start"`,
+		`on("agent_end"`,
 		`event?.willContinue === true`,
-		`pi.on("tool_approval_requested"`,
-		`pi.on("tool_approval_resolved"`,
-		`pi.on("tool_execution_start"`,
-		`pi.on("tool_execution_end"`,
-		`pi.on("session_stop"`,
-		`pi.on("session_shutdown"`,
+		`on("tool_approval_requested"`,
+		`on("tool_approval_resolved"`,
+		`on("tool_execution_start"`,
+		`on("tool_execution_end"`,
+		`on("session_stop"`,
+		`on("session_shutdown"`,
 		`report("idle", "live"`,
 		`activity: "waiting"`,
 		`queueState("interrupted"`,
@@ -954,9 +954,9 @@ func TestInstallOmpWritesExtension(t *testing.T) {
 		`retryableErrorPattern`,
 		`entry?.type === "session_init"`,
 		"if (isSubagentSession(ctx)) return Promise.resolve()",
-		"AHT_INTEGRATION_VERSION=12",
+		"AHT_INTEGRATION_VERSION=13",
 	}, "oh-my-pi extension")
-	if strings.Contains(result.Snippet, `pi.on("input"`) {
+	if strings.Contains(result.Snippet, `on("input"`) {
 		t.Fatalf("OMP extension must not treat local interactive input as agent activity: %q", result.Snippet)
 	}
 	if strings.Contains(result.Snippet, `"--queue"`) {
@@ -1080,7 +1080,7 @@ func TestInstallKiloWritesPlugin(t *testing.T) {
 		`"permission.asked"`,
 		`"session.deleted"`,
 		`state === "gone" ? "--presence"`,
-		`"AHT_INTEGRATION_VERSION=7"`,
+		`"AHT_INTEGRATION_VERSION=8"`,
 		`"--observed-at", observedAt`,
 		`"kilo_status"`,
 		`"aht_integration", source`,

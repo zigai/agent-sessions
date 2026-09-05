@@ -17,7 +17,7 @@ const (
 
 type grokHarness struct{ harness.BaseAdapter }
 
-func New() harness.Adapter {
+func New() grokHarness {
 	return grokHarness{BaseAdapter: harness.NewBaseAdapter(harness.Definition{
 		ID:           registry.HarnessGrok,
 		Aliases:      []string{"grok-build", "grok_build"},
@@ -75,8 +75,8 @@ func grokPayloadValidator(rawPayload json.RawMessage) bool {
 		harness.PayloadStringAny(payload, "workspaceRoot", "workspace_root") != ""
 }
 
-func (grokHarness) PayloadDefaults(payload map[string]any) harness.PayloadDefaults {
-	return grokPayloadDefaults(payload)
+func (grokHarness) PayloadDefaults(payload map[string]any) (harness.PayloadDefaults, error) {
+	return grokPayloadDefaults(payload), nil
 }
 
 type grokHookSpec struct {

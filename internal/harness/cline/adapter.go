@@ -18,7 +18,7 @@ const (
 	clinePluginName        = "aht-state"
 	clineMarkerFileName    = ".aht-managed"
 	clineIntegrationSource = "cline-plugin"
-	integrationVersion     = 8
+	integrationVersion     = 9
 )
 
 //go:embed assets/index.js.tmpl
@@ -26,7 +26,7 @@ var clinePluginTemplate string
 
 type clineHarness struct{ harness.BaseAdapter }
 
-func New() harness.Adapter {
+func New() clineHarness {
 	return clineHarness{BaseAdapter: harness.NewBaseAdapter(harness.Definition{
 		ID:           registry.HarnessCline,
 		Aliases:      nil,
@@ -90,8 +90,8 @@ func (clineHarness) PayloadCompatible(rawPayload json.RawMessage) bool {
 	return clinePayloadValidator(rawPayload)
 }
 
-func (clineHarness) PayloadDefaults(payload map[string]any) harness.PayloadDefaults {
-	return clinePayloadDefaults(payload)
+func (clineHarness) PayloadDefaults(payload map[string]any) (harness.PayloadDefaults, error) {
+	return clinePayloadDefaults(payload), nil
 }
 
 func renderClinePlugin(binary string, version string) string {

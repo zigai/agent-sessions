@@ -1,10 +1,67 @@
 // aht managed integration
 // Native Cline AgentPlugin. This plugin never reads prompt, message, tool input,
 // tool output, response, or error content.
+// Native lifecycle contract: https://docs.cline.bot/sdk/plugins
 import { spawn } from "node:child_process";
 
 const binary = {{BINARY}};
 const integrationVersion = {{INTEGRATION_VERSION}};
+const pendingReports = [];
+const maxPendingReports = 64;
+let activeReport = false;
+let reportingWarningShown = false;
+
+function warnReporting() {
+  if (reportingWarningShown) return;
+  reportingWarningShown = true;
+  console.warn("aht: reporting failed or overloaded; some state updates were dropped.");
+}
+
+// Own one referenced child at a time. Keep the newest state under overload,
+// retaining FIFO order for the accepted reports and their enqueue-time metadata.
+function enqueueReport(args) {
+  return new Promise((complete) => {
+    if (pendingReports.length >= maxPendingReports) {
+      pendingReports.shift().complete();
+      warnReporting();
+    }
+    pendingReports.push({ args, complete });
+    drainReports();
+  });
+}
+
+function drainReports() {
+  if (activeReport) return;
+  const report = pendingReports.shift();
+  if (!report) return;
+  activeReport = true;
+  let child;
+  try {
+    child = spawn(binary, report.args, { stdio: "ignore" });
+  } catch {
+    warnReporting();
+    activeReport = false;
+    report.complete();
+    drainReports();
+    return;
+  }
+  let killTimer;
+  const timeout = setTimeout(() => {
+    warnReporting();
+    child.kill("SIGTERM");
+    killTimer = setTimeout(() => child.kill("SIGKILL"), 100);
+  }, 1000);
+  child.once("error", warnReporting);
+  // "close", including after a spawn error, joins the child before the next job.
+  child.once("close", (code) => {
+    clearTimeout(timeout);
+    clearTimeout(killTimer);
+    if (code !== 0) warnReporting();
+    activeReport = false;
+    report.complete();
+    drainReports();
+  });
+}
 let sessionId = "";
 let workspaceRoot = "";
 
@@ -42,9 +99,7 @@ function report(eventName, context, transition) {
   attribute(args, "cline_run_id", snapshot.runId);
   attribute(args, "cline_run_status", context?.resultStatus || snapshot.status);
 
-  const child = spawn(binary, args, { stdio: "ignore", detached: true });
-  child.on("error", () => {});
-  child.unref();
+  return enqueueReport(args);
 }
 
 const plugin = {
@@ -53,17 +108,17 @@ const plugin = {
   setup(_api, ctx) {
     sessionId = text(ctx?.session?.sessionId);
     workspaceRoot = text(ctx?.workspaceInfo?.rootPath);
-    report("setup", {}, { presence: "live", activity: "idle" });
+    return report("setup", {}, { presence: "live", activity: "idle" });
   },
   hooks: {
     beforeRun(context) {
-      report("beforeRun", context, { presence: "live", activity: "running" });
+      return report("beforeRun", context, { presence: "live", activity: "running" });
     },
     beforeTool(context) {
-      report("beforeTool", context, { presence: "live", activity: "running" });
+      return report("beforeTool", context, { presence: "live", activity: "running" });
     },
     afterTool(context) {
-      report("afterTool", context, { presence: "live", activity: "running" });
+      return report("afterTool", context, { presence: "live", activity: "running" });
     },
     afterRun({ snapshot, result }) {
       const status = text(result?.status || snapshot?.status).toLowerCase();
@@ -73,7 +128,7 @@ const plugin = {
       } else if (status === "interrupted" || status === "cancelled" || status === "canceled") {
         activity = "interrupted";
       }
-      report("afterRun", { snapshot, resultStatus: result?.status }, { presence: "live", activity });
+      return report("afterRun", { snapshot, resultStatus: result?.status }, { presence: "live", activity });
     },
   },
 };

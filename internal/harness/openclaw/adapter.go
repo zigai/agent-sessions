@@ -12,6 +12,7 @@ import (
 )
 
 const (
+	integrationVersion        = 8
 	openClawCommand           = "openclaw"
 	openClawPluginName        = "aht-state"
 	openClawMarkerFileName    = ".aht-managed"
@@ -23,7 +24,7 @@ var openClawPluginTemplate string
 
 type openClawHarness struct{ harness.BaseAdapter }
 
-func New() harness.Adapter {
+func New() openClawHarness {
 	return openClawHarness{BaseAdapter: harness.NewBaseAdapter(harness.Definition{
 		ID:           registry.HarnessOpenClaw,
 		Aliases:      nil,
@@ -44,12 +45,12 @@ func New() harness.Adapter {
 			NativeCatalog:     false,
 			TTYTmuxContext:    false,
 		},
-		IntegrationVersion: harness.IntegrationVersion,
+		IntegrationVersion: integrationVersion,
 	})}
 }
 
 func (openClawHarness) InstallPlan(binary string) harness.InstallPlan {
-	version := strconv.Itoa(harness.IntegrationVersion)
+	version := strconv.Itoa(integrationVersion)
 	dir := filepath.Join(registry.DefaultStateDir(), "integrations", "openclaw", openClawPluginName)
 
 	return harness.InstallPlan{Actions: []harness.InstallAction{harness.PluginDirectoryAction{Plan: harness.PluginDirectoryInstallPlan{

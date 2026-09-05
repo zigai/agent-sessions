@@ -23,7 +23,7 @@ type hookPayload struct {
 	HookEventName string `json:"hook_event_name" validate:"required,notblank"`
 }
 
-func New() harness.Adapter {
+func New() droidHarness {
 	return droidHarness{BaseAdapter: harness.NewBaseAdapter(harness.Definition{
 		ID: registry.HarnessDroid,
 		Aliases: []string{
@@ -125,8 +125,8 @@ func (droidHarness) PayloadCompatible(rawPayload json.RawMessage) bool {
 	return harness.PayloadValidator[hookPayload]()(rawPayload)
 }
 
-func (droidHarness) PayloadDefaults(payload map[string]any) harness.PayloadDefaults {
-	return droidPayloadDefaults(payload)
+func (droidHarness) PayloadDefaults(payload map[string]any) (harness.PayloadDefaults, error) {
+	return droidPayloadDefaults(payload), nil
 }
 
 func droidHookCommand[T harness.Transition](binary string, transition T, event string) string {

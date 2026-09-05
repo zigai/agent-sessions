@@ -137,14 +137,11 @@ func DefaultsFromPayloadWithError(harnessID registry.Harness, rawPayload json.Ra
 	if err := json.Unmarshal(rawPayload, &payload); err != nil {
 		return emptyPayloadDefaults, fmt.Errorf("decoding hook payload defaults: %w", err)
 	}
-	if errorAdapter, ok := adapter.(harness.PayloadDefaultsErrorAdapter); ok {
-		defaults, err := errorAdapter.PayloadDefaultsWithError(payload)
-		if err != nil {
-			return emptyPayloadDefaults, fmt.Errorf("deriving harness payload defaults: %w", err)
-		}
-		return defaults, nil
+	defaults, err := payloadAdapter.PayloadDefaults(payload)
+	if err != nil {
+		return emptyPayloadDefaults, fmt.Errorf("deriving harness payload defaults: %w", err)
 	}
-	return payloadAdapter.PayloadDefaults(payload), nil
+	return defaults, nil
 }
 
 func PayloadCompatibleWithHarness(harnessID registry.Harness, rawPayload json.RawMessage) bool {

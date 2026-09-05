@@ -76,8 +76,7 @@ func TestGeneratedRuntimeFamilies(t *testing.T) {
 import plugin from "./index.js";
 const hooks = plugin.hooks;
 plugin.setup({}, {session: {sessionId: "cline-session"}, workspaceInfo: {rootPath: "/tmp/project"}});
-hooks.afterRun({snapshot: {status: "failed", prompt: "`+generatedRuntimeSensitiveSentinel+`"}, result: {status: "failed"}});
-await new Promise((resolve) => setTimeout(resolve, 100));
+await hooks.afterRun({snapshot: {status: "failed", prompt: "`+generatedRuntimeSensitiveSentinel+`"}, result: {status: "failed"}});
 `, nil)
 		requireCapturedArguments(t, capture.path, "report", "cline", "--activity", "failed")
 	})
@@ -92,8 +91,7 @@ await new Promise((resolve) => setTimeout(resolve, 100));
 import plugin from "./index.js";
 const hooks = new Map();
 plugin.register({on: (name, callback) => hooks.set(name, callback)});
-hooks.get("agent_end")({success: false, reason: "error", prompt: "`+generatedRuntimeSensitiveSentinel+`"}, {sessionId: "openclaw-session", workspaceDir: "/tmp/project"});
-await new Promise((resolve) => setTimeout(resolve, 100));
+await hooks.get("agent_end")({success: false, reason: "error", prompt: "`+generatedRuntimeSensitiveSentinel+`"}, {sessionId: "openclaw-session", workspaceDir: "/tmp/project"});
 `, extra)
 		requireCapturedArguments(t, capture.path, "report", "openclaw", "--activity", "failed")
 	})
@@ -132,7 +130,7 @@ const hooks = new Map();
 extension({on: (name, callback) => hooks.set(name, callback)});
 const ctx = {cwd: "/tmp/project", sessionManager: {getSessionId: () => "pi-session", getSessionFile: () => "/tmp/pi.jsonl"}};
 hooks.get("agent_end")({type: "agent_end", status: "failed", prompt: "`+generatedRuntimeSensitiveSentinel+`"}, ctx);
-await new Promise((resolve) => setTimeout(resolve, 100));
+await hooks.get("session_shutdown")({type: "session_shutdown"}, ctx);
 `, nil)
 		requireCapturedArguments(t, capture.path, "report", "pi", "--activity", "failed")
 	})
@@ -146,7 +144,7 @@ extension({on: (name, callback) => hooks.set(name, callback)});
 const ctx = {hasUI: true, cwd: "/tmp/project", sessionManager: {getSessionId: () => "omp-session", getSessionFile: () => "/tmp/omp.jsonl", getBranch: () => []}};
 hooks.get("session_start")({type: "session_start"}, ctx);
 hooks.get("agent_error")({type: "agent_error", error: "fatal", prompt: "`+generatedRuntimeSensitiveSentinel+`"}, ctx);
-await new Promise((resolve) => setTimeout(resolve, 200));
+await hooks.get("session_shutdown")({type: "session_shutdown"}, ctx);
 `, nil)
 		requireCapturedArguments(t, capture.path, "report", "omp", "--activity", "failed")
 	})
@@ -157,7 +155,6 @@ await new Promise((resolve) => setTimeout(resolve, 200));
 import plugin from "./plugin.ts";
 const runtime = await plugin.server({directory: "/tmp/project", worktree: "/tmp/project"});
 await runtime.event({event: {type: "session.error", sessionID: "opencode-session", prompt: "`+generatedRuntimeSensitiveSentinel+`"}});
-await new Promise((resolve) => setTimeout(resolve, 100));
 `, nil)
 		requireCapturedArguments(t, capture.path, "report", "opencode", "--activity", "failed")
 	})

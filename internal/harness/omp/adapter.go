@@ -15,7 +15,7 @@ const (
 	ompIntegrationID       = "omp"
 	ompIntegrationSourceID = "omp-extension"
 	ompSessionFlag         = "--session"
-	integrationVersion     = 12
+	integrationVersion     = 13
 )
 
 //go:embed assets/aht-state.ts.tmpl
@@ -23,7 +23,7 @@ var ompExtensionTemplate string
 
 type ompHarness struct{ harness.BaseAdapter }
 
-func New() harness.Adapter {
+func New() ompHarness {
 	return ompHarness{BaseAdapter: harness.NewBaseAdapter(harness.Definition{
 		ID:           registry.HarnessOmp,
 		Aliases:      []string{"ohmypi", "oh-my-pi", "oh_my_pi"},

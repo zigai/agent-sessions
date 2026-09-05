@@ -13,6 +13,7 @@ import (
 )
 
 const (
+	integrationVersion      = 8
 	hermesCommand           = "hermes"
 	hermesPluginName        = "aht-state"
 	hermesMarkerFileName    = ".aht-managed"
@@ -24,7 +25,7 @@ var hermesPluginTemplate string
 
 type hermesHarness struct{ harness.BaseAdapter }
 
-func New() harness.Adapter {
+func New() hermesHarness {
 	return hermesHarness{BaseAdapter: harness.NewBaseAdapter(harness.Definition{
 		ID:           registry.HarnessHermes,
 		Aliases:      []string{"hermes-agent", "hermes_agent"},
@@ -45,12 +46,12 @@ func New() harness.Adapter {
 			NativeCatalog:     false,
 			TTYTmuxContext:    false,
 		},
-		IntegrationVersion: harness.IntegrationVersion,
+		IntegrationVersion: integrationVersion,
 	})}
 }
 
 func (hermesHarness) InstallPlan(binary string) harness.InstallPlan {
-	version := strconv.Itoa(harness.IntegrationVersion)
+	version := strconv.Itoa(integrationVersion)
 	dir := filepath.Join(hermesHome(), "plugins", hermesPluginName)
 
 	return harness.InstallPlan{Actions: []harness.InstallAction{harness.PluginDirectoryAction{Plan: harness.PluginDirectoryInstallPlan{

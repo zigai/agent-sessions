@@ -25,7 +25,7 @@ type hookPayload struct {
 	Model          string  `json:"model"           validate:"omitempty"`
 }
 
-func New() harness.Adapter {
+func New() codexHarness {
 	return codexHarness{BaseAdapter: harness.NewBaseAdapter(harness.Definition{
 		ID:           registry.HarnessCodex,
 		Aliases:      nil,
@@ -125,8 +125,8 @@ func (codexHarness) PayloadCompatible(rawPayload json.RawMessage) bool {
 	return harness.PayloadValidator[hookPayload]()(rawPayload)
 }
 
-func (codexHarness) PayloadDefaults(payload map[string]any) harness.PayloadDefaults {
-	return codexPayloadDefaults(payload)
+func (codexHarness) PayloadDefaults(payload map[string]any) (harness.PayloadDefaults, error) {
+	return codexPayloadDefaults(payload), nil
 }
 
 func codexPayloadDefaults(payload map[string]any) harness.PayloadDefaults {

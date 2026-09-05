@@ -11,8 +11,9 @@ import (
 )
 
 const (
-	kiloCommand     = "kilo"
-	kiloSessionFlag = "--session"
+	integrationVersion = 8
+	kiloCommand        = "kilo"
+	kiloSessionFlag    = "--session"
 )
 
 const (
@@ -26,7 +27,7 @@ var kiloPluginTemplate string
 
 type kiloHarness struct{ harness.BaseAdapter }
 
-func New() harness.Adapter {
+func New() kiloHarness {
 	return kiloHarness{BaseAdapter: harness.NewBaseAdapter(harness.Definition{
 		ID:           registry.HarnessKilo,
 		Aliases:      []string{"kilocode", "kilo-code", "kilo_code"},
@@ -47,7 +48,7 @@ func New() harness.Adapter {
 			ProcessIdentity:   false,
 			TTYTmuxContext:    false,
 		},
-		IntegrationVersion: harness.IntegrationVersion,
+		IntegrationVersion: integrationVersion,
 	})}
 }
 
@@ -61,7 +62,7 @@ func (kiloHarness) InstallPlan(binary string) harness.InstallPlan {
 			kiloIntegrationID,
 			binary,
 			kiloIntegrationSource,
-			harness.IntegrationVersion,
+			integrationVersion,
 		),
 		JSONContent: nil,
 	}}}}

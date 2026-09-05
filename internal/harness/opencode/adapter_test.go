@@ -8,7 +8,7 @@ import (
 func TestPluginTemplateUsesCurrentModuleShape(t *testing.T) {
 	t.Parallel()
 
-	if !strings.Contains(openCodePluginTemplate, "async function AHTPlugin(ctx: any)") {
+	if !strings.Contains(openCodePluginTemplate, "async function AHTPlugin(ctx: PluginContext): Promise<PluginHooks>") {
 		t.Fatal("expected per-context plugin factory")
 	}
 	if !strings.Contains(openCodePluginTemplate, `export default { id: "aht-state", server: AHTPlugin }`) {
@@ -20,7 +20,7 @@ func TestPluginTemplateUsesCurrentModuleShape(t *testing.T) {
 	if !strings.Contains(openCodePluginTemplate, `case "session.idle":`) {
 		t.Fatal("expected deprecated idle event compatibility")
 	}
-	if !strings.Contains(openCodePluginTemplate, `child.on("error", () => {});`) {
+	if !strings.Contains(openCodePluginTemplate, `child.once("error", warnReporting);`) {
 		t.Fatal("expected asynchronous child error handling")
 	}
 }

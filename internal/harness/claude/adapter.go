@@ -24,7 +24,7 @@ type hookPayload struct {
 	HookEventName  string  `json:"hook_event_name" validate:"required,notblank"`
 }
 
-func New() harness.Adapter {
+func New() claudeHarness {
 	return claudeHarness{BaseAdapter: harness.NewBaseAdapter(harness.Definition{
 		ID:           registry.HarnessClaude,
 		Aliases:      []string{"claude-code", "claude_code"},
@@ -149,8 +149,8 @@ func (claudeHarness) PayloadCompatible(rawPayload json.RawMessage) bool {
 	return harness.PayloadValidator[hookPayload]()(rawPayload)
 }
 
-func (claudeHarness) PayloadDefaults(payload map[string]any) harness.PayloadDefaults {
-	return claudePayloadDefaults(payload)
+func (claudeHarness) PayloadDefaults(payload map[string]any) (harness.PayloadDefaults, error) {
+	return claudePayloadDefaults(payload), nil
 }
 
 func claudePayloadDefaults(payload map[string]any) harness.PayloadDefaults {

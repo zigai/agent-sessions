@@ -24,7 +24,7 @@ type copilotHookSpec struct {
 	matcher    string
 }
 
-func New() harness.Adapter {
+func New() copilotHarness {
 	return copilotHarness{BaseAdapter: harness.NewBaseAdapter(harness.Definition{
 		ID:           registry.HarnessCopilot,
 		Aliases:      []string{"github-copilot", "github_copilot", "copilot-cli", "copilot_cli", "github-copilot-cli", "github_copilot_cli"},
@@ -71,8 +71,8 @@ func (copilotHarness) PayloadCompatible(rawPayload json.RawMessage) bool {
 	return copilotPayloadValidator(rawPayload)
 }
 
-func (copilotHarness) PayloadDefaults(payload map[string]any) harness.PayloadDefaults {
-	return copilotPayloadDefaults(payload)
+func (copilotHarness) PayloadDefaults(payload map[string]any) (harness.PayloadDefaults, error) {
+	return copilotPayloadDefaults(payload), nil
 }
 
 func copilotHookConfig(binary string) map[string]any {

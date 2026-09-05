@@ -77,11 +77,7 @@ type Resumable interface {
 
 type PayloadAdapter interface {
 	PayloadCompatible(rawPayload json.RawMessage) bool
-	PayloadDefaults(payload map[string]any) PayloadDefaults
-}
-
-type PayloadDefaultsErrorAdapter interface {
-	PayloadDefaultsWithError(payload map[string]any) (PayloadDefaults, error)
+	PayloadDefaults(payload map[string]any) (PayloadDefaults, error)
 }
 
 type BaseAdapter struct {

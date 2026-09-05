@@ -9,42 +9,110 @@ const ahtBin = {{BINARY}};
 const currentSessionSource = {{SOURCE}};
 const idleDebounceMs = 150;
 const retryGraceMs = 2500;
-const commandTimeoutMs = 3000;
 const heartbeatIntervalMs = 10000;
+
+// Native consumer seam: https://github.com/can1357/oh-my-pi/blob/main/packages/coding-agent/src/extensibility/extensions/types.ts
+type ExtensionContext = {
+  readonly cwd?: string | undefined;
+  readonly hasUI?: boolean | undefined;
+  readonly isIdle?: () => boolean;
+  readonly sessionManager?: {
+    readonly getSessionFile?: () => string | undefined;
+    readonly getSessionId?: () => string | undefined;
+    readonly getCwd?: () => string | undefined;
+    readonly getBranch?: () => readonly { readonly type: string }[];
+  };
+};
+type NativeEvent = {
+  readonly type?: string | undefined;
+  readonly reason?: string | undefined;
+  readonly status?: string | undefined;
+  readonly kind?: string | undefined;
+  readonly toolName?: string | undefined;
+  readonly approvalMode?: string | undefined;
+  readonly approved?: boolean | undefined;
+  readonly interrupted?: boolean | undefined;
+  readonly willContinue?: boolean | undefined;
+  readonly error?: string | { readonly message?: string | undefined } | undefined;
+  readonly message?: string | undefined;
+  readonly messages?: readonly unknown[] | undefined;
+  readonly args?: unknown;
+};
+type ExtensionAPI = {
+  on(name: string, handler: (event: unknown, ctx: ExtensionContext) => void | Promise<void>): void;
+};
+
+// Native event payloads enter only here; fields not consumed by reporting never
+// escape this projection (in particular prompts, tool input, and transcripts).
+function parseEvent(value: unknown): NativeEvent {
+  if (typeof value !== "object" || value === null) return {};
+  const fields: Record<string, unknown> = Object.fromEntries(Object.entries(value));
+  const stringField = (key: string): string | undefined =>
+    typeof fields[key] === "string" ? fields[key] : undefined;
+  const error: unknown = fields.error;
+  return {
+    type: stringField("type"), reason: stringField("reason"),
+    status: stringField("status"), kind: stringField("kind"),
+    toolName: stringField("toolName"), approvalMode: stringField("approvalMode"),
+    approved: typeof fields.approved === "boolean" ? fields.approved : undefined,
+    interrupted: fields.interrupted === true, willContinue: fields.willContinue === true,
+    error: typeof error === "string" ? error :
+      typeof error === "object" && error !== null && "message" in error && typeof error.message === "string"
+        ? { message: error.message } : undefined,
+    message: stringField("message"),
+    messages: Array.isArray(fields.messages) ? fields.messages : undefined,
+    args: fields.args,
+  };
+}
+
+type AssistantResult = { readonly stopReason?: string | undefined; readonly errorMessage?: string | undefined };
+function lastAssistantMessage(messages: readonly unknown[] | undefined): AssistantResult | undefined {
+  if (!messages) return undefined;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (typeof message !== "object" || message === null || !("role" in message) || message.role !== "assistant") continue;
+    return {
+      stopReason: "stopReason" in message && typeof message.stopReason === "string" ? message.stopReason : undefined,
+      errorMessage: "errorMessage" in message && typeof message.errorMessage === "string" ? message.errorMessage : undefined,
+    };
+  }
+  return undefined;
+}
+
 const retryableErrorPattern =
   /overloaded|provider.?returned.?error|rate.?limit|too many requests|429|500|502|503|504|service.?unavailable|server.?error|internal.?error|network.?error|connection.?error|connection.?refused|connection.?lost|websocket.?closed|websocket.?error|other side closed|fetch failed|upstream.?connect|reset before headers|socket hang up|ended without|http2 request did not get a response|timed? out|timeout|terminated|retry delay/i;
 
 type Activity = "running" | "waiting" | "idle" | "failed" | "interrupted";
 type SessionRef = {
-  id?: string;
-  path?: string;
-  cwd?: string;
+  id?: string | undefined;
+  path?: string | undefined;
+  cwd?: string | undefined;
 };
 type PendingState = {
   activity: Activity;
-  message?: string;
-  ctx?: any;
-  event?: any;
+  message?: string | undefined;
+  ctx?: ExtensionContext | undefined;
+  event?: NativeEvent | undefined;
   sequence: number;
 };
 
 let reportSequence = Date.now() * 1000;
-let commandQueue = Promise.resolve();
+
 
 function nextSequence(): number {
   reportSequence += 1;
   return reportSequence;
 }
 
-function isSubagentSession(ctx: any): boolean {
+function isSubagentSession(ctx: ExtensionContext | undefined): boolean {
   try {
-    return ctx?.sessionManager?.getBranch?.().some((entry: any) => entry?.type === "session_init") === true;
+    return ctx?.sessionManager?.getBranch?.()?.some((entry) => entry?.type === "session_init") === true;
   } catch {
     return false;
   }
 }
 
-function sessionRef(ctx: any): SessionRef {
+function sessionRef(ctx: ExtensionContext | undefined): SessionRef {
   const sessionManager = ctx?.sessionManager;
   const ref: SessionRef = {};
   try {
@@ -76,43 +144,73 @@ function addResumeCommand(args: string[], ref: SessionRef): void {
   }
 }
 
+
+const commandTimeoutMs = 1000;
+const commandKillGraceMs = 100;
+const maxPendingReports = 64;
+const pendingCommands: string[][] = [];
+let commandDrain: Promise<void> | undefined;
+let reportingWarningShown = false;
+
+function warnReporting(): void {
+  if (reportingWarningShown) return;
+  reportingWarningShown = true;
+  console.warn("aht: reporting unavailable or overloaded; some state updates may be lost");
+}
+
 function runCommand(args: string[]): Promise<void> {
   return new Promise((resolve) => {
     try {
       const child = spawn(ahtBin, args, { stdio: "ignore" });
-      let complete = false;
-      const finish = () => {
-        if (complete) return;
-        complete = true;
-        clearTimeout(timeout);
-        resolve();
-      };
+      let killTimer: ReturnType<typeof setTimeout> | undefined;
       const timeout = setTimeout(() => {
-        child.kill();
-        finish();
+        warnReporting();
+        child.kill("SIGTERM");
+        killTimer = setTimeout(() => child.kill("SIGKILL"), commandKillGraceMs);
       }, commandTimeoutMs);
-      timeout.unref?.();
-      child.once("error", finish);
-      child.once("close", finish);
+      child.once("error", warnReporting);
+      child.once("close", (code) => {
+        clearTimeout(timeout);
+        clearTimeout(killTimer);
+        if (code !== 0) warnReporting();
+        resolve();
+      });
     } catch {
+      warnReporting();
       resolve();
     }
   });
 }
 
+// The module owns one child and a bounded FIFO. Overload drops the oldest
+// unsent observation, preserving the newest/final state and enqueue-time identity.
+// Referenced child/timers keep normal process exit from abandoning a report.
 function enqueueCommand(args: string[]): Promise<void> {
-  commandQueue = commandQueue.then(
-    () => runCommand(args),
-    () => runCommand(args),
-  );
-  return commandQueue;
+  if (pendingCommands.length >= maxPendingReports) {
+    pendingCommands.shift();
+    warnReporting();
+  }
+  pendingCommands.push(args);
+  if (!commandDrain) {
+    commandDrain = (async () => {
+      try {
+        let next: string[] | undefined;
+        while ((next = pendingCommands.shift()) !== undefined) await runCommand(next);
+      } catch {
+        warnReporting();
+      } finally {
+        commandDrain = undefined;
+      }
+    })();
+  }
+  return commandDrain;
 }
 
 function report(
   activity: Activity | undefined,
   presence: string | undefined,
-  ctx?: any,
-  event?: any,
+  ctx?: ExtensionContext,
+  event?: NativeEvent,
   lifecycle?: string,
   sequence = nextSequence(),
   message?: string,
@@ -156,18 +254,10 @@ function report(
   return enqueueCommand(args);
 }
 
-function lastAssistantMessage(messages: unknown[]): any | undefined {
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index] as any;
-    if (message?.role === "assistant") return message;
-  }
-  return undefined;
-}
-
-function retryableErrorMessage(event: any): string | undefined {
+function retryableErrorMessage(event: NativeEvent): string | undefined {
   const assistant = lastAssistantMessage(Array.isArray(event?.messages) ? event.messages : []);
   const message = String(
-    assistant?.errorMessage ?? event?.error?.message ?? event?.error ?? event?.message ?? "",
+    assistant?.errorMessage ?? (typeof event?.error === "object" ? event.error.message : event?.error) ?? event?.error ?? event?.message ?? "",
   );
   const failed =
     assistant?.stopReason === "error" ||
@@ -178,13 +268,18 @@ function retryableErrorMessage(event: any): string | undefined {
   return failed && retryableErrorPattern.test(message) ? message || "retryable provider error" : undefined;
 }
 
-function askMessage(args: any): string {
-  const questions = Array.isArray(args?.questions) ? args.questions : [];
-  const question = questions.find((value: any) => typeof value?.question === "string");
-  return question?.question ?? "waiting for user input";
+function askMessage(args: unknown): string {
+  if (typeof args !== "object" || args === null || !("questions" in args) || !Array.isArray(args.questions)) return "waiting for user input";
+  for (const value of args.questions) {
+    if (typeof value === "object" && value !== null && "question" in value && typeof value.question === "string") return value.question;
+  }
+  return "waiting for user input";
 }
 
-export default function (pi: any) {
+export default function (pi: ExtensionAPI) {
+  const on = (name: string, handler: (event: NativeEvent, ctx: ExtensionContext) => void | Promise<void>): void => {
+    pi.on(name, (event, ctx) => handler(parseEvent(event), ctx));
+  };
   let rootSession = false;
   let agentActive = false;
   let retryHoldActive = false;
@@ -194,10 +289,11 @@ export default function (pi: any) {
   let blockedMessage: string | undefined;
   let lastActivity: Activity | undefined;
   let lastMessage: string | undefined;
-  let currentContext: any;
+  let currentContext: ExtensionContext | undefined;
   let idleTimer: ReturnType<typeof setTimeout> | undefined;
   let retryTimer: ReturnType<typeof setTimeout> | undefined;
   let stateSendInFlight = false;
+  let stateDrain: Promise<void> | undefined;
   let pendingState: PendingState | undefined;
   let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
 
@@ -232,25 +328,32 @@ export default function (pi: any) {
     }
   }
 
-  function desiredState(): { activity: Activity; message?: string } {
+  function desiredState(): { activity: Activity; message?: string | undefined } {
     if (blockedCount > 0) return { activity: "waiting", message: blockedMessage };
     if (failureActive) return { activity: "failed", message: failureMessage };
     if (agentActive || retryHoldActive) return { activity: "running" };
     return { activity: "idle" };
   }
 
-  function queueState(activity: Activity, message?: string, event?: any, force = false): void {
+  function queueState(activity: Activity, message?: string, event?: NativeEvent, force = false): void {
     if (!force && activity === lastActivity && message === lastMessage) return;
     lastActivity = activity;
     lastMessage = message;
+    const ref = sessionRef(currentContext);
     pendingState = {
       activity,
       message,
-      ctx: currentContext,
+      ctx: {
+        cwd: ref.cwd,
+        sessionManager: {
+          getSessionId: () => ref.id,
+          getSessionFile: () => ref.path,
+        },
+      },
       event,
       sequence: nextSequence(),
     };
-    if (!stateSendInFlight) void drainStateQueue();
+    if (!stateSendInFlight) stateDrain = drainStateQueue().catch(warnReporting);
   }
 
   async function drainStateQueue(): Promise<void> {
@@ -264,16 +367,16 @@ export default function (pi: any) {
       }
     } finally {
       stateSendInFlight = false;
-      if (pendingState) void drainStateQueue();
+
     }
   }
 
-  function publishDesired(event?: any, force = false): void {
+  function publishDesired(event?: NativeEvent, force = false): void {
     const desired = desiredState();
     queueState(desired.activity, desired.message, event, force);
   }
 
-  function activateRoot(ctx: any): boolean {
+  function activateRoot(ctx: ExtensionContext): boolean {
     if (ctx?.hasUI !== true || isSubagentSession(ctx)) return false;
     rootSession = true;
     currentContext = ctx;
@@ -290,20 +393,20 @@ export default function (pi: any) {
     blockedMessage = undefined;
   }
 
-  function activateBlocked(message?: string, event?: any): void {
+  function activateBlocked(message?: string, event?: NativeEvent): void {
     clearTimers();
     blockedCount += 1;
     blockedMessage = message;
     publishDesired(event);
   }
 
-  function deactivateBlocked(event?: any): void {
+  function deactivateBlocked(event?: NativeEvent): void {
     blockedCount = Math.max(0, blockedCount - 1);
     if (blockedCount === 0) blockedMessage = undefined;
     publishDesired(event);
   }
 
-  function holdRetry(message: string, event?: any): void {
+  function holdRetry(message: string, event?: NativeEvent): void {
     clearTimers();
     retryHoldActive = true;
     failureActive = false;
@@ -318,7 +421,7 @@ export default function (pi: any) {
     retryTimer.unref?.();
   }
 
-  function scheduleIdle(event?: any): void {
+  function scheduleIdle(event?: NativeEvent): void {
     clearTimers();
     retryHoldActive = false;
     failureActive = false;
@@ -330,24 +433,24 @@ export default function (pi: any) {
     idleTimer.unref?.();
   }
 
-  pi.on("session_start", (event: any, ctx: any) => {
+  on("session_start", (event: NativeEvent, ctx: ExtensionContext) => {
     if (!activateRoot(ctx)) return;
     resetState();
-    void report("idle", "live", ctx, event, "start");
+    report("idle", "live", ctx, event, "start");
     lastActivity = "idle";
   });
 
   for (const eventName of ["session_switch", "session_branch", "session_tree"]) {
-    pi.on(eventName, (event: any, ctx: any) => {
+    on(eventName, (event: NativeEvent, ctx: ExtensionContext) => {
       if (!activateRoot(ctx)) return;
       resetState();
-      void report("idle", "live", ctx, event, "resume");
+      report("idle", "live", ctx, event, "resume");
       lastActivity = "idle";
     });
   }
 
   for (const eventName of ["before_agent_start", "agent_start"]) {
-    pi.on(eventName, (event: any, ctx: any) => {
+    on(eventName, (event: NativeEvent, ctx: ExtensionContext) => {
       if (!rootSession && !activateRoot(ctx)) return;
       currentContext = ctx;
       clearTimers();
@@ -360,33 +463,33 @@ export default function (pi: any) {
     });
   }
 
-  pi.on("tool_approval_requested", (event: any, ctx: any) => {
+  on("tool_approval_requested", (event: NativeEvent, ctx: ExtensionContext) => {
     if (!rootSession && !activateRoot(ctx)) return;
     currentContext = ctx;
     activateBlocked(event?.reason ?? `${event?.toolName ?? "Tool"} approval`, event);
   });
 
-  pi.on("tool_approval_resolved", (event: any, ctx: any) => {
+  on("tool_approval_resolved", (event: NativeEvent, ctx: ExtensionContext) => {
     if (!rootSession && !activateRoot(ctx)) return;
     currentContext = ctx;
     deactivateBlocked(event);
   });
 
-  pi.on("tool_execution_start", (event: any, ctx: any) => {
+  on("tool_execution_start", (event: NativeEvent, ctx: ExtensionContext) => {
     if (event?.toolName !== "ask") return;
     if (!rootSession && !activateRoot(ctx)) return;
     currentContext = ctx;
     activateBlocked(askMessage(event?.args), event);
   });
 
-  pi.on("tool_execution_end", (event: any, ctx: any) => {
+  on("tool_execution_end", (event: NativeEvent, ctx: ExtensionContext) => {
     if (event?.toolName !== "ask") return;
     if (!rootSession && !activateRoot(ctx)) return;
     currentContext = ctx;
     deactivateBlocked(event);
   });
 
-  pi.on("agent_end", (event: any, ctx: any) => {
+  on("agent_end", (event: NativeEvent, ctx: ExtensionContext) => {
     if (!rootSession || !agentActive || event?.willContinue === true) return;
     currentContext = ctx ?? currentContext;
     agentActive = false;
@@ -415,14 +518,14 @@ export default function (pi: any) {
       assistant?.stopReason === "error"
     ) {
       failureActive = true;
-      failureMessage = String(assistant?.errorMessage ?? event?.error?.message ?? event?.error ?? event?.reason ?? "agent failed");
+      failureMessage = String(assistant?.errorMessage ?? (typeof event?.error === "object" ? event.error.message : event?.error) ?? event?.error ?? event?.reason ?? "agent failed");
       publishDesired(event);
       return;
     }
     scheduleIdle(event);
   });
 
-  pi.on("agent_error", (event: any, ctx: any) => {
+  on("agent_error", (event: NativeEvent, ctx: ExtensionContext) => {
     if (!rootSession && !activateRoot(ctx)) return;
     currentContext = ctx;
     agentActive = false;
@@ -433,22 +536,23 @@ export default function (pi: any) {
       return;
     }
     failureActive = true;
-    failureMessage = String(event?.error?.message ?? event?.error ?? event?.message ?? "agent failed");
+    failureMessage = String((typeof event?.error === "object" ? event.error.message : event?.error) ?? event?.error ?? event?.message ?? "agent failed");
     publishDesired(event);
   });
 
-  pi.on("session_stop", (event: any, ctx: any) => {
+  on("session_stop", (event: NativeEvent, ctx: ExtensionContext) => {
     if (!rootSession) return;
     currentContext = ctx ?? currentContext;
     resetState();
     publishDesired(event, true);
   });
 
-  pi.on("session_shutdown", (event: any, ctx: any) => {
+  on("session_shutdown", async (event: NativeEvent, ctx: ExtensionContext) => {
     if (!rootSession) return;
     clearTimers();
     currentContext = ctx ?? currentContext;
-    void report(undefined, "gone", currentContext, event, "end");
     rootSession = false;
+    await stateDrain;
+    await report(undefined, "gone", currentContext, event, "end");
   });
 }

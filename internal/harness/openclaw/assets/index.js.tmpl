@@ -1,10 +1,81 @@
 // aht managed integration
 // This plugin intentionally ignores prompts, messages, responses, and errors.
+// Native hook/cleanup contract: https://docs.openclaw.ai/plugins/hooks
 import { spawn } from "node:child_process";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 
 const binary = {{BINARY}};
 const integrationVersion = {{INTEGRATION_VERSION}};
+const pendingReports = [];
+const maxPendingReports = 64;
+let activeReport = false;
+let reportingWarningShown = false;
+let reportingStopped = false;
+let lastReport = Promise.resolve();
+
+function warnReporting() {
+  if (reportingWarningShown) return;
+  reportingWarningShown = true;
+  console.warn("aht: reporting failed or overloaded; some state updates were dropped.");
+}
+
+// Own one referenced child at a time. Keep the newest state under overload,
+// retaining FIFO order for the accepted reports and their enqueue-time metadata.
+function enqueueReport(args) {
+  if (reportingStopped) return Promise.resolve();
+  lastReport = new Promise((complete) => {
+    if (pendingReports.length >= maxPendingReports) {
+      pendingReports.shift().complete();
+      warnReporting();
+    }
+    pendingReports.push({ args, complete });
+    drainReports();
+  });
+  return lastReport;
+}
+
+function stopReporting() {
+  reportingStopped = true;
+  // Bound shutdown to the active child and newest/final queued state.
+  while (pendingReports.length > 1) {
+    pendingReports.shift().complete();
+    warnReporting();
+  }
+  return lastReport;
+}
+
+function drainReports() {
+  if (activeReport) return;
+  const report = pendingReports.shift();
+  if (!report) return;
+  activeReport = true;
+  let child;
+  try {
+    child = spawn(binary, report.args, { stdio: "ignore" });
+  } catch {
+    warnReporting();
+    activeReport = false;
+    report.complete();
+    drainReports();
+    return;
+  }
+  let killTimer;
+  const timeout = setTimeout(() => {
+    warnReporting();
+    child.kill("SIGTERM");
+    killTimer = setTimeout(() => child.kill("SIGKILL"), 100);
+  }, 1000);
+  child.once("error", warnReporting);
+  // "close", including after a spawn error, joins the child before the next job.
+  child.once("close", (code) => {
+    clearTimeout(timeout);
+    clearTimeout(killTimer);
+    if (code !== 0) warnReporting();
+    activeReport = false;
+    report.complete();
+    drainReports();
+  });
+}
 const sessions = new Map();
 
 function text(value) {
@@ -59,10 +130,8 @@ function report(eventName, event, ctx, transition) {
   attribute(args, "openclaw_end_reason", event.reason);
   if (typeof event.success === "boolean") attribute(args, "openclaw_success", String(event.success));
 
-  const child = spawn(binary, args, { stdio: "ignore", detached: true });
-  child.on("error", () => {});
-  child.unref();
   if (transition.lifecycle === "end") sessions.delete(sessionId);
+  return enqueueReport(args);
 }
 
 export default definePluginEntry({
@@ -70,6 +139,7 @@ export default definePluginEntry({
   name: "AHT State",
   description: "Reports OpenClaw lifecycle metadata without conversation content.",
   register(api) {
+    api.on("gateway_stop", stopReporting);
     api.on("session_start", (event, ctx) => report("session_start", event, ctx, {
       lifecycle: text(event.resumedFrom) ? "resume" : "start", presence: "live", activity: "idle",
     }));
@@ -81,7 +151,7 @@ export default definePluginEntry({
       } else if (event?.reason === "interrupted" || event?.reason === "cancelled" || event?.reason === "canceled") {
         activity = "interrupted";
       }
-      report("agent_end", event, ctx, { presence: "live", activity });
+      return report("agent_end", event, ctx, { presence: "live", activity });
     });
     api.on("session_end", (event, ctx) => report("session_end", event, ctx, { lifecycle: "end", presence: "gone" }));
   },

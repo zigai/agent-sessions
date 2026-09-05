@@ -27,7 +27,7 @@ const (
 
 type agyHarness struct{ harness.BaseAdapter }
 
-func New() harness.Adapter {
+func New() agyHarness {
 	return agyHarness{BaseAdapter: harness.NewBaseAdapter(harness.Definition{
 		ID: registry.HarnessAgy,
 		Aliases: []string{
@@ -111,8 +111,8 @@ func agyPayloadValidator(rawPayload json.RawMessage) bool {
 		harness.FirstArrayString(payload, "workspacePaths", "workspace_paths") != ""
 }
 
-func (agyHarness) PayloadDefaults(payload map[string]any) harness.PayloadDefaults {
-	return agyPayloadDefaults(payload)
+func (agyHarness) PayloadDefaults(payload map[string]any) (harness.PayloadDefaults, error) {
+	return agyPayloadDefaults(payload), nil
 }
 
 func (agyHarness) HandleHook(invocation harness.HookInvocation) harness.HookResult {

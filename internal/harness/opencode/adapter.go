@@ -11,6 +11,7 @@ import (
 )
 
 const (
+	integrationVersion        = 8
 	openCodePluginName        = "aht-state.ts"
 	openCodeIntegrationID     = "opencode"
 	openCodeIntegrationSource = "opencode-plugin"
@@ -22,7 +23,7 @@ var openCodePluginTemplate string
 
 type openCodeHarness struct{ harness.BaseAdapter }
 
-func New() harness.Adapter {
+func New() openCodeHarness {
 	return openCodeHarness{BaseAdapter: harness.NewBaseAdapter(harness.Definition{
 		ID:           registry.HarnessOpenCode,
 		Aliases:      []string{"open-code", "open_code"},
@@ -43,7 +44,7 @@ func New() harness.Adapter {
 			ProcessIdentity:   false,
 			TTYTmuxContext:    false,
 		},
-		IntegrationVersion: harness.IntegrationVersion,
+		IntegrationVersion: integrationVersion,
 	})}
 }
 
@@ -58,7 +59,7 @@ func (openCodeHarness) InstallPlan(binary string) harness.InstallPlan {
 				openCodeIntegrationID,
 				binary,
 				openCodeIntegrationSource,
-				harness.IntegrationVersion,
+				integrationVersion,
 			),
 			JSONContent: nil,
 		}},

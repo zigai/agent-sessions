@@ -27,7 +27,7 @@ type gooseHookSpec struct {
 	matcher    string
 }
 
-func New() harness.Adapter {
+func New() gooseHarness {
 	return gooseHarness{BaseAdapter: harness.NewBaseAdapter(harness.Definition{
 		ID:           registry.HarnessGoose,
 		Aliases:      nil,
@@ -102,8 +102,8 @@ func (gooseHarness) PayloadCompatible(rawPayload json.RawMessage) bool {
 	return harness.PayloadValidator[goosePayload]()(rawPayload)
 }
 
-func (gooseHarness) PayloadDefaults(payload map[string]any) harness.PayloadDefaults {
-	return goosePayloadDefaults(payload)
+func (gooseHarness) PayloadDefaults(payload map[string]any) (harness.PayloadDefaults, error) {
+	return goosePayloadDefaults(payload), nil
 }
 
 func gooseHookConfig() map[string]any {
@@ -165,7 +165,7 @@ func gooseHookCommand(spec gooseHookSpec) string {
 	return strings.Join([]string{
 		"sh",
 		"\"${PLUGIN_ROOT}/scripts/report.sh\"",
-		harness.ShellQuote(harness.StringTransition(spec.transition)),
+		harness.ShellQuote(spec.transition.State()),
 		harness.ShellQuote(spec.event),
 	}, " ")
 }

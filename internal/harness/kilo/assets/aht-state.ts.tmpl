@@ -8,6 +8,68 @@ import { spawn } from "node:child_process";
 const ahtBin = {{BINARY}};
 const source = {{SOURCE}};
 
+const commandTimeoutMs = 1000;
+const commandKillGraceMs = 100;
+const maxPendingReports = 64;
+const pendingCommands: string[][] = [];
+let commandDrain: Promise<void> | undefined;
+let reportingWarningShown = false;
+
+function warnReporting(): void {
+  if (reportingWarningShown) return;
+  reportingWarningShown = true;
+  console.warn("aht: reporting unavailable or overloaded; some state updates may be lost");
+}
+
+function runCommand(args: string[]): Promise<void> {
+  return new Promise((resolve) => {
+    try {
+      const child = spawn(ahtBin, args, { stdio: "ignore" });
+      let killTimer: ReturnType<typeof setTimeout> | undefined;
+      const timeout = setTimeout(() => {
+        warnReporting();
+        child.kill("SIGTERM");
+        killTimer = setTimeout(() => child.kill("SIGKILL"), commandKillGraceMs);
+      }, commandTimeoutMs);
+      child.once("error", warnReporting);
+      child.once("close", (code) => {
+        clearTimeout(timeout);
+        clearTimeout(killTimer);
+        if (code !== 0) warnReporting();
+        resolve();
+      });
+    } catch {
+      warnReporting();
+      resolve();
+    }
+  });
+}
+
+// The module owns one child and a bounded FIFO. Overload drops the oldest
+// unsent observation, preserving the newest/final state and enqueue-time identity.
+// Referenced child/timers keep normal process exit from abandoning a report.
+function enqueueCommand(args: string[]): Promise<void> {
+  if (pendingCommands.length >= maxPendingReports) {
+    pendingCommands.shift();
+    warnReporting();
+  }
+  pendingCommands.push(args);
+  if (!commandDrain) {
+    commandDrain = (async () => {
+      try {
+        let next: string[] | undefined;
+        while ((next = pendingCommands.shift()) !== undefined) await runCommand(next);
+      } catch {
+        warnReporting();
+      } finally {
+        commandDrain = undefined;
+      }
+    })();
+  }
+  return commandDrain;
+}
+
+
 
 function firstString(...values: unknown[]): string | undefined {
   for (const value of values) {
@@ -18,24 +80,24 @@ function firstString(...values: unknown[]): string | undefined {
   return undefined;
 }
 
-function valueAt(value: any, path: string[]): unknown {
-  let current = value;
+function valueAt(value: unknown, path: string[]): unknown {
+  let current: unknown = value;
   for (const part of path) {
     if (current === undefined || current === null || typeof current !== "object") {
       return undefined;
     }
-    current = current[part];
+    current = Object.entries(current).find(([key]) => key === part)?.[1];
   }
   return current;
 }
 
-function firstPathString(value: any, paths: string[][]): string | undefined {
+function firstPathString(value: unknown, paths: string[][]): string | undefined {
   return firstString(...paths.map((path) => valueAt(value, path)));
 }
 
 function normalizeStatus(value: unknown): string | undefined {
   if (value !== null && typeof value === "object") {
-    value = (value as { type?: unknown }).type;
+    value = "type" in value ? value.type : undefined;
   }
   if (typeof value !== "string") {
     return undefined;
@@ -59,8 +121,8 @@ function normalizeStatus(value: unknown): string | undefined {
   return undefined;
 }
 
-function stateForEvent(event: any): string | undefined {
-  switch (event?.type) {
+function stateForEvent(event: unknown): string | undefined {
+  switch (valueAt(event, ["type"])) {
     case "session.created":
       return "idle";
     case "session.deleted":
@@ -90,13 +152,21 @@ function stateForEvent(event: any): string | undefined {
   }
 }
 
-async function AHTPlugin(ctx: any): Promise<any> {
+// Consumer-only native plugin contract; event bus payloads are parsed as unknown.
+// https://opencode.ai/docs/plugins/ and https://kilo.ai/docs/automate/extending/plugins
+type PluginContext = {
+  readonly directory?: string | undefined;
+  readonly worktree?: string | undefined;
+  readonly project?: { readonly path?: string | undefined; readonly root?: string };
+};
+type PluginHooks = { event(input: { readonly event: unknown }): Promise<void> };
+async function AHTPlugin(ctx: PluginContext): Promise<PluginHooks> {
   let currentSessionId: string | undefined;
   let currentSessionPath: string | undefined;
   let currentCwd: string | undefined;
   let currentProjectRoot: string | undefined;
 
-  function refreshSessionRef(event: any): void {
+  function refreshSessionRef(event: unknown): void {
     currentSessionId = firstPathString(event, [
       ["sessionID"],
       ["sessionId"],
@@ -124,17 +194,17 @@ async function AHTPlugin(ctx: any): Promise<any> {
     currentCwd = firstString(
       ctx?.directory,
       ctx?.worktree,
-      event?.cwd,
-      event?.session?.cwd,
-      event?.properties?.cwd,
-      event?.properties?.info?.directory,
+      valueAt(event, ["cwd"]),
+      valueAt(event, ["session", "cwd"]),
+      valueAt(event, ["properties", "cwd"]),
+      valueAt(event, ["properties", "info", "directory"]),
     ) ?? currentCwd;
 
     currentProjectRoot = firstString(
       ctx?.worktree,
       ctx?.project?.path,
       ctx?.project?.root,
-      event?.properties?.info?.directory,
+      valueAt(event, ["properties", "info", "directory"]),
     ) ?? currentProjectRoot;
   }
 
@@ -150,12 +220,12 @@ function addEvent(args: string[], value: unknown): void {
   }
 }
 
-  function report(state: string, event: any): void {
+  function report(state: string, event: unknown): Promise<void> {
     const observedAt = new Date().toISOString();
     refreshSessionRef(event);
 
     const args = ["report", "kilo", state === "gone" ? "--presence" : "--activity", state, "--observed-at", observedAt, "--quiet"];
-    addEvent(args, event?.type);
+    addEvent(args, valueAt(event, ["type"]));
     args.push("--attribute", `aht_integration_version={{INTEGRATION_VERSION}}`);
     if (currentSessionId) {
       args.push("--session-id", currentSessionId);
@@ -180,26 +250,17 @@ function addEvent(args: string[], value: unknown): void {
     ]));
     addAttribute(args, "aht_integration", source);
 
-    try {
-      const child = spawn(ahtBin, args, {
-        detached: true,
-        stdio: "ignore",
-      });
-      child.on("error", () => {});
-      child.unref();
-    } catch {
-      // Session reporting must never break Kilo startup or turns.
-    }
+    return enqueueCommand(args);
   }
 
   return {
-    event: async ({ event }: any) => {
+    event: async ({ event }) => {
       const state = stateForEvent(event);
       if (state === undefined) {
         return;
       }
 
-      report(state, event);
+      await report(state, event);
     },
   };
 }

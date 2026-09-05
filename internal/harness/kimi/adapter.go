@@ -32,7 +32,7 @@ type hookPayload struct {
 	HookEventName string `json:"hook_event_name" validate:"required,notblank"`
 }
 
-func New() harness.Adapter {
+func New() kimiCodeHarness {
 	return kimiCodeHarness{BaseAdapter: harness.NewBaseAdapter(harness.Definition{
 		ID:           registry.HarnessKimiCode,
 		Aliases:      []string{"kimi", "kimi_code", "kimicode"},
@@ -80,13 +80,7 @@ func (kimiCodeHarness) PayloadCompatible(rawPayload json.RawMessage) bool {
 	return harness.PayloadValidator[hookPayload]()(rawPayload)
 }
 
-func (kimiCodeHarness) PayloadDefaults(payload map[string]any) harness.PayloadDefaults {
-	defaults, _ := kimiCodePayloadDefaults(payload)
-
-	return defaults
-}
-
-func (kimiCodeHarness) PayloadDefaultsWithError(payload map[string]any) (harness.PayloadDefaults, error) {
+func (kimiCodeHarness) PayloadDefaults(payload map[string]any) (harness.PayloadDefaults, error) {
 	return kimiCodePayloadDefaults(payload)
 }
 

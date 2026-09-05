@@ -8,14 +8,145 @@ import { spawn } from "node:child_process";
 const ahtBin = {{BINARY}};
 const currentSessionSource = {{SOURCE}};
 const heartbeatIntervalMs = 10000;
+
+const commandTimeoutMs = 1000;
+const commandKillGraceMs = 100;
+const maxPendingReports = 64;
+const pendingCommands: string[][] = [];
+let commandDrain: Promise<void> | undefined;
+let reportingWarningShown = false;
+
+function warnReporting(): void {
+  if (reportingWarningShown) return;
+  reportingWarningShown = true;
+  console.warn("aht: reporting unavailable or overloaded; some state updates may be lost");
+}
+
+function runCommand(args: string[]): Promise<void> {
+  return new Promise((resolve) => {
+    try {
+      const child = spawn(ahtBin, args, { stdio: "ignore" });
+      let killTimer: ReturnType<typeof setTimeout> | undefined;
+      const timeout = setTimeout(() => {
+        warnReporting();
+        child.kill("SIGTERM");
+        killTimer = setTimeout(() => child.kill("SIGKILL"), commandKillGraceMs);
+      }, commandTimeoutMs);
+      child.once("error", warnReporting);
+      child.once("close", (code) => {
+        clearTimeout(timeout);
+        clearTimeout(killTimer);
+        if (code !== 0) warnReporting();
+        resolve();
+      });
+    } catch {
+      warnReporting();
+      resolve();
+    }
+  });
+}
+
+// The module owns one child and a bounded FIFO. Overload drops the oldest
+// unsent observation, preserving the newest/final state and enqueue-time identity.
+// Referenced child/timers keep normal process exit from abandoning a report.
+function enqueueCommand(args: string[]): Promise<void> {
+  if (pendingCommands.length >= maxPendingReports) {
+    pendingCommands.shift();
+    warnReporting();
+  }
+  pendingCommands.push(args);
+  if (!commandDrain) {
+    commandDrain = (async () => {
+      try {
+        let next: string[] | undefined;
+        while ((next = pendingCommands.shift()) !== undefined) await runCommand(next);
+      } catch {
+        warnReporting();
+      } finally {
+        commandDrain = undefined;
+      }
+    })();
+  }
+  return commandDrain;
+}
+
+
+// Native consumer seam: https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/docs/extensions.md
+type ExtensionContext = {
+  readonly cwd?: string | undefined;
+  readonly hasUI?: boolean | undefined;
+  readonly isIdle?: () => boolean;
+  readonly sessionManager?: {
+    readonly getSessionFile?: () => string | undefined;
+    readonly getSessionId?: () => string | undefined;
+    readonly getCwd?: () => string | undefined;
+    readonly getBranch?: () => readonly { readonly type: string }[];
+  };
+};
+type NativeEvent = {
+  readonly type?: string | undefined;
+  readonly reason?: string | undefined;
+  readonly status?: string | undefined;
+  readonly kind?: string | undefined;
+  readonly toolName?: string | undefined;
+  readonly approvalMode?: string | undefined;
+  readonly approved?: boolean | undefined;
+  readonly interrupted?: boolean | undefined;
+  readonly willContinue?: boolean | undefined;
+  readonly error?: string | { readonly message?: string | undefined } | undefined;
+  readonly message?: string | undefined;
+  readonly messages?: readonly unknown[] | undefined;
+  readonly args?: unknown;
+};
+type ExtensionAPI = {
+  on(name: string, handler: (event: unknown, ctx: ExtensionContext) => void | Promise<void>): void;
+};
+
+// Native event payloads enter only here; fields not consumed by reporting never
+// escape this projection (in particular prompts, tool input, and transcripts).
+function parseEvent(value: unknown): NativeEvent {
+  if (typeof value !== "object" || value === null) return {};
+  const fields: Record<string, unknown> = Object.fromEntries(Object.entries(value));
+  const stringField = (key: string): string | undefined =>
+    typeof fields[key] === "string" ? fields[key] : undefined;
+  const error: unknown = fields.error;
+  return {
+    type: stringField("type"), reason: stringField("reason"),
+    status: stringField("status"), kind: stringField("kind"),
+    toolName: stringField("toolName"), approvalMode: stringField("approvalMode"),
+    approved: typeof fields.approved === "boolean" ? fields.approved : undefined,
+    interrupted: fields.interrupted === true, willContinue: fields.willContinue === true,
+    error: typeof error === "string" ? error :
+      typeof error === "object" && error !== null && "message" in error && typeof error.message === "string"
+        ? { message: error.message } : undefined,
+    message: stringField("message"),
+    messages: Array.isArray(fields.messages) ? fields.messages : undefined,
+    args: fields.args,
+  };
+}
+
+type AssistantResult = { readonly stopReason?: string | undefined; readonly errorMessage?: string | undefined };
+function lastAssistantMessage(messages: readonly unknown[] | undefined): AssistantResult | undefined {
+  if (!messages) return undefined;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (typeof message !== "object" || message === null || !("role" in message) || message.role !== "assistant") continue;
+    return {
+      stopReason: "stopReason" in message && typeof message.stopReason === "string" ? message.stopReason : undefined,
+      errorMessage: "errorMessage" in message && typeof message.errorMessage === "string" ? message.errorMessage : undefined,
+    };
+  }
+  return undefined;
+}
+
 let currentSessionId: string | undefined;
 let currentSessionPath: string | undefined;
 let currentCwd: string | undefined;
 
 let lastTurnActivity: string | undefined;
-let heartbeatTimer: any;
+let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
 
-function startHeartbeat(ctx?: any): void {
+function startHeartbeat(ctx?: ExtensionContext): void {
   stopHeartbeat();
   heartbeatTimer = setInterval(() => {
     report("running", ctx);
@@ -30,7 +161,7 @@ function stopHeartbeat(): void {
   }
 }
 
-function updateSessionRef(ctx: any): void {
+function updateSessionRef(ctx: ExtensionContext): void {
   try {
     const file = ctx?.sessionManager?.getSessionFile?.();
     currentSessionPath = typeof file === "string" && file.length > 0 ? file : undefined;
@@ -59,16 +190,7 @@ function addEvent(args: string[], value: unknown): void {
     args.push("--event", value);
   }
 }
-function lastAssistantMessage(messages: unknown[]): any | undefined {
-  if (!Array.isArray(messages)) return undefined;
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index] as any;
-    if (message?.role === "assistant") return message;
-  }
-  return undefined;
-}
-
-function resolveActivity(event: any, willContinue = false): string {
+function resolveActivity(event: NativeEvent, willContinue = false): string {
   const assistant = lastAssistantMessage(event?.messages);
   if (
     event?.error ||
@@ -91,7 +213,7 @@ function resolveActivity(event: any, willContinue = false): string {
   return willContinue ? "running" : "idle";
 }
 
-function report(transition: string, ctx?: any, event?: any): void {
+function report(transition: string, ctx?: ExtensionContext, event?: NativeEvent): void {
   const observedAt = new Date().toISOString();
   if (ctx) {
     updateSessionRef(ctx);
@@ -115,50 +237,44 @@ function report(transition: string, ctx?: any, event?: any): void {
   addAttribute(args, "pi_reason", event?.reason);
   addAttribute(args, "pi_prompt_kind", event?.kind);
 
-  try {
-    const child = spawn(ahtBin, args, {
-      detached: true,
-      stdio: "ignore",
-    });
-    child.on("error", () => {});
-    child.unref();
-  } catch {
-    // Session reporting must never break Pi startup or turns.
-  }
+  enqueueCommand(args);
 }
-export default function (pi: any) {
-  pi.on("session_start", (event: any, ctx: any) => {
+export default function (pi: ExtensionAPI) {
+  const on = (name: string, handler: (event: NativeEvent, ctx: ExtensionContext) => void | Promise<void>): void => {
+    pi.on(name, (event, ctx) => handler(parseEvent(event), ctx));
+  };
+  on("session_start", (event: NativeEvent, ctx: ExtensionContext) => {
     stopHeartbeat();
     lastTurnActivity = undefined;
     report("idle", ctx, event);
   });
 
-  pi.on("before_agent_start", (event: any, ctx: any) => {
+  on("before_agent_start", (event: NativeEvent, ctx: ExtensionContext) => {
     lastTurnActivity = undefined;
     report("running", ctx, event);
     startHeartbeat(ctx);
   });
 
-  pi.on("agent_start", (event: any, ctx: any) => {
+  on("agent_start", (event: NativeEvent, ctx: ExtensionContext) => {
     lastTurnActivity = undefined;
     report("running", ctx, event);
     startHeartbeat(ctx);
   });
 
-  pi.on("ui_prompt_start", (event: any, ctx: any) => {
+  on("ui_prompt_start", (event: NativeEvent, ctx: ExtensionContext) => {
     stopHeartbeat();
     report("waiting", ctx, event);
   });
-  pi.on("ui_prompt_end", (event: any, ctx: any) => {
-    if (ctx.isIdle()) {
+  on("ui_prompt_end", (event: NativeEvent, ctx: ExtensionContext) => {
+    if (ctx.isIdle?.()) {
       stopHeartbeat();
     } else {
       startHeartbeat(ctx);
     }
-    report(ctx.isIdle() ? "idle" : "running", ctx, event);
+    report(ctx.isIdle?.() ? "idle" : "running", ctx, event);
   });
 
-  pi.on("agent_settled", (event: any, ctx: any) => {
+  on("agent_settled", (event: NativeEvent, ctx: ExtensionContext) => {
     stopHeartbeat();
     if (lastTurnActivity === "interrupted" || lastTurnActivity === "failed") {
       report(lastTurnActivity, ctx, event);
@@ -167,7 +283,7 @@ export default function (pi: any) {
     report(resolveActivity(event, false), ctx, event);
   });
 
-  pi.on("agent_end", (event: any, ctx: any) => {
+  on("agent_end", (event: NativeEvent, ctx: ExtensionContext) => {
     const activity = resolveActivity(event, event?.willContinue === true);
     lastTurnActivity = activity;
     if (activity !== "running") {
@@ -176,8 +292,9 @@ export default function (pi: any) {
     report(activity, ctx, event);
   });
 
-  pi.on("session_shutdown", (event: any, ctx: any) => {
+  on("session_shutdown", async (event: NativeEvent, ctx: ExtensionContext) => {
     stopHeartbeat();
     report("gone", ctx, event);
+    await commandDrain;
   });
 }

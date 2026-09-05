@@ -25,7 +25,7 @@ type hookPayload struct {
 	CursorVersion  string   `json:"cursor_version"  validate:"required,notblank"`
 }
 
-func New() harness.Adapter {
+func New() cursorHarness {
 	return cursorHarness{BaseAdapter: harness.NewBaseAdapter(harness.Definition{
 		ID:           registry.HarnessCursor,
 		Aliases:      []string{"cursor-agent", "cursor_agent", "cursor-cli", "cursor_cli"},
@@ -89,8 +89,8 @@ func (cursorHarness) PayloadCompatible(rawPayload json.RawMessage) bool {
 	return harness.PayloadValidator[hookPayload]()(rawPayload)
 }
 
-func (cursorHarness) PayloadDefaults(payload map[string]any) harness.PayloadDefaults {
-	return cursorPayloadDefaults(payload)
+func (cursorHarness) PayloadDefaults(payload map[string]any) (harness.PayloadDefaults, error) {
+	return cursorPayloadDefaults(payload), nil
 }
 
 func cursorHookCommand[T harness.Transition](binary string, transition T, event string, hookOutput string) string {

@@ -25,6 +25,14 @@ const (
 	ArtifactForeign ArtifactStatus = "foreign"
 )
 
+func (s ArtifactStatus) IsValid() bool {
+	switch s {
+	case ArtifactMissing, ArtifactCurrent, ArtifactStale, ArtifactForeign:
+		return true
+	}
+	return false
+}
+
 const (
 	managedIntegrationVersion = harnesspkg.IntegrationVersion
 	integrationCaptureGroups  = 2
