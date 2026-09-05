@@ -15,8 +15,9 @@ import (
 
 const linuxUnitName = "aht-observer.service"
 
+var _ backend = (*linuxBackend)(nil)
+
 type linuxBackend struct {
-	options  Options
 	path     string
 	rendered string
 }
@@ -56,7 +57,7 @@ func platformBackend(options Options) (backend, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &linuxBackend{options: normalized, path: path, rendered: rendered}, nil
+	return &linuxBackend{path: path, rendered: rendered}, nil
 }
 
 func systemdUnitPath() (string, error) {
@@ -133,5 +134,3 @@ func systemdArg(value string) string {
 	}
 	return strconv.Quote(value)
 }
-
-var _ backend = (*linuxBackend)(nil)

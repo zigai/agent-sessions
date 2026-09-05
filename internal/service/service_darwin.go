@@ -19,7 +19,6 @@ const (
 )
 
 type darwinBackend struct {
-	options  Options
 	path     string
 	rendered string
 	domain   string
@@ -38,7 +37,7 @@ func platformBackend(options Options) (backend, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &darwinBackend{options: normalized, path: path, rendered: rendered, domain: fmt.Sprintf("gui/%d", os.Getuid())}, nil
+	return &darwinBackend{path: path, rendered: rendered, domain: fmt.Sprintf("gui/%d", os.Getuid())}, nil
 }
 
 // RenderLaunchAgent returns the exact managed LaunchAgent plist for options.

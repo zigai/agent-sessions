@@ -2,7 +2,6 @@ package harness
 
 import (
 	"fmt"
-	"slices"
 
 	"github.com/zigai/aht/internal/harness/catalog"
 	"github.com/zigai/aht/pkg/registry"
@@ -35,5 +34,5 @@ func FromCommand(command string) (registry.Harness, bool) {
 
 // ProcessNames returns executable names associated with harness.
 func ProcessNames(harness registry.Harness) []string {
-	return slices.Clone(catalog.ProcessNames(harness))
+	return catalog.ProcessNames(harness)
 }

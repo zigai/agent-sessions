@@ -14,26 +14,12 @@ import (
 	"github.com/zigai/aht/pkg/registry"
 )
 
-// ArtifactStatus describes whether a managed integration artifact is absent,
-// up to date, an older managed generation, or owned by somebody else.
-type ArtifactStatus string
-
 const (
 	ArtifactMissing ArtifactStatus = "missing"
 	ArtifactCurrent ArtifactStatus = "current"
 	ArtifactStale   ArtifactStatus = "stale"
 	ArtifactForeign ArtifactStatus = "foreign"
-)
 
-func (s ArtifactStatus) IsValid() bool {
-	switch s {
-	case ArtifactMissing, ArtifactCurrent, ArtifactStale, ArtifactForeign:
-		return true
-	}
-	return false
-}
-
-const (
 	managedIntegrationVersion = harnesspkg.IntegrationVersion
 	integrationCaptureGroups  = 2
 )
@@ -43,6 +29,18 @@ var (
 	integrationSourcePattern  = regexp.MustCompile(`(?i)aht[_-]?integration\s*[=:]`)
 	integrationIDPattern      = regexp.MustCompile(`(?i)AHT_INTEGRATION_ID\s*=\s*["']?([a-z0-9_-]+)`)
 )
+
+// ArtifactStatus describes whether a managed integration artifact is absent,
+// up to date, an older managed generation, or owned by somebody else.
+type ArtifactStatus string
+
+func (s ArtifactStatus) IsValid() bool {
+	switch s {
+	case ArtifactMissing, ArtifactCurrent, ArtifactStale, ArtifactForeign:
+		return true
+	}
+	return false
+}
 
 // ClassifyArtifact inspects a generated artifact without modifying it. It is
 // intentionally format-agnostic: managed ownership is established by the

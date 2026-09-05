@@ -134,22 +134,17 @@ func lookPathExcludingShimDir(file string, shimDir string) (string, error) {
 		if strings.TrimSpace(dir) == "" || samePath(dir, shimDir) {
 			continue
 		}
-		for _, candidate := range executableCandidates(filepath.Join(dir, file)) {
-			if isExecutable(candidate) {
-				return candidate, nil
-			}
+		candidate := filepath.Join(dir, file)
+		if isExecutable(candidate) {
+			return candidate, nil
 		}
 	}
 
 	return "", os.ErrNotExist
 }
 
-func executableCandidates(path string) []string {
-	return []string{path}
-}
-
 func isExecutable(path string) bool {
-	info, err := os.Stat(path)
+	info, err := os.Stat(filepath.Clean(path))
 	if err != nil || info.IsDir() {
 		return false
 	}

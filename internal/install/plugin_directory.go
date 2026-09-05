@@ -16,6 +16,15 @@ var (
 	errStalePluginFile         = errors.New("stale plugin file")
 )
 
+type pluginDirectoryInstall struct {
+	dir          string
+	markerFile   string
+	files        map[string]string
+	snippetOrder []string
+	renameFile   func(string, string) error
+	removeTree   func(string) error
+}
+
 func renderInstallFiles(specs []harnesspkg.RenderedFileInstallSpec, kind string) (map[string]string, error) {
 	files := make(map[string]string, len(specs))
 	for _, spec := range specs {
@@ -51,15 +60,6 @@ func validateInstallRelativePath(name string) error {
 	}
 
 	return nil
-}
-
-type pluginDirectoryInstall struct {
-	dir          string
-	markerFile   string
-	files        map[string]string
-	snippetOrder []string
-	renameFile   func(string, string) error
-	removeTree   func(string) error
 }
 
 func newPluginDirectoryInstall(

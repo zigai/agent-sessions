@@ -31,6 +31,7 @@ var (
 	errInvalidRegion           = errors.New("invalid manifest region")
 	errManifestTooLarge        = errors.New("detection manifest exceeds 1 MiB")
 	errBundledManifestNotFound = errors.New("bundled detection manifest not found")
+	manifestCache              sync.Map
 )
 
 type Manifest struct {
@@ -69,8 +70,6 @@ type manifestCacheEntry struct {
 	manifest    Manifest
 	err         error
 }
-
-var manifestCache sync.Map
 
 func DefaultConfigDir() string {
 	configDir, err := os.UserConfigDir()

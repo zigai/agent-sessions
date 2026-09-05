@@ -226,12 +226,12 @@ func TestInstallClaudeWritesHooks(t *testing.T) {
 	}
 	requireClaudeHookEvents(t, config)
 
-	requireTextContains(t, string(data), []string{
+	requireTextContainsAll(t, string(data), []string{
 		"--raw-stdin",
 		"--quiet",
 		"aht_integration=claude-hook",
 		managedMarker,
-	})
+	}, "installed hook")
 }
 
 func requireClaudeHookEvents(t *testing.T, config map[string]any) {
@@ -259,15 +259,6 @@ func requireClaudeHookEvents(t *testing.T, config map[string]any) {
 	} {
 		if _, ok := hooks[event]; !ok {
 			t.Fatalf("expected %s hook", event)
-		}
-	}
-}
-
-func requireTextContains(t *testing.T, text string, required []string) {
-	t.Helper()
-	for _, item := range required {
-		if !strings.Contains(text, item) {
-			t.Fatalf("expected installed hook to contain %q: %s", item, text)
 		}
 	}
 }

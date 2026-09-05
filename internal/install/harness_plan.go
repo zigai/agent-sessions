@@ -17,6 +17,17 @@ import (
 	"github.com/zigai/aht/pkg/registry"
 )
 
+type importManifest struct {
+	Imports []importEntry `json:"imports"`
+}
+
+type importEntry struct {
+	Name       string   `json:"name"`
+	Source     string   `json:"source"`
+	ImportedAt string   `json:"imported_at"`
+	Components []string `json:"components"`
+}
+
 func installHarnessAdapter(ctx context.Context, options Options) (Result, error) {
 	adapter, ok := harnesscatalog.Find(options.Harness)
 	if !ok {
@@ -645,17 +656,6 @@ func plannedImportManifest(
 	}
 
 	return importManifestWithPlan(*plan, now)
-}
-
-type importManifest struct {
-	Imports []importEntry `json:"imports"`
-}
-
-type importEntry struct {
-	Name       string   `json:"name"`
-	Source     string   `json:"source"`
-	ImportedAt string   `json:"imported_at"`
-	Components []string `json:"components"`
 }
 
 func importManifestWithPlan(plan harnesspkg.ImportManifestInstallPlan, now time.Time) (importManifest, bool, error) {

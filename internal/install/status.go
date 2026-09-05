@@ -22,6 +22,11 @@ type IntegrationStatus struct {
 	NextStep string           `json:"next_step,omitempty"`
 }
 
+type inspectedArtifact struct {
+	path   string
+	status ArtifactStatus
+}
+
 // Inspect reports whether a harness integration or its shim fallback is current.
 func Inspect(harnessID registry.Harness, binary string) (IntegrationStatus, error) {
 	return InspectContext(context.Background(), harnessID, binary)
@@ -146,11 +151,6 @@ func mergeInspectedArtifact(result *IntegrationStatus, item inspectedArtifact) {
 		}
 	case ArtifactCurrent:
 	}
-}
-
-type inspectedArtifact struct {
-	path   string
-	status ArtifactStatus
 }
 
 func inspectAction(ctx context.Context, action harnesspkg.InstallAction) ([]inspectedArtifact, error) {

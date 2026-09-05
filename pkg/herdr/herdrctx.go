@@ -40,6 +40,76 @@ type CaptureOptions struct {
 	Run CommandRunner
 }
 
+type herdrNamedItem struct {
+	ID    string `json:"id"`
+	WsID  string `json:"workspace_id"`
+	TabID string `json:"tab_id"`
+	Name  string `json:"name"`
+	Label string `json:"label"`
+	Title string `json:"title"`
+}
+
+type herdrPaneItem struct {
+	PaneID        string `json:"pane_id"`
+	ID            string `json:"id"`
+	WorkspaceID   string `json:"workspace_id"`
+	TabID         string `json:"tab_id"`
+	ForegroundCWD string `json:"foreground_cwd"`
+	CWD           string `json:"cwd"`
+	Title         string `json:"terminal_title_stripped"`
+	PaneTitle     string `json:"title"`
+	Label         string `json:"label"`
+	AgentStatus   string `json:"agent_status"`
+	Status        string `json:"status"`
+	AgentName     string `json:"agent_name"`
+	Agent         string `json:"agent"`
+	Exited        bool   `json:"exited"`
+	Closed        bool   `json:"closed"`
+}
+
+type herdrAgentItem struct {
+	PaneID      string `json:"pane_id"`
+	Agent       string `json:"agent"`
+	Name        string `json:"name"`
+	Label       string `json:"label"`
+	AgentStatus string `json:"agent_status"`
+	Status      string `json:"status"`
+	State       string `json:"state"`
+}
+
+type herdrSnapshotData struct {
+	Workspaces []herdrNamedItem `json:"workspaces"`
+	Tabs       []herdrNamedItem `json:"tabs"`
+	Panes      []herdrPaneItem  `json:"panes"`
+	Agents     []herdrAgentItem `json:"agents"`
+}
+
+type herdrProcessItem struct {
+	PID     int      `json:"pid"`
+	Cmdline string   `json:"cmdline"`
+	Command string   `json:"command"`
+	Name    string   `json:"name"`
+	Argv    []string `json:"argv"`
+	Args    []string `json:"args"`
+	CWD     string   `json:"cwd"`
+}
+
+type herdrProcessInfoData struct {
+	ShellPID            int                `json:"shell_pid"`
+	ProcessGroupID      int                `json:"foreground_process_group_id"`
+	ForegroundPgid      int                `json:"foreground_pgid"`
+	ForegroundProcesses []herdrProcessItem `json:"foreground_processes"`
+}
+
+type herdrSessionItem struct {
+	Name        string `json:"name"`
+	SessionName string `json:"session_name"`
+	ID          string `json:"id"`
+	Running     *bool  `json:"running"`
+	Exited      bool   `json:"exited"`
+	Dead        bool   `json:"dead"`
+}
+
 func Current() registry.MultiplexerContext {
 	return CurrentWithEnv(Env{
 		Enabled: os.Getenv("HERDR_ENV"), SessionName: os.Getenv("HERDR_SESSION"), SocketPath: os.Getenv("HERDR_SOCKET_PATH"),
@@ -153,82 +223,12 @@ func CapturePaneWithOptions(ctx context.Context, pane mux.Pane, options CaptureO
 	return mux.ScreenSnapshot{Text: parseReadOutput(output), Title: pane.Title}, nil
 }
 
-type herdrNamedItem struct {
-	ID    string `json:"id"`
-	WsID  string `json:"workspace_id"`
-	TabID string `json:"tab_id"`
-	Name  string `json:"name"`
-	Label string `json:"label"`
-	Title string `json:"title"`
-}
-
 func (n herdrNamedItem) Key() string {
 	return cmp.Or(n.WsID, n.TabID, n.ID)
 }
 
 func (n herdrNamedItem) DisplayName() string {
 	return cmp.Or(n.Label, n.Name, n.Title)
-}
-
-type herdrPaneItem struct {
-	PaneID        string `json:"pane_id"`
-	ID            string `json:"id"`
-	WorkspaceID   string `json:"workspace_id"`
-	TabID         string `json:"tab_id"`
-	ForegroundCWD string `json:"foreground_cwd"`
-	CWD           string `json:"cwd"`
-	Title         string `json:"terminal_title_stripped"`
-	PaneTitle     string `json:"title"`
-	Label         string `json:"label"`
-	AgentStatus   string `json:"agent_status"`
-	Status        string `json:"status"`
-	AgentName     string `json:"agent_name"`
-	Agent         string `json:"agent"`
-	Exited        bool   `json:"exited"`
-	Closed        bool   `json:"closed"`
-}
-
-type herdrAgentItem struct {
-	PaneID      string `json:"pane_id"`
-	Agent       string `json:"agent"`
-	Name        string `json:"name"`
-	Label       string `json:"label"`
-	AgentStatus string `json:"agent_status"`
-	Status      string `json:"status"`
-	State       string `json:"state"`
-}
-
-type herdrSnapshotData struct {
-	Workspaces []herdrNamedItem `json:"workspaces"`
-	Tabs       []herdrNamedItem `json:"tabs"`
-	Panes      []herdrPaneItem  `json:"panes"`
-	Agents     []herdrAgentItem `json:"agents"`
-}
-
-type herdrProcessItem struct {
-	PID     int      `json:"pid"`
-	Cmdline string   `json:"cmdline"`
-	Command string   `json:"command"`
-	Name    string   `json:"name"`
-	Argv    []string `json:"argv"`
-	Args    []string `json:"args"`
-	CWD     string   `json:"cwd"`
-}
-
-type herdrProcessInfoData struct {
-	ShellPID            int                `json:"shell_pid"`
-	ProcessGroupID      int                `json:"foreground_process_group_id"`
-	ForegroundPgid      int                `json:"foreground_pgid"`
-	ForegroundProcesses []herdrProcessItem `json:"foreground_processes"`
-}
-
-type herdrSessionItem struct {
-	Name        string `json:"name"`
-	SessionName string `json:"session_name"`
-	ID          string `json:"id"`
-	Running     *bool  `json:"running"`
-	Exited      bool   `json:"exited"`
-	Dead        bool   `json:"dead"`
 }
 
 func parseSessions(output string) ([]string, error) {

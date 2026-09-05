@@ -21,6 +21,18 @@ type renderedFileInstall struct {
 	DryRunMessage           string
 }
 
+type jsonHookFileInstall struct {
+	Harness                 registry.Harness
+	Path                    string
+	Apply                   func(map[string]any) bool
+	EncodeError             string
+	CreateDirError          string
+	WriteError              string
+	InstalledMessage        string
+	AlreadyInstalledMessage string
+	DryRunMessage           string
+}
+
 func installRenderedFile(options Options, file renderedFileInstall) (Result, error) {
 	changed, err := fileNeedsUpdate(file.Path, file.Content, options.Force)
 	if err != nil {
@@ -50,18 +62,6 @@ func installStatusMessage(changed bool, dryRun bool, dryRunMsg, alreadyInstalled
 		return alreadyInstalledMsg
 	}
 	return installedMsg
-}
-
-type jsonHookFileInstall struct {
-	Harness                 registry.Harness
-	Path                    string
-	Apply                   func(map[string]any) bool
-	EncodeError             string
-	CreateDirError          string
-	WriteError              string
-	InstalledMessage        string
-	AlreadyInstalledMessage string
-	DryRunMessage           string
 }
 
 func installJSONHookFile(options Options, file jsonHookFileInstall) (Result, error) {

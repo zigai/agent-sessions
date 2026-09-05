@@ -30,6 +30,7 @@ var (
 	errStorePathRequired = errors.New("store path is required")
 	errIntervalPositive  = errors.New("interval must be positive")
 	errGraceNonnegative  = errors.New("grace period must be nonnegative")
+	defaultService       = New(nil)
 )
 
 // Options controls the managed observer service.
@@ -84,8 +85,6 @@ func New(executor CommandExecutor) *Service {
 
 	return &Service{executor: executor}
 }
-
-var defaultService = New(nil)
 
 func Install(ctx context.Context, options Options) (Result, error) {
 	return defaultService.Install(ctx, options)

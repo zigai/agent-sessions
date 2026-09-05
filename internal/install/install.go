@@ -25,11 +25,6 @@ var (
 
 var allHarnesses = installableHarnesses()
 
-// AllHarnesses returns a snapshot of the installable harness catalog.
-func AllHarnesses() []registry.Harness {
-	return slices.Clone(allHarnesses)
-}
-
 type Options struct {
 	Harness      registry.Harness
 	Binary       string
@@ -47,6 +42,11 @@ type Result struct {
 	NextStep string `json:"next_step,omitempty"`
 	Snippet  string `json:"snippet,omitempty"`
 	Error    string `json:"error,omitempty"`
+}
+
+// AllHarnesses returns a snapshot of the installable harness catalog.
+func AllHarnesses() []registry.Harness {
+	return slices.Clone(allHarnesses)
 }
 
 func Run(options Options) (Result, error) {
