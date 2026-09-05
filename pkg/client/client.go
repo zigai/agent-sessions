@@ -10,21 +10,6 @@ import (
 	"github.com/zigai/aht/pkg/registry"
 )
 
-var (
-	// ErrUnavailable means no realtime AHT broker accepted the local connection.
-	ErrUnavailable = errors.New("aht broker unavailable")
-	// ErrProtocol means the broker returned an invalid or incompatible response.
-	ErrProtocol         = errors.New("aht broker protocol error")
-	errHandlerRequired  = errors.New("watch handler is required")
-	ErrRealtimeRequired = errors.New("operation requires a realtime broker connection")
-	// ErrInvalidMode means a client was configured with an unsupported Mode.
-	ErrInvalidMode = errors.New("invalid aht client mode")
-)
-
-// Mode controls how a Client routes operations between the realtime broker
-// and the durable registry file on disk.
-type Mode string
-
 const (
 	// ModeAuto routes operations through the realtime broker and falls back to
 	// the durable registry on disk when the broker is offline.
@@ -39,7 +24,52 @@ const (
 	// ModeDurableOnly directs all operations directly to the on-disk registry file,
 	// bypassing the realtime broker entirely.
 	ModeDurableOnly Mode = "durable"
+
+	PresenceLive    Presence = registry.PresenceLive
+	PresenceGone    Presence = registry.PresenceGone
+	PresenceUnknown Presence = registry.PresenceUnknown
+
+	ActivityRunning     Activity = registry.ActivityRunning
+	ActivityWaiting     Activity = registry.ActivityWaiting
+	ActivityIdle        Activity = registry.ActivityIdle
+	ActivityFailed      Activity = registry.ActivityFailed
+	ActivityInterrupted Activity = registry.ActivityInterrupted
+	ActivityUnknown     Activity = registry.ActivityUnknown
+
+	HarnessClaude   Harness = registry.HarnessClaude
+	HarnessCodex    Harness = registry.HarnessCodex
+	HarnessCursor   Harness = registry.HarnessCursor
+	HarnessCopilot  Harness = registry.HarnessCopilot
+	HarnessCline    Harness = registry.HarnessCline
+	HarnessKimiCode Harness = registry.HarnessKimiCode
+	HarnessGrok     Harness = registry.HarnessGrok
+	HarnessGoose    Harness = registry.HarnessGoose
+	HarnessPi       Harness = registry.HarnessPi
+	HarnessOmp      Harness = registry.HarnessOmp
+	HarnessOpenCode Harness = registry.HarnessOpenCode
+	HarnessAgy      Harness = registry.HarnessAgy
+	HarnessKilo     Harness = registry.HarnessKilo
+	HarnessDroid    Harness = registry.HarnessDroid
+	HarnessOpenClaw Harness = registry.HarnessOpenClaw
+	HarnessHermes   Harness = registry.HarnessHermes
 )
+
+var (
+	// ErrUnavailable means no realtime AHT broker accepted the local connection.
+	ErrUnavailable = errors.New("aht broker unavailable")
+	// ErrProtocol means the broker returned an invalid or incompatible response.
+	ErrProtocol         = errors.New("aht broker protocol error")
+	errHandlerRequired  = errors.New("watch handler is required")
+	ErrRealtimeRequired = errors.New("operation requires a realtime broker connection")
+	// ErrInvalidMode means a client was configured with an unsupported Mode.
+	ErrInvalidMode = errors.New("invalid aht client mode")
+
+	_ registry.Store = (*Client)(nil)
+)
+
+// Mode controls how a Client routes operations between the realtime broker
+// and the durable registry file on disk.
+type Mode string
 
 type (
 	// Session represents an agent-harness session tracked by AHT.
@@ -76,37 +106,6 @@ type (
 	Subscription = broker.Subscription
 )
 
-const (
-	PresenceLive    Presence = registry.PresenceLive
-	PresenceGone    Presence = registry.PresenceGone
-	PresenceUnknown Presence = registry.PresenceUnknown
-
-	ActivityRunning     Activity = registry.ActivityRunning
-	ActivityWaiting     Activity = registry.ActivityWaiting
-	ActivityIdle        Activity = registry.ActivityIdle
-	ActivityFailed      Activity = registry.ActivityFailed
-	ActivityInterrupted Activity = registry.ActivityInterrupted
-	ActivityUnknown     Activity = registry.ActivityUnknown
-
-	HarnessClaude   Harness = registry.HarnessClaude
-	HarnessCodex    Harness = registry.HarnessCodex
-	HarnessCursor   Harness = registry.HarnessCursor
-	HarnessCopilot  Harness = registry.HarnessCopilot
-	HarnessCline    Harness = registry.HarnessCline
-	HarnessKimiCode Harness = registry.HarnessKimiCode
-	HarnessGrok     Harness = registry.HarnessGrok
-	HarnessGoose    Harness = registry.HarnessGoose
-	HarnessPi       Harness = registry.HarnessPi
-	HarnessOmp      Harness = registry.HarnessOmp
-	HarnessOhMyPi   Harness = registry.HarnessOhMyPi
-	HarnessOpenCode Harness = registry.HarnessOpenCode
-	HarnessAgy      Harness = registry.HarnessAgy
-	HarnessKilo     Harness = registry.HarnessKilo
-	HarnessDroid    Harness = registry.HarnessDroid
-	HarnessOpenClaw Harness = registry.HarnessOpenClaw
-	HarnessHermes   Harness = registry.HarnessHermes
-)
-
 // Config identifies the local AHT instance used by a Client. Empty fields use
 // the current user's default registry and its associated broker socket.
 type Config struct {
@@ -118,12 +117,12 @@ type Config struct {
 // stateStore is the routing client's operational contract. Public compatibility
 // aliases on registry.Store are not requirements for an internal backend.
 type stateStore interface {
-	Observe(context.Context, registry.Observation) (registry.Session, error)
-	ObserveBatch(context.Context, []registry.Observation) ([]registry.Session, error)
-	List(context.Context, registry.Filter) ([]registry.Session, error)
-	Get(context.Context, string) (registry.Session, error)
-	SummaryByTmuxSession(context.Context, registry.Filter) ([]registry.Summary, error)
-	GC(context.Context, time.Duration) (registry.GCResult, error)
+	Observe(ctx context.Context, observation registry.Observation) (registry.Session, error)
+	ObserveBatch(ctx context.Context, observations []registry.Observation) ([]registry.Session, error)
+	List(ctx context.Context, filter registry.Filter) ([]registry.Session, error)
+	Get(ctx context.Context, id string) (registry.Session, error)
+	SummaryByTmuxSession(ctx context.Context, filter registry.Filter) ([]registry.Summary, error)
+	GC(ctx context.Context, maxAge time.Duration) (registry.GCResult, error)
 }
 
 // Client reads and updates agent-harness state through the local AHT broker.
@@ -137,7 +136,11 @@ type Client struct {
 	configErr error
 }
 
-var _ registry.Store = (*Client)(nil)
+// OperationError is a machine-readable failure returned by the AHT broker.
+type OperationError struct {
+	Code    string
+	Message string
+}
 
 // New returns a client for the configured local AHT instance. An unsupported
 // Mode makes all operations return ErrInvalidMode without performing I/O.
@@ -346,12 +349,6 @@ func watchSnapshots(ctx context.Context, subscription *broker.Subscription, yiel
 	}
 
 	return nil
-}
-
-// OperationError is a machine-readable failure returned by the AHT broker.
-type OperationError struct {
-	Code    string
-	Message string
 }
 
 func (e *OperationError) Error() string {

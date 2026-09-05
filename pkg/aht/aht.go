@@ -8,6 +8,75 @@ import (
 	"github.com/zigai/aht/pkg/registry"
 )
 
+const (
+	// ModeAuto routes through the broker socket and falls back to disk if offline.
+	ModeAuto Mode = client.ModeAuto
+
+	// ModeRealtimeOnly connects strictly to the broker socket, failing if offline.
+	ModeRealtimeOnly Mode = client.ModeRealtimeOnly
+
+	// ModeDurableOnly reads directly from the on-disk registry file.
+	ModeDurableOnly Mode = client.ModeDurableOnly
+
+	// PresenceLive indicates the agent session process or container is active.
+	PresenceLive Presence = registry.PresenceLive
+
+	// PresenceGone indicates the agent session has terminated.
+	PresenceGone Presence = registry.PresenceGone
+
+	// PresenceUnknown indicates presence cannot be determined.
+	PresenceUnknown Presence = registry.PresenceUnknown
+
+	// ActivityRunning indicates the agent is actively processing or executing.
+	ActivityRunning Activity = registry.ActivityRunning
+
+	// ActivityWaiting indicates the agent is waiting for user or tool input.
+	ActivityWaiting Activity = registry.ActivityWaiting
+
+	// ActivityIdle indicates the agent is idle and ready for interaction.
+	ActivityIdle Activity = registry.ActivityIdle
+
+	// ActivityFailed indicates the agent encountered an unrecoverable failure.
+	ActivityFailed Activity = registry.ActivityFailed
+
+	// ActivityInterrupted indicates the agent run was canceled or interrupted.
+	ActivityInterrupted Activity = registry.ActivityInterrupted
+
+	// ActivityUnknown indicates activity cannot be determined.
+	ActivityUnknown Activity = registry.ActivityUnknown
+
+	HarnessClaude   Harness = registry.HarnessClaude
+	HarnessCodex    Harness = registry.HarnessCodex
+	HarnessCursor   Harness = registry.HarnessCursor
+	HarnessCopilot  Harness = registry.HarnessCopilot
+	HarnessCline    Harness = registry.HarnessCline
+	HarnessKimiCode Harness = registry.HarnessKimiCode
+	HarnessGrok     Harness = registry.HarnessGrok
+	HarnessGoose    Harness = registry.HarnessGoose
+	HarnessPi       Harness = registry.HarnessPi
+	HarnessOmp      Harness = registry.HarnessOmp
+	HarnessOpenCode Harness = registry.HarnessOpenCode
+	HarnessAgy      Harness = registry.HarnessAgy
+	HarnessKilo     Harness = registry.HarnessKilo
+	HarnessDroid    Harness = registry.HarnessDroid
+	HarnessOpenClaw Harness = registry.HarnessOpenClaw
+	HarnessHermes   Harness = registry.HarnessHermes
+)
+
+var (
+	// ErrInvalidMode means the client was configured with an unsupported operating mode.
+	ErrInvalidMode = client.ErrInvalidMode
+
+	// ErrUnavailable means no realtime AHT broker accepted the local connection.
+	ErrUnavailable = client.ErrUnavailable
+
+	// ErrProtocol means the broker returned an invalid or incompatible response.
+	ErrProtocol = client.ErrProtocol
+
+	// ErrRealtimeRequired means the operation requires a realtime broker connection.
+	ErrRealtimeRequired = client.ErrRealtimeRequired
+)
+
 type (
 	// Client reads and updates agent-harness state through the local AHT broker.
 	Client = client.Client
@@ -60,76 +129,6 @@ type (
 
 	// Store represents an engine that persists or serves agent-harness state.
 	Store = registry.Store
-)
-
-const (
-	// ModeAuto routes through the broker socket and falls back to disk if offline.
-	ModeAuto Mode = client.ModeAuto
-
-	// ModeRealtimeOnly connects strictly to the broker socket, failing if offline.
-	ModeRealtimeOnly Mode = client.ModeRealtimeOnly
-
-	// ModeDurableOnly reads directly from the on-disk registry file.
-	ModeDurableOnly Mode = client.ModeDurableOnly
-
-	// PresenceLive indicates the agent session process or container is active.
-	PresenceLive Presence = registry.PresenceLive
-
-	// PresenceGone indicates the agent session has terminated.
-	PresenceGone Presence = registry.PresenceGone
-
-	// PresenceUnknown indicates presence cannot be determined.
-	PresenceUnknown Presence = registry.PresenceUnknown
-
-	// ActivityRunning indicates the agent is actively processing or executing.
-	ActivityRunning Activity = registry.ActivityRunning
-
-	// ActivityWaiting indicates the agent is waiting for user or tool input.
-	ActivityWaiting Activity = registry.ActivityWaiting
-
-	// ActivityIdle indicates the agent is idle and ready for interaction.
-	ActivityIdle Activity = registry.ActivityIdle
-
-	// ActivityFailed indicates the agent encountered an unrecoverable failure.
-	ActivityFailed Activity = registry.ActivityFailed
-
-	// ActivityInterrupted indicates the agent run was canceled or interrupted.
-	ActivityInterrupted Activity = registry.ActivityInterrupted
-
-	// ActivityUnknown indicates activity cannot be determined.
-	ActivityUnknown Activity = registry.ActivityUnknown
-
-	HarnessClaude   Harness = registry.HarnessClaude
-	HarnessCodex    Harness = registry.HarnessCodex
-	HarnessCursor   Harness = registry.HarnessCursor
-	HarnessCopilot  Harness = registry.HarnessCopilot
-	HarnessCline    Harness = registry.HarnessCline
-	HarnessKimiCode Harness = registry.HarnessKimiCode
-	HarnessGrok     Harness = registry.HarnessGrok
-	HarnessGoose    Harness = registry.HarnessGoose
-	HarnessPi       Harness = registry.HarnessPi
-	HarnessOmp      Harness = registry.HarnessOmp
-	HarnessOhMyPi   Harness = registry.HarnessOhMyPi
-	HarnessOpenCode Harness = registry.HarnessOpenCode
-	HarnessAgy      Harness = registry.HarnessAgy
-	HarnessKilo     Harness = registry.HarnessKilo
-	HarnessDroid    Harness = registry.HarnessDroid
-	HarnessOpenClaw Harness = registry.HarnessOpenClaw
-	HarnessHermes   Harness = registry.HarnessHermes
-)
-
-var (
-	// ErrInvalidMode means the client was configured with an unsupported operating mode.
-	ErrInvalidMode = client.ErrInvalidMode
-
-	// ErrUnavailable means no realtime AHT broker accepted the local connection.
-	ErrUnavailable = client.ErrUnavailable
-
-	// ErrProtocol means the broker returned an invalid or incompatible response.
-	ErrProtocol = client.ErrProtocol
-
-	// ErrRealtimeRequired means the operation requires a realtime broker connection.
-	ErrRealtimeRequired = client.ErrRealtimeRequired
 )
 
 // New returns a client for the configured local AHT instance.
