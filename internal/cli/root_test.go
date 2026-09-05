@@ -765,9 +765,9 @@ func TestSessionDisplayLabel(t *testing.T) {
 			want:    "%12",
 		},
 		{
-			name:    "cwd fallback",
-			session: registry.Session{ID: "omp-12345678", CWD: "/home/zigai/Projects/aht"},
-			want:    "aht",
+			name:    "process pid fallback",
+			session: registry.Session{ID: "omp-12345678", Process: &registry.ProcessIdentity{PID: 42189}},
+			want:    "pid:42189",
 		},
 		{
 			name:    "short id fallback",

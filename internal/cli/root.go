@@ -1252,8 +1252,8 @@ func sessionDisplayLabel(session registry.Session) string {
 	if session.Multiplexer.PaneID != "" {
 		return session.Multiplexer.PaneID
 	}
-	if session.CWD != "" {
-		return filepath.Base(session.CWD)
+	if session.Process != nil && session.Process.PID > 0 {
+		return fmt.Sprintf("pid:%d", session.Process.PID)
 	}
 	return shortRegistryID(session.ID)
 }
