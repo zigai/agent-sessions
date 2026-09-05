@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/zigai/aht/internal/cancelclose"
 	"github.com/zigai/aht/pkg/broker"
 	"github.com/zigai/aht/pkg/registry"
 )
@@ -44,18 +45,22 @@ var (
 
 // Server owns the local socket API for one in-memory registry.
 type Server struct {
-	store          *registry.MemoryStore
-	socketPath     string
-	maxConnections int
-	ready          chan<- struct{}
+	store            *registry.MemoryStore
+	socketPath       string
+	maxConnections   int
+	writeTimeout     time.Duration
+	ready            chan<- struct{}
+	onConnectionDone func()
 }
 
 // Options configures a broker server.
 type Options struct {
-	Store          *registry.MemoryStore
-	SocketPath     string
-	MaxConnections int
-	Ready          chan<- struct{}
+	Store            *registry.MemoryStore
+	SocketPath       string
+	MaxConnections   int
+	WriteTimeout     time.Duration
+	Ready            chan<- struct{}
+	OnConnectionDone func()
 }
 
 // New returns a broker server. Serve validates required dependencies.
@@ -65,11 +70,17 @@ func New(options Options) *Server {
 		maxConnections = defaultMaxConnections
 	}
 
+	wt := options.WriteTimeout
+	if wt <= 0 {
+		wt = writeTimeout
+	}
 	return &Server{
-		store:          options.Store,
-		socketPath:     options.SocketPath,
-		maxConnections: maxConnections,
-		ready:          options.Ready,
+		store:            options.Store,
+		socketPath:       options.SocketPath,
+		maxConnections:   maxConnections,
+		writeTimeout:     wt,
+		ready:            options.Ready,
+		onConnectionDone: options.OnConnectionDone,
 	}
 }
 
@@ -100,17 +111,10 @@ func (s *Server) serve(ctx context.Context, listener net.Listener) error {
 		cancel()
 		connections.Wait()
 	}()
-	closeDone := make(chan struct{})
-	stopClose := context.AfterFunc(ctx, func() {
-		defer close(closeDone)
-		_ = listener.Close()
-	})
+	listenerCleanup := cancelclose.OnCancel(ctx, listener)
 	defer func() {
 		cancel()
-		_ = listener.Close()
-		if !stopClose() {
-			<-closeDone
-		}
+		listenerCleanup()
 	}()
 
 	if s.ready != nil {
@@ -131,7 +135,12 @@ func (s *Server) serve(ctx context.Context, listener net.Listener) error {
 		select {
 		case semaphore <- struct{}{}:
 			connections.Go(func() {
-				defer func() { <-semaphore }()
+				defer func() {
+					<-semaphore
+					if s.onConnectionDone != nil {
+						s.onConnectionDone()
+					}
+				}()
 				s.handleConnection(ctx, connection)
 			})
 		default:
@@ -143,17 +152,7 @@ func (s *Server) serve(ctx context.Context, listener net.Listener) error {
 }
 
 func (s *Server) handleConnection(ctx context.Context, connection net.Conn) {
-	closeDone := make(chan struct{})
-	stopClose := context.AfterFunc(ctx, func() {
-		defer close(closeDone)
-		_ = connection.Close()
-	})
-	defer func() {
-		_ = connection.Close()
-		if !stopClose() {
-			<-closeDone
-		}
-	}()
+	defer cancelclose.OnCancel(ctx, connection)()
 	if err := connection.SetReadDeadline(time.Now().Add(handshakeTimeout)); err != nil {
 		return
 	}
@@ -167,11 +166,11 @@ func (s *Server) handleConnection(ctx context.Context, connection net.Conn) {
 	var request broker.Request
 	//nolint:musttag // Request defines the complete public JSON protocol schema.
 	if err := json.Unmarshal(scanner.Bytes(), &request); err != nil {
-		_ = writeResponse(connection, errorResponse(request.ID, "invalid_json", err))
+		_ = s.writeResponse(connection, errorResponse(request.ID, "invalid_json", err))
 		return
 	}
 	if err := validateRequest(request); err != nil {
-		_ = writeResponse(connection, errorResponse(request.ID, "invalid_request", err))
+		_ = s.writeResponse(connection, errorResponse(request.ID, "invalid_request", err))
 		return
 	}
 	if err := connection.SetReadDeadline(time.Time{}); err != nil {
@@ -184,7 +183,7 @@ func (s *Server) handleConnection(ctx context.Context, connection net.Conn) {
 	}
 
 	response := s.execute(ctx, request)
-	_ = writeResponse(connection, response)
+	_ = s.writeResponse(connection, response)
 }
 
 func validateRequest(request broker.Request) error {
@@ -266,10 +265,10 @@ func (s *Server) serveSubscription(
 ) {
 	state, err := s.store.State(ctx, request.Filter)
 	if err != nil {
-		_ = writeResponse(connection, operationErrorResponse(request.ID, err))
+		_ = s.writeResponse(connection, operationErrorResponse(request.ID, err))
 		return
 	}
-	if err := writeResponse(connection, snapshotResponse(request.ID, state)); err != nil {
+	if err := s.writeResponse(connection, snapshotResponse(request.ID, state)); err != nil {
 		return
 	}
 
@@ -285,17 +284,17 @@ func (s *Server) serveSubscription(
 			if errors.Is(waitErr, context.DeadlineExceeded) {
 				response := newResponse(request.ID, "heartbeat")
 				response.Now = time.Now().UTC()
-				if err := writeResponse(connection, response); err != nil {
+				if err := s.writeResponse(connection, response); err != nil {
 					return
 				}
 				continue
 			}
 
-			_ = writeResponse(connection, operationErrorResponse(request.ID, waitErr))
+			_ = s.writeResponse(connection, operationErrorResponse(request.ID, waitErr))
 			return
 		}
 
-		if err := writeResponse(connection, snapshotResponse(request.ID, next)); err != nil {
+		if err := s.writeResponse(connection, snapshotResponse(request.ID, next)); err != nil {
 			return
 		}
 		revision = next.Revision
@@ -345,7 +344,7 @@ func operationErrorResponse(id string, err error) broker.Response {
 	return errorResponse(id, code, err)
 }
 
-func writeResponse(connection net.Conn, response broker.Response) error {
+func (s *Server) writeResponse(connection net.Conn, response broker.Response) error {
 	encoded, err := json.Marshal(response)
 	if err != nil {
 		return fmt.Errorf("encoding broker response: %w", err)
@@ -356,7 +355,11 @@ func writeResponse(connection net.Conn, response broker.Response) error {
 			return fmt.Errorf("encoding oversized-response error: %w", err)
 		}
 	}
-	if err := connection.SetWriteDeadline(time.Now().Add(writeTimeout)); err != nil {
+	timeout := s.writeTimeout
+	if timeout <= 0 {
+		timeout = writeTimeout
+	}
+	if err := connection.SetWriteDeadline(time.Now().Add(timeout)); err != nil {
 		return fmt.Errorf("setting broker write deadline: %w", err)
 	}
 	if _, err := connection.Write(append(encoded, '\n')); err != nil {

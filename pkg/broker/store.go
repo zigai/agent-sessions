@@ -8,6 +8,8 @@ import (
 	"github.com/zigai/aht/pkg/registry"
 )
 
+var _ registry.Store = (*Store)(nil)
+
 // Store routes operations through the realtime broker and falls back to the
 // durable snapshot when the broker is offline. The fallback keeps one-shot CLI
 // use functional; a running broker remains the authoritative hot path.
@@ -15,8 +17,6 @@ type Store struct {
 	client   *Client
 	fallback *registry.FileStore
 }
-
-var _ registry.Store = (*Store)(nil)
 
 // NewStore returns a broker-backed registry store for storePath.
 func NewStore(storePath string) *Store {

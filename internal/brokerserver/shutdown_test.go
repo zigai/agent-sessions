@@ -39,7 +39,8 @@ func TestAcceptFailureStopsActiveSubscriptions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	listener, err := net.Listen("unix", broker.SocketPath(path))
+	var listenConfig net.ListenConfig
+	listener, err := listenConfig.Listen(t.Context(), "unix", broker.SocketPath(path))
 	if err != nil {
 		t.Fatal(err)
 	}

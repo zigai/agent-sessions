@@ -95,7 +95,8 @@ func TestSubscriptionCloseJoinsReader(t *testing.T) {
 func socketClient(t *testing.T, serve func(net.Conn)) *broker.Client {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "broker.sock")
-	listener, err := net.Listen("unix", path)
+	var listenConfig net.ListenConfig
+	listener, err := listenConfig.Listen(t.Context(), "unix", path)
 	if err != nil {
 		t.Fatal(err)
 	}

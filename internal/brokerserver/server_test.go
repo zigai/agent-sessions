@@ -3,20 +3,95 @@
 package brokerserver
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/zigai/aht/pkg/broker"
 	"github.com/zigai/aht/pkg/registry"
 )
+
+type monitoredConn struct {
+	net.Conn
+
+	onWrite   func()
+	onClose   func()
+	closeOnce sync.Once
+}
+
+func (m *monitoredConn) Write(b []byte) (int, error) {
+	if m.onWrite != nil {
+		m.onWrite()
+	}
+	n, err := m.Conn.Write(b)
+	if err != nil {
+		return n, fmt.Errorf("monitored conn write: %w", err)
+	}
+	return n, nil
+}
+
+func (m *monitoredConn) Close() error {
+	err := m.Conn.Close()
+	m.closeOnce.Do(func() {
+		if m.onClose != nil {
+			m.onClose()
+		}
+	})
+	if err != nil {
+		return fmt.Errorf("monitored conn close: %w", err)
+	}
+	return nil
+}
+
+type testPipeListener struct {
+	conns chan net.Conn
+	done  chan struct{}
+	close sync.Once
+}
+
+func newTestPipeListener() *testPipeListener {
+	return &testPipeListener{
+		conns: make(chan net.Conn, 8),
+		done:  make(chan struct{}),
+	}
+}
+
+func (p *testPipeListener) push(c net.Conn) {
+	p.conns <- c
+}
+
+func (p *testPipeListener) Accept() (net.Conn, error) {
+	select {
+	case c, ok := <-p.conns:
+		if !ok {
+			return nil, net.ErrClosed
+		}
+		return c, nil
+	case <-p.done:
+		return nil, net.ErrClosed
+	}
+}
+
+func (p *testPipeListener) Close() error {
+	p.close.Do(func() {
+		close(p.done)
+	})
+	return nil
+}
+
+func (p *testPipeListener) Addr() net.Addr {
+	return &net.UnixAddr{Name: "pipe", Net: "unix"}
+}
 
 //nolint:cyclop // One end-to-end scenario verifies transport, permissions, and streaming.
 func TestServerStreamsEffectiveStateChanges(t *testing.T) {
@@ -261,7 +336,154 @@ func TestServer_BoundsSlowSubscriber(t *testing.T) {
 	if err := client.Ping(clientContext); err != nil {
 		t.Fatalf("disconnected subscriber affected broker: %v", err)
 	}
+
+	testSlowSubscriberBlockedWriteTimeout(t, fixture.store)
+
 	stopBrokerAdversityFixture(t, fixture)
+}
+
+func testSlowSubscriberBlockedWriteTimeout(t *testing.T, store *registry.MemoryStore) {
+	t.Helper()
+
+	serverPipe, clientPipe := net.Pipe()
+	writeStarted := make(chan struct{})
+	serverClosed := make(chan struct{})
+	var writeOnce, closeOnce sync.Once
+	monitored := &monitoredConn{
+		Conn: serverPipe,
+		onWrite: func() {
+			writeOnce.Do(func() { close(writeStarted) })
+		},
+		onClose: func() {
+			closeOnce.Do(func() { close(serverClosed) })
+		},
+		closeOnce: sync.Once{},
+	}
+
+	listener := newTestPipeListener()
+	pipeCtx, cancelPipe := context.WithCancel(t.Context())
+
+	connectionDone := make(chan struct{}, 1)
+	serverDone := make(chan struct{})
+	slowServer := New(Options{
+		Store:          store,
+		SocketPath:     "",
+		MaxConnections: 1,
+		WriteTimeout:   50 * time.Millisecond,
+		Ready:          nil,
+		OnConnectionDone: func() {
+			select {
+			case connectionDone <- struct{}{}:
+			default:
+			}
+		},
+	})
+	go func() {
+		defer close(serverDone)
+		_ = slowServer.serve(pipeCtx, listener)
+	}()
+	t.Cleanup(func() {
+		cancelPipe()
+		_ = listener.Close()
+		<-serverDone
+	})
+
+	listener.push(monitored)
+
+	subReq := marshalBrokerRequest(t, broker.Request{
+		Version: broker.ProtocolVersion,
+		ID:      "blocked-sub",
+		Method:  broker.MethodSubscribe,
+	})
+	clientWriteDone := make(chan struct{})
+	go func() {
+		defer close(clientWriteDone)
+		_, _ = clientPipe.Write(subReq)
+	}()
+	t.Cleanup(func() {
+		_ = clientPipe.Close()
+		<-clientWriteDone
+	})
+
+	// Wait for server to initiate write (which blocks because clientPipe is not reading)
+	select {
+	case <-writeStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("server never initiated write on slow connection")
+	}
+
+	// Observe server-side close triggered by write timeout, while clientPipe remains unread
+	select {
+	case <-serverClosed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("server failed to time out and close slow connection")
+	}
+
+	// Only read from clientPipe after the server has closed its end
+	_ = clientPipe.SetReadDeadline(time.Now().Add(2 * time.Second))
+	buf := make([]byte, 1024)
+	n, err := clientPipe.Read(buf)
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("slow connection read after close = %d bytes, error %v; want io.EOF", n, err)
+	}
+
+	// Wait for the admission semaphore slot to be released (avoids admission-release race)
+	select {
+	case <-connectionDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("connection slot was not released after close")
+	}
+
+	// Verify the connection slot was released: accept another connection despite MaxConnections=1
+	testSecondClientAdmissionPing(t, listener)
+
+	cancelPipe()
+	_ = listener.Close()
+	<-serverDone
+
+	_ = clientPipe.Close()
+	<-clientWriteDone
+}
+
+func testSecondClientAdmissionPing(t *testing.T, listener *testPipeListener) {
+	t.Helper()
+
+	serverPipe, clientPipe := net.Pipe()
+	writeDone := make(chan struct{})
+	pingReq := marshalBrokerRequest(t, broker.Request{
+		Version: broker.ProtocolVersion,
+		ID:      "ping-after-timeout",
+		Method:  broker.MethodPing,
+	})
+	go func() {
+		defer close(writeDone)
+		_, _ = clientPipe.Write(pingReq)
+	}()
+	var cleanupOnce sync.Once
+	cleanup := func() {
+		cleanupOnce.Do(func() {
+			_ = clientPipe.Close()
+			<-writeDone
+		})
+	}
+	t.Cleanup(cleanup)
+	defer cleanup()
+
+	listener.push(serverPipe)
+
+	// Bound I/O on second client with SetDeadline
+	if err := clientPipe.SetDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatalf("second client set deadline: %v", err)
+	}
+
+	scanner := bufio.NewScanner(clientPipe)
+	if !scanner.Scan() {
+		t.Fatalf("second client ping scan: %v", scanner.Err())
+	}
+	var resp broker.Response
+	if err := json.Unmarshal(scanner.Bytes(), &resp); err != nil || resp.ID != "ping-after-timeout" {
+		t.Fatalf("second client ping response = %#v, %v", resp, err)
+	}
 }
 
 func TestServer_ShutsDownCleanly(t *testing.T) {

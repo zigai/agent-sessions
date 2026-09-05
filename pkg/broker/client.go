@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/zigai/aht/internal/cancelclose"
 	"github.com/zigai/aht/pkg/registry"
 )
 
@@ -21,7 +22,10 @@ const (
 	MaxResponseBytes = 64 << 20
 )
 
-var nextRequestID atomic.Uint64
+var (
+	nextRequestID atomic.Uint64
+	_             registry.Store = (*Client)(nil)
+)
 
 // Client sends registry operations to one local broker.
 type Client struct {
@@ -29,7 +33,21 @@ type Client struct {
 	dialTimeout time.Duration
 }
 
-var _ registry.Store = (*Client)(nil)
+// Subscription streams independently owned effective-state snapshots until its
+// context is canceled. Callers may modify a received snapshot without affecting
+// the broker or subsequent snapshots.
+type Subscription struct {
+	Snapshots <-chan registry.StateSnapshot
+	Errors    <-chan error
+	cancel    context.CancelFunc
+	done      <-chan struct{}
+}
+
+// RemoteError is an operation error returned by the broker.
+type RemoteError struct {
+	Code    string
+	Message string
+}
 
 // NewClient returns a client for the broker associated with storePath.
 func NewClient(storePath string) *Client {
@@ -144,16 +162,6 @@ func (c *Client) GC(ctx context.Context, deleteAfter time.Duration) (registry.GC
 	return *response.GC, nil
 }
 
-// Subscription streams independently owned effective-state snapshots until its
-// context is canceled. Callers may modify a received snapshot without affecting
-// the broker or subsequent snapshots.
-type Subscription struct {
-	Snapshots <-chan registry.StateSnapshot
-	Errors    <-chan error
-	cancel    context.CancelFunc
-	done      <-chan struct{}
-}
-
 // NewSubscription returns a Subscription wrapping the given channels and optional cancel function.
 func NewSubscription(snapshots <-chan registry.StateSnapshot, errors <-chan error, cancel context.CancelFunc) *Subscription {
 	return &Subscription{Snapshots: snapshots, Errors: errors, cancel: cancel, done: nil}
@@ -179,7 +187,7 @@ func (c *Client) Subscribe(ctx context.Context, filter registry.Filter) (*Subscr
 		cancel()
 		return nil, err
 	}
-	cleanup := closeOnCancel(subscriptionContext, connection)
+	cleanup := cancelclose.OnCancel(subscriptionContext, connection)
 	transferred := false
 	defer func() {
 		if !transferred {
@@ -266,7 +274,7 @@ func (c *Client) roundTrip(ctx context.Context, request Request) (Response, erro
 	if err != nil {
 		return Response{}, err
 	}
-	defer closeOnCancel(ctx, connection)()
+	defer cancelclose.OnCancel(ctx, connection)()
 
 	request = request.prepare()
 	//nolint:musttag // Request defines the complete public JSON protocol schema.
@@ -310,21 +318,6 @@ func contextError(ctx context.Context, err error) error {
 		return fmt.Errorf("broker operation canceled: %w", ctx.Err())
 	}
 	return err
-}
-
-// closeOnCancel connects cancellation to socket I/O and returns joined cleanup.
-func closeOnCancel(ctx context.Context, connection net.Conn) func() {
-	done := make(chan struct{})
-	stop := context.AfterFunc(ctx, func() {
-		defer close(done)
-		_ = connection.Close() // Closing an already-closed socket has no remaining work.
-	})
-	return func() {
-		_ = connection.Close() // All I/O has ended; close errors cannot change its result.
-		if !stop() {
-			<-done
-		}
-	}
 }
 
 func (c *Client) dial(ctx context.Context) (net.Conn, error) {
@@ -383,12 +376,6 @@ func validateResponse(request Request, response Response) error {
 	}
 
 	return nil
-}
-
-// RemoteError is an operation error returned by the broker.
-type RemoteError struct {
-	Code    string
-	Message string
 }
 
 func (e *RemoteError) Error() string {
