@@ -271,7 +271,6 @@ func applyPluginRemoval(plan harnesspkg.PluginDirectoryInstallPlan, exists bool,
 	return applyPluginRemovalWithWriter(plan, exists, manifestChanged, manifest, obsoleteFiles, writeImportManifest)
 }
 
-//nolint:cyclop // removal coordinates directory, manifest, obsolete-file, and rollback stages
 func applyPluginRemovalWithWriter(
 	plan harnesspkg.PluginDirectoryInstallPlan,
 	exists bool,
@@ -280,8 +279,49 @@ func applyPluginRemovalWithWriter(
 	obsoleteFiles []string,
 	writeManifest func(string, importManifest) error,
 ) error {
+	return applyPluginRemovalWithFinalizer(plan, exists, manifestChanged, manifest, obsoleteFiles, writeManifest, nil)
+}
+
+func shouldUpdateManifest(plan harnesspkg.PluginDirectoryInstallPlan, manifestChanged bool) bool {
+	return plan.ImportManifest != nil && manifestChanged
+}
+
+func preparePluginRemoval(
+	plan harnesspkg.PluginDirectoryInstallPlan,
+	finalizer func(parent string, backup string, backupExists bool) error,
+) (func() error, func() error, error) {
+	plugin := newPluginDirectoryInstall(plan, nil)
+	parent := filepath.Dir(plan.Dir)
+	backup, backupExists, err := plugin.backupCurrent(parent)
+	if err != nil {
+		return nil, nil, err
+	}
+	rollbackPlugin := func() error {
+		if err := plugin.restoreBackup(backup, backupExists); err != nil {
+			return err
+		}
+		return syncDir(parent)
+	}
+	finalizePlugin := func() error {
+		if finalizer != nil {
+			return finalizer(parent, backup, backupExists)
+		}
+		return plugin.commitReplacement(parent, backup, backupExists)
+	}
+	return rollbackPlugin, finalizePlugin, nil
+}
+
+func applyPluginRemovalWithFinalizer(
+	plan harnesspkg.PluginDirectoryInstallPlan,
+	exists bool,
+	manifestChanged bool,
+	manifest importManifest,
+	obsoleteFiles []string,
+	writeManifest func(string, importManifest) error,
+	finalizer func(parent string, backup string, backupExists bool) error,
+) error {
 	var rollbackManifest func() error
-	if plan.ImportManifest != nil && manifestChanged {
+	if shouldUpdateManifest(plan, manifestChanged) {
 		var err error
 		rollbackManifest, err = prepareImportManifestRollback(plan.ImportManifest.Path)
 		if err != nil {
@@ -290,26 +330,16 @@ func applyPluginRemovalWithWriter(
 	}
 
 	var rollbackPlugin func() error
-	var commitPlugin func() error
+	var finalizePlugin func() error
 	if exists {
-		plugin := newPluginDirectoryInstall(plan, nil)
-		parent := filepath.Dir(plan.Dir)
-		backup, backupExists, err := plugin.backupCurrent(parent)
+		var err error
+		rollbackPlugin, finalizePlugin, err = preparePluginRemoval(plan, finalizer)
 		if err != nil {
 			return err
 		}
-		rollbackPlugin = func() error {
-			if err := plugin.restoreBackup(backup, backupExists); err != nil {
-				return err
-			}
-			return syncDir(parent)
-		}
-		commitPlugin = func() error {
-			return plugin.commitReplacement(parent, backup, backupExists)
-		}
 	}
 
-	if plan.ImportManifest != nil && manifestChanged {
+	if shouldUpdateManifest(plan, manifestChanged) {
 		if err := writeManifest(plan.ImportManifest.Path, manifest); err != nil {
 			return rollbackPluginDirectoryAndManifest(rollbackPlugin, rollbackManifest, err)
 		}
@@ -318,11 +348,13 @@ func applyPluginRemovalWithWriter(
 	if err := removeManagedObsoleteFiles(obsoleteFiles); err != nil {
 		return rollbackPluginDirectoryAndManifest(rollbackPlugin, rollbackManifest, err)
 	}
-	if commitPlugin == nil {
+	if finalizePlugin == nil {
 		return nil
 	}
-	if err := commitPlugin(); err != nil {
-		return rollbackPluginDirectoryAndManifest(rollbackPlugin, rollbackManifest, err)
+	// Irreversible commit boundary: pre-commit operations succeeded.
+	// Finalization failures do not restore prior manifest to avoid dangling imports.
+	if err := finalizePlugin(); err != nil {
+		return fmt.Errorf("finalizing plugin removal: %w", err)
 	}
 	return nil
 }

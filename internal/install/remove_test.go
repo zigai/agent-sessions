@@ -217,6 +217,109 @@ func TestPluginRemovalRollsBackDirectoryWhenManifestWriteFails(t *testing.T) {
 	}
 }
 
+var (
+	errTestFinalizeSync   = errors.New("sync failed after backup deletion")
+	errTestBackupDeletion = errors.New("backup deletion failed")
+)
+
+func setupPluginRemovalTestDir(t *testing.T) (string, []byte, harnesspkg.PluginDirectoryInstallPlan) {
+	t.Helper()
+	root := t.TempDir()
+	pluginDir := filepath.Join(root, "plugin")
+	if err := os.MkdirAll(pluginDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pluginDir, "index.ts"), []byte("plugin"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	manifestPath := filepath.Join(root, "manifest.json")
+	originalManifest := []byte("{\"imports\":[{\"name\":\"plugin\"}]}\n")
+	if err := os.WriteFile(manifestPath, originalManifest, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	plan := harnesspkg.PluginDirectoryInstallPlan{
+		Dir: pluginDir,
+		ImportManifest: &harnesspkg.ImportManifestInstallPlan{
+			Path: manifestPath,
+		},
+	}
+	return manifestPath, originalManifest, plan
+}
+
+func testRemovalSyncFailure(t *testing.T) {
+	manifestPath, originalManifest, plan := setupPluginRemovalTestDir(t)
+	updatedManifest := importManifest{Imports: []importEntry{}}
+	err := applyPluginRemovalWithFinalizer(
+		plan,
+		true,
+		true,
+		updatedManifest,
+		nil,
+		func(path string, m importManifest) error {
+			return os.WriteFile(path, []byte("{\"imports\":[]}\n"), 0o600)
+		},
+		func(parent, backup string, backupExists bool) error {
+			if backupExists {
+				_ = os.RemoveAll(backup)
+			}
+			return errTestFinalizeSync
+		},
+	)
+	if !errors.Is(err, errTestFinalizeSync) {
+		t.Fatalf("expected errTestFinalizeSync, got %v", err)
+	}
+	data, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) == string(originalManifest) {
+		t.Fatal("manifest regained dangling import after finalization failure")
+	}
+}
+
+func testRemovalBackupFailure(t *testing.T) {
+	manifestPath, originalManifest, plan := setupPluginRemovalTestDir(t)
+	updatedManifest := importManifest{Imports: []importEntry{}}
+	var retainedBackup string
+	err := applyPluginRemovalWithFinalizer(
+		plan,
+		true,
+		true,
+		updatedManifest,
+		nil,
+		func(path string, m importManifest) error {
+			return os.WriteFile(path, []byte("{\"imports\":[]}\n"), 0o600)
+		},
+		func(parent, backup string, backupExists bool) error {
+			retainedBackup = backup
+			return errTestBackupDeletion
+		},
+	)
+	if !errors.Is(err, errTestBackupDeletion) {
+		t.Fatalf("expected errTestBackupDeletion, got %v", err)
+	}
+	data, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) == string(originalManifest) {
+		t.Fatal("manifest regained dangling import after pre-deletion finalization failure")
+	}
+	if _, err := os.Stat(retainedBackup); err != nil {
+		t.Fatalf("retained backup path %s is missing: %v", retainedBackup, err)
+	}
+}
+
+func TestPluginRemovalFinalizationFailureDoesNotRegainDanglingManifest(t *testing.T) {
+	t.Parallel()
+
+	// 1. Post-deletion sync failure does not restore old manifest
+	t.Run("sync failure after backup deletion", testRemovalSyncFailure)
+
+	// 2. Pre-deletion backup failure reports error and does not restore old manifest
+	t.Run("backup deletion failure", testRemovalBackupFailure)
+}
+
 func TestRemoveAlsoRemovesManagedShimFallback(t *testing.T) {
 	t.Setenv("CODEX_HOME", t.TempDir())
 	state := t.TempDir()
