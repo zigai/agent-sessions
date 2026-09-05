@@ -28,6 +28,16 @@ var (
 	errInvalidDarwinLsofPID         = errors.New("invalid lsof pid")
 )
 
+type darwinPSRow struct {
+	PID            int
+	PPID           int
+	ProcessGroupID int
+	Foreground     bool
+	TTY            string
+	Executable     string
+	Args           []string
+}
+
 // List returns a current-user process snapshot from the kernel process table,
 // enriched by one ps and one lsof invocation.
 func List(ctx context.Context) ([]Process, error) {
@@ -59,6 +69,58 @@ func List(ctx context.Context) ([]Process, error) {
 		return nil, fmt.Errorf("inspect process working directories: %w", ctxErr)
 	}
 	return processes, nil
+}
+
+// Find returns the current-user process identified by pid. A false found
+// result means the process does not exist or belongs to another user.
+func Find(ctx context.Context, pid int) (Process, bool, error) {
+	var zero Process
+	if pid <= 0 {
+		return zero, false, nil
+	}
+	processes, err := List(ctx)
+	if err != nil {
+		return zero, false, err
+	}
+	for _, process := range processes {
+		if process.PID == pid {
+			return process, true, nil
+		}
+	}
+	return zero, false, nil
+}
+
+// StartIdentity returns the kernel process-start identity used by List and
+// Find, so callers can safely compare identities across both lookup paths.
+func StartIdentity(ctx context.Context, pid int) string {
+	if pid <= 0 || ctx.Err() != nil {
+		return ""
+	}
+	process, err := unix.SysctlKinfoProc("kern.proc.pid", pid)
+	if err != nil || process == nil || int(process.Proc.P_pid) != pid {
+		return ""
+	}
+	identity, ok := darwinProcessStartIdentity(*process)
+	if !ok {
+		return ""
+	}
+
+	return identity
+}
+
+// CommandName returns the executable command name for pid on macOS.
+func CommandName(ctx context.Context, pid int) (string, error) {
+	if pid <= 0 {
+		return "", nil
+	}
+	output, err := command.Run(ctx, "/bin/ps", nil, "-o", "comm=", "-p", strconv.Itoa(pid))
+	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return "", fmt.Errorf("checking context: %w", ctxErr)
+		}
+		return "", nil
+	}
+	return strings.TrimSpace(string(output)), nil
 }
 
 func darwinPSInventory(ctx context.Context, pids []string) (map[int]darwinPSRow, error) {
@@ -124,35 +186,6 @@ func darwinKernelProcesses(kinfo []unix.KinfoProc) ([]Process, []string, error) 
 		})
 	}
 	return processes, pids, nil
-}
-
-// Find returns the current-user process identified by pid. A false found
-// result means the process does not exist or belongs to another user.
-func Find(ctx context.Context, pid int) (Process, bool, error) {
-	var zero Process
-	if pid <= 0 {
-		return zero, false, nil
-	}
-	processes, err := List(ctx)
-	if err != nil {
-		return zero, false, err
-	}
-	for _, process := range processes {
-		if process.PID == pid {
-			return process, true, nil
-		}
-	}
-	return zero, false, nil
-}
-
-type darwinPSRow struct {
-	PID            int
-	PPID           int
-	ProcessGroupID int
-	Foreground     bool
-	TTY            string
-	Executable     string
-	Args           []string
 }
 
 func parseDarwinPS(output string) (map[int]darwinPSRow, error) {
@@ -249,37 +282,4 @@ func darwinProcessStartIdentity(process unix.KinfoProc) (string, bool) {
 	}
 
 	return fmt.Sprintf("%d:%06d", start.Sec, start.Usec), true
-}
-
-// StartIdentity returns the kernel process-start identity used by List and
-// Find, so callers can safely compare identities across both lookup paths.
-func StartIdentity(ctx context.Context, pid int) string {
-	if pid <= 0 || ctx.Err() != nil {
-		return ""
-	}
-	process, err := unix.SysctlKinfoProc("kern.proc.pid", pid)
-	if err != nil || process == nil || int(process.Proc.P_pid) != pid {
-		return ""
-	}
-	identity, ok := darwinProcessStartIdentity(*process)
-	if !ok {
-		return ""
-	}
-
-	return identity
-}
-
-// CommandName returns the executable command name for pid on macOS.
-func CommandName(ctx context.Context, pid int) (string, error) {
-	if pid <= 0 {
-		return "", nil
-	}
-	output, err := command.Run(ctx, "/bin/ps", nil, "-o", "comm=", "-p", strconv.Itoa(pid))
-	if err != nil {
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return "", fmt.Errorf("checking context: %w", ctxErr)
-		}
-		return "", nil
-	}
-	return strings.TrimSpace(string(output)), nil
 }

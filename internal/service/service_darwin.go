@@ -18,26 +18,12 @@ const (
 	darwinPlistName = "dev.zigai.aht.observer.plist"
 )
 
+var _ backend = (*darwinBackend)(nil)
+
 type darwinBackend struct {
 	path     string
 	rendered string
 	domain   string
-}
-
-func platformBackend(options Options) (backend, error) {
-	normalized, err := normalizeOptions(options)
-	if err != nil {
-		return nil, err
-	}
-	rendered, err := RenderLaunchAgent(normalized)
-	if err != nil {
-		return nil, err
-	}
-	path, err := launchAgentPath()
-	if err != nil {
-		return nil, err
-	}
-	return &darwinBackend{path: path, rendered: rendered, domain: fmt.Sprintf("gui/%d", os.Getuid())}, nil
 }
 
 // RenderLaunchAgent returns the exact managed LaunchAgent plist for options.
@@ -61,6 +47,22 @@ func RenderLaunchAgent(options Options) (string, error) {
 	b.WriteString("<key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>\n")
 	b.WriteString("</dict></plist>\n")
 	return b.String(), nil
+}
+
+func platformBackend(options Options) (backend, error) {
+	normalized, err := normalizeOptions(options)
+	if err != nil {
+		return nil, err
+	}
+	rendered, err := RenderLaunchAgent(normalized)
+	if err != nil {
+		return nil, err
+	}
+	path, err := launchAgentPath()
+	if err != nil {
+		return nil, err
+	}
+	return &darwinBackend{path: path, rendered: rendered, domain: fmt.Sprintf("gui/%d", os.Getuid())}, nil
 }
 
 func launchAgentPath() (string, error) {
@@ -124,5 +126,3 @@ func xmlEscape(value string) string {
 	value = strings.ReplaceAll(value, "\"", "&quot;")
 	return strings.ReplaceAll(value, "'", "&apos;")
 }
-
-var _ backend = (*darwinBackend)(nil)
