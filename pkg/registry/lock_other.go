@@ -3,6 +3,7 @@
 package registry
 
 import (
+	"context"
 	"fmt"
 	"os"
 )
@@ -12,7 +13,10 @@ type storeLock struct {
 	path string
 }
 
-func openStoreLock(path string) (*storeLock, error) {
+func openStoreLock(ctx context.Context, path string) (*storeLock, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("opening store lock: %w", err)
+	}
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("opening store lock: %w", err)

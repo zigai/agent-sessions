@@ -1,10 +1,12 @@
 package broker
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"strconv"
 	"sync/atomic"
@@ -13,7 +15,11 @@ import (
 	"github.com/zigai/aht/pkg/registry"
 )
 
-const defaultDialTimeout = 100 * time.Millisecond
+const (
+	defaultDialTimeout = 100 * time.Millisecond
+	// MaxResponseBytes bounds each newline-delimited broker response, including its newline.
+	MaxResponseBytes = 64 << 20
+)
 
 var nextRequestID atomic.Uint64
 
@@ -138,22 +144,30 @@ func (c *Client) GC(ctx context.Context, deleteAfter time.Duration) (registry.GC
 	return *response.GC, nil
 }
 
-// Subscription streams immutable effective-state snapshots until its context is canceled.
+// Subscription streams independently owned effective-state snapshots until its
+// context is canceled. Callers may modify a received snapshot without affecting
+// the broker or subsequent snapshots.
 type Subscription struct {
 	Snapshots <-chan registry.StateSnapshot
 	Errors    <-chan error
 	cancel    context.CancelFunc
+	done      <-chan struct{}
 }
 
 // NewSubscription returns a Subscription wrapping the given channels and optional cancel function.
 func NewSubscription(snapshots <-chan registry.StateSnapshot, errors <-chan error, cancel context.CancelFunc) *Subscription {
-	return &Subscription{Snapshots: snapshots, Errors: errors, cancel: cancel}
+	return &Subscription{Snapshots: snapshots, Errors: errors, cancel: cancel, done: nil}
 }
 
-// Close cancels the subscription. It is safe to call more than once.
+// Close cancels the subscription and waits for its broker reader to finish.
+// For subscriptions created with NewSubscription, the supplied cancel function
+// owns any external worker cleanup. It is safe to call Close more than once.
 func (s *Subscription) Close() {
 	if s != nil && s.cancel != nil {
 		s.cancel()
+	}
+	if s != nil && s.done != nil {
+		<-s.done
 	}
 }
 
@@ -165,32 +179,32 @@ func (c *Client) Subscribe(ctx context.Context, filter registry.Filter) (*Subscr
 		cancel()
 		return nil, err
 	}
+	cleanup := closeOnCancel(subscriptionContext, connection)
+	transferred := false
+	defer func() {
+		if !transferred {
+			cancel()
+			cleanup()
+		}
+	}()
 
 	request := newRequest(MethodSubscribe)
 	request.Filter = filter
-	request = c.prepareRequest(request)
+	request = request.prepare()
 	//nolint:musttag // Request defines the complete public JSON protocol schema.
 	if err := json.NewEncoder(connection).Encode(request); err != nil {
-		_ = connection.Close()
-		cancel()
-		return nil, fmt.Errorf("sending subscribe request: %w", err)
+		return nil, fmt.Errorf("sending subscribe request: %w", contextError(subscriptionContext, err))
 	}
 
-	decoder := json.NewDecoder(connection)
-	var first Response
-	if err := decoder.Decode(&first); err != nil {
-		_ = connection.Close()
-		cancel()
-		return nil, fmt.Errorf("reading subscribe response: %w", err)
+	decoder := responseScanner(connection)
+	first, err := readResponse(decoder)
+	if err != nil {
+		return nil, fmt.Errorf("reading subscribe response: %w", contextError(subscriptionContext, err))
 	}
 	if err := validateResponse(request, first); err != nil {
-		_ = connection.Close()
-		cancel()
 		return nil, err
 	}
 	if first.Snapshot == nil {
-		_ = connection.Close()
-		cancel()
 		return nil, fmt.Errorf("%w: subscribe response omitted snapshot", ErrProtocol)
 	}
 
@@ -198,28 +212,34 @@ func (c *Client) Subscribe(ctx context.Context, filter registry.Filter) (*Subscr
 	errorsChannel := make(chan error, 1)
 	snapshots <- *first.Snapshot
 
-	go runSubscription(subscriptionContext, connection, decoder, request, snapshots, errorsChannel)
+	done := make(chan struct{})
+	transferred = true
+	go func() {
+		defer close(done)
+		defer cancel()
+		defer cleanup()
+		runSubscription(subscriptionContext, decoder, request, snapshots, errorsChannel)
+	}()
 
-	return &Subscription{Snapshots: snapshots, Errors: errorsChannel, cancel: cancel}, nil
+	return &Subscription{Snapshots: snapshots, Errors: errorsChannel, cancel: cancel, done: done}, nil
 }
+
+// IsUnavailable reports whether err means no broker accepted the connection.
+func IsUnavailable(err error) bool { return errors.Is(err, ErrUnavailable) }
 
 func runSubscription(
 	ctx context.Context,
-	connection net.Conn,
-	decoder *json.Decoder,
+	decoder *bufio.Scanner,
 	request Request,
 	snapshots chan<- registry.StateSnapshot,
 	errorsChannel chan<- error,
 ) {
 	defer close(snapshots)
 	defer close(errorsChannel)
-	defer func() { _ = connection.Close() }()
-	stopClose := context.AfterFunc(ctx, func() { _ = connection.Close() })
-	defer stopClose()
 
 	for {
-		var response Response
-		if err := decoder.Decode(&response); err != nil {
+		response, err := readResponse(decoder)
+		if err != nil {
 			if ctx.Err() == nil {
 				errorsChannel <- fmt.Errorf("reading subscription: %w", err)
 			}
@@ -246,26 +266,65 @@ func (c *Client) roundTrip(ctx context.Context, request Request) (Response, erro
 	if err != nil {
 		return Response{}, err
 	}
-	defer func() { _ = connection.Close() }()
+	defer closeOnCancel(ctx, connection)()
 
-	request = c.prepareRequest(request)
-	if deadline, ok := ctx.Deadline(); ok {
-		_ = connection.SetDeadline(deadline)
-	}
+	request = request.prepare()
 	//nolint:musttag // Request defines the complete public JSON protocol schema.
 	if err := json.NewEncoder(connection).Encode(request); err != nil {
-		return Response{}, fmt.Errorf("sending broker request: %w", err)
+		return Response{}, fmt.Errorf("sending broker request: %w", contextError(ctx, err))
 	}
 
-	var response Response
-	if err := json.NewDecoder(connection).Decode(&response); err != nil {
-		return Response{}, fmt.Errorf("reading broker response: %w", err)
+	response, err := readResponse(responseScanner(connection))
+	if err != nil {
+		return Response{}, fmt.Errorf("reading broker response: %w", contextError(ctx, err))
 	}
 	if err := validateResponse(request, response); err != nil {
 		return Response{}, err
 	}
 
 	return response, nil
+}
+
+func responseScanner(reader io.Reader) *bufio.Scanner {
+	scanner := bufio.NewScanner(reader)
+	scanner.Buffer(nil, MaxResponseBytes)
+	return scanner
+}
+
+func readResponse(scanner *bufio.Scanner) (Response, error) {
+	if !scanner.Scan() {
+		if err := scanner.Err(); err != nil {
+			return Response{}, fmt.Errorf("%w: reading response frame: %w", ErrProtocol, err)
+		}
+		return Response{}, io.EOF
+	}
+	var response Response
+	if err := json.Unmarshal(scanner.Bytes(), &response); err != nil {
+		return Response{}, fmt.Errorf("%w: decoding response frame: %w", ErrProtocol, err)
+	}
+	return response, nil
+}
+
+func contextError(ctx context.Context, err error) error {
+	if ctx.Err() != nil {
+		return fmt.Errorf("broker operation canceled: %w", ctx.Err())
+	}
+	return err
+}
+
+// closeOnCancel connects cancellation to socket I/O and returns joined cleanup.
+func closeOnCancel(ctx context.Context, connection net.Conn) func() {
+	done := make(chan struct{})
+	stop := context.AfterFunc(ctx, func() {
+		defer close(done)
+		_ = connection.Close() // Closing an already-closed socket has no remaining work.
+	})
+	return func() {
+		_ = connection.Close() // All I/O has ended; close errors cannot change its result.
+		if !stop() {
+			<-done
+		}
+	}
 }
 
 func (c *Client) dial(ctx context.Context) (net.Conn, error) {
@@ -303,7 +362,7 @@ func newRequest(method string) Request {
 	}
 }
 
-func (c *Client) prepareRequest(request Request) Request {
+func (request Request) prepare() Request {
 	request.Version = ProtocolVersion
 	if request.ID == "" {
 		request.ID = strconv.FormatUint(nextRequestID.Add(1), 10)
@@ -339,6 +398,3 @@ func (e *RemoteError) Error() string {
 
 	return e.Code + ": " + e.Message
 }
-
-// IsUnavailable reports whether err means no broker accepted the connection.
-func IsUnavailable(err error) bool { return errors.Is(err, ErrUnavailable) }

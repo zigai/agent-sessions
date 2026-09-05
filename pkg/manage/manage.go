@@ -22,6 +22,8 @@ var (
 
 // Config identifies the AHT binary, registry, and tracker settings managed by a Manager.
 // Empty fields use the current user's defaults.
+// A bare Binary name (including the default "aht") is looked up on PATH when
+// managing the tracker; a relative or absolute path is used as supplied.
 type Config struct {
 	Binary             string
 	StorePath          string
@@ -83,6 +85,14 @@ type IntegrationStatus struct {
 	Paths    []string
 	Message  string
 	NextStep string
+}
+
+func (s ArtifactStatus) IsValid() bool {
+	switch s {
+	case ArtifactMissing, ArtifactCurrent, ArtifactStale, ArtifactForeign:
+		return true
+	}
+	return false
 }
 
 // SupportedHarnesses returns the harnesses with managed integrations.

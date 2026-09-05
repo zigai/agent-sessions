@@ -3,6 +3,7 @@ package registry
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -158,7 +159,7 @@ func TestProcessReplacementClearsScreenActivity(t *testing.T) {
 	}
 	staleIdle := ActivityIdle
 	staleScreen := &ScreenObservation{Activity: staleIdle, Authority: "screen", Reason: "manifest_rule", RuleID: "input_prompt", ManifestSource: "bundled", ManifestVersion: 1, FallbackForIntegration: "", Process: oldProcess, ObservedAt: at.Add(500 * time.Millisecond)}
-	if _, err := store.Observe(context.Background(), Observation{Source: ObservationSourceScreen, Evidence: ObservationEvidenceScreenState, Harness: HarnessCodex, Identity: ObservationIdentity{SessionID: "same"}, Activity: &staleIdle, Process: &oldProcess, Screen: staleScreen, ObservedAt: at.Add(500 * time.Millisecond)}); err == nil || !strings.Contains(err.Error(), ErrObservationConflict.Error()) {
+	if _, err := store.Observe(context.Background(), Observation{Source: ObservationSourceScreen, Evidence: ObservationEvidenceScreenState, Harness: HarnessCodex, Identity: ObservationIdentity{SessionID: "same"}, Activity: &staleIdle, Process: &oldProcess, Screen: staleScreen, ObservedAt: at.Add(500 * time.Millisecond)}); !errors.Is(err, ErrObservationConflict) {
 		t.Fatalf("stale old-process screen error = %v, want conflict", err)
 	}
 	session, err = store.Get(context.Background(), session.ID)

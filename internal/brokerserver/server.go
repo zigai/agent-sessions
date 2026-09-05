@@ -39,6 +39,7 @@ var (
 	errBatchTooLarge       = errors.New("observe_batch has too many observations")
 	errSessionIDRequired   = errors.New("get requires session_id")
 	errPathNotSocket       = errors.New("broker path is not a socket")
+	errResponseTooLarge    = errors.New("broker response exceeds frame limit")
 )
 
 // Server owns the local socket API for one in-memory registry.
@@ -89,15 +90,34 @@ func (s *Server) Serve(ctx context.Context) error {
 		return err
 	}
 	defer cleanupLocal(s.socketPath, listener)
-	stopClose := context.AfterFunc(ctx, func() { _ = listener.Close() })
-	defer stopClose()
+	return s.serve(ctx, listener)
+}
+
+func (s *Server) serve(ctx context.Context, listener net.Listener) error {
+	ctx, cancel := context.WithCancel(ctx)
+	var connections sync.WaitGroup
+	defer func() {
+		cancel()
+		connections.Wait()
+	}()
+	closeDone := make(chan struct{})
+	stopClose := context.AfterFunc(ctx, func() {
+		defer close(closeDone)
+		_ = listener.Close()
+	})
+	defer func() {
+		cancel()
+		_ = listener.Close()
+		if !stopClose() {
+			<-closeDone
+		}
+	}()
 
 	if s.ready != nil {
 		close(s.ready)
 	}
 
 	semaphore := make(chan struct{}, s.maxConnections)
-	var connections sync.WaitGroup
 	for {
 		connection, acceptErr := listener.Accept()
 		if acceptErr != nil {
@@ -119,16 +139,24 @@ func (s *Server) Serve(ctx context.Context) error {
 		}
 	}
 
-	connections.Wait()
-
 	return nil
 }
 
 func (s *Server) handleConnection(ctx context.Context, connection net.Conn) {
-	defer func() { _ = connection.Close() }()
-	stopClose := context.AfterFunc(ctx, func() { _ = connection.Close() })
-	defer stopClose()
-	_ = connection.SetReadDeadline(time.Now().Add(handshakeTimeout))
+	closeDone := make(chan struct{})
+	stopClose := context.AfterFunc(ctx, func() {
+		defer close(closeDone)
+		_ = connection.Close()
+	})
+	defer func() {
+		_ = connection.Close()
+		if !stopClose() {
+			<-closeDone
+		}
+	}()
+	if err := connection.SetReadDeadline(time.Now().Add(handshakeTimeout)); err != nil {
+		return
+	}
 
 	scanner := bufio.NewScanner(connection)
 	scanner.Buffer(make([]byte, scannerInitialBytes), maxRequestBytes)
@@ -146,7 +174,9 @@ func (s *Server) handleConnection(ctx context.Context, connection net.Conn) {
 		_ = writeResponse(connection, errorResponse(request.ID, "invalid_request", err))
 		return
 	}
-	_ = connection.SetReadDeadline(time.Time{})
+	if err := connection.SetReadDeadline(time.Time{}); err != nil {
+		return
+	}
 
 	if request.Method == broker.MethodSubscribe {
 		s.serveSubscription(ctx, connection, request)
@@ -316,13 +346,25 @@ func operationErrorResponse(id string, err error) broker.Response {
 }
 
 func writeResponse(connection net.Conn, response broker.Response) error {
+	encoded, err := json.Marshal(response)
+	if err != nil {
+		return fmt.Errorf("encoding broker response: %w", err)
+	}
+	if len(encoded) >= broker.MaxResponseBytes {
+		encoded, err = json.Marshal(errorResponse(response.ID, "response_too_large", errResponseTooLarge))
+		if err != nil {
+			return fmt.Errorf("encoding oversized-response error: %w", err)
+		}
+	}
 	if err := connection.SetWriteDeadline(time.Now().Add(writeTimeout)); err != nil {
 		return fmt.Errorf("setting broker write deadline: %w", err)
 	}
-	if err := json.NewEncoder(connection).Encode(response); err != nil {
+	if _, err := connection.Write(append(encoded, '\n')); err != nil {
 		return fmt.Errorf("writing broker response: %w", err)
 	}
-	_ = connection.SetWriteDeadline(time.Time{})
+	if err := connection.SetWriteDeadline(time.Time{}); err != nil {
+		return fmt.Errorf("clearing broker write deadline: %w", err)
+	}
 
 	return nil
 }

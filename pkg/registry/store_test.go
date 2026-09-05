@@ -333,7 +333,7 @@ func TestSummariesGroupNativeMultiplexerSessions(t *testing.T) {
 	}
 }
 
-func TestValidateObservationRejectsCorruptBoundaryValues(t *testing.T) {
+func TestObservationValidateRejectsCorruptBoundaryValues(t *testing.T) {
 	t.Parallel()
 
 	base := Observation{
@@ -361,8 +361,8 @@ func TestValidateObservationRejectsCorruptBoundaryValues(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			observation := base
 			test.mutate(&observation)
-			if err := ValidateObservation(observation); !errors.Is(err, ErrInvalidObservation) {
-				t.Fatalf("ValidateObservation() error = %v, want %v", err, ErrInvalidObservation)
+			if err := observation.Validate(); !errors.Is(err, ErrInvalidObservation) {
+				t.Fatalf("Observation.Validate() error = %v, want %v", err, ErrInvalidObservation)
 			}
 		})
 	}
@@ -417,7 +417,7 @@ func TestStoreRejectsInvalidMutationBeforePersisting(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := store.withSnapshot(func(snap *snapshot) error {
+	err := store.withSnapshot(t.Context(), func(snap *snapshot) error {
 		id, session := onlyStoredSession(snap.Sessions)
 		session.Activity = nil
 		snap.Sessions[id] = session

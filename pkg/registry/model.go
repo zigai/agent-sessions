@@ -36,6 +36,22 @@ const (
 	HarnessHermes   Harness = "hermes"
 )
 
+func (h Harness) IsValid() bool {
+	switch h {
+	case HarnessClaude, HarnessCodex, HarnessCursor, HarnessCopilot, HarnessCline,
+		HarnessKimiCode, HarnessGrok, HarnessGoose, HarnessPi, HarnessOmp,
+		HarnessOpenCode, HarnessAgy, HarnessKilo, HarnessDroid, HarnessOpenClaw,
+		HarnessHermes:
+		return true
+	}
+	return false
+}
+
+// AllHarnesses returns a slice containing every canonical harness.
+func AllHarnesses() []Harness {
+	return slices.Clone(allHarnesses)
+}
+
 var (
 	ErrUnknownHarness     = errors.New("unknown harness")
 	ErrUnknownPresence    = errors.New("unknown presence")
@@ -43,6 +59,13 @@ var (
 	ErrUnknownSource      = errors.New("unknown observation source")
 	ErrUnknownEvidence    = errors.New("unknown observation evidence")
 	ErrInvalidObservation = errors.New("invalid observation")
+
+	allHarnesses = []Harness{
+		HarnessClaude, HarnessCodex, HarnessCursor, HarnessCopilot, HarnessCline,
+		HarnessKimiCode, HarnessGrok, HarnessGoose, HarnessPi, HarnessOmp,
+		HarnessOpenCode, HarnessAgy, HarnessKilo, HarnessDroid, HarnessOpenClaw,
+		HarnessHermes,
+	}
 )
 
 type Presence string
@@ -52,6 +75,14 @@ const (
 	PresenceGone    Presence = "gone"
 	PresenceUnknown Presence = "unknown"
 )
+
+func (p Presence) IsValid() bool {
+	switch p {
+	case PresenceLive, PresenceGone, PresenceUnknown:
+		return true
+	}
+	return false
+}
 
 type Activity string
 
@@ -64,6 +95,14 @@ const (
 	ActivityUnknown     Activity = "unknown"
 )
 
+func (a Activity) IsValid() bool {
+	switch a {
+	case ActivityRunning, ActivityWaiting, ActivityIdle, ActivityFailed, ActivityInterrupted, ActivityUnknown:
+		return true
+	}
+	return false
+}
+
 type ObservationSource string
 
 const (
@@ -74,6 +113,15 @@ const (
 	ObservationSourceCatalog     ObservationSource = "catalog"
 	ObservationSourceScreen      ObservationSource = "screen"
 )
+
+func (s ObservationSource) IsValid() bool {
+	switch s {
+	case ObservationSourceNative, ObservationSourceProcess, ObservationSourceTmux,
+		ObservationSourceMultiplexer, ObservationSourceCatalog, ObservationSourceScreen:
+		return true
+	}
+	return false
+}
 
 type ObservationEvidence string
 
@@ -86,6 +134,16 @@ const (
 	ObservationEvidenceScreenState         ObservationEvidence = "screen_state"
 )
 
+func (e ObservationEvidence) IsValid() bool {
+	switch e {
+	case ObservationEvidenceNativeEvent, ObservationEvidenceProcessPresence,
+		ObservationEvidenceTmuxLocation, ObservationEvidenceMultiplexerLocation,
+		ObservationEvidenceCatalogMetadata, ObservationEvidenceScreenState:
+		return true
+	}
+	return false
+}
+
 type NativeLifecycle string
 
 const (
@@ -93,6 +151,14 @@ const (
 	NativeLifecycleResume NativeLifecycle = "resume"
 	NativeLifecycleEnd    NativeLifecycle = "end"
 )
+
+func (l NativeLifecycle) IsValid() bool {
+	switch l {
+	case NativeLifecycleStart, NativeLifecycleResume, NativeLifecycleEnd:
+		return true
+	}
+	return false
+}
 
 type TmuxContext struct {
 	Inside          bool   `json:"inside"`
@@ -119,6 +185,14 @@ const (
 	MultiplexerZellij MultiplexerKind = "zellij"
 	MultiplexerHerdr  MultiplexerKind = "herdr"
 )
+
+func (k MultiplexerKind) IsValid() bool {
+	switch k {
+	case MultiplexerTmux, MultiplexerZellij, MultiplexerHerdr:
+		return true
+	}
+	return false
+}
 
 // MultiplexerContext identifies an addressable terminal pane. Window fields
 // represent tmux windows, while workspace and tab fields represent native
@@ -333,6 +407,7 @@ type Filter struct {
 
 type Summary struct {
 	MultiplexerKind        MultiplexerKind `json:"multiplexer_kind,omitempty"`
+	MultiplexerServerID    string          `json:"multiplexer_server_id,omitempty"`
 	MultiplexerSessionID   string          `json:"multiplexer_session_id,omitempty"`
 	MultiplexerSessionName string          `json:"multiplexer_session_name,omitempty"`
 	TmuxSessionID          string          `json:"tmux_session_id,omitempty"`
@@ -344,22 +419,12 @@ type Summary struct {
 	Running                int             `json:"running"`
 	Waiting                int             `json:"waiting"`
 	Idle                   int             `json:"idle"`
+	Failed                 int             `json:"failed"`
+	Interrupted            int             `json:"interrupted"`
 	ActivityUnknown        int             `json:"activity_unknown"`
 }
 
 type SummaryOptions struct{ Filter Filter }
-
-func validHarness(harness Harness) bool {
-	switch harness {
-	case HarnessClaude, HarnessCodex, HarnessCursor, HarnessCopilot, HarnessCline,
-		HarnessKimiCode, HarnessGrok, HarnessGoose, HarnessPi, HarnessOmp,
-		HarnessOpenCode, HarnessAgy, HarnessKilo, HarnessDroid, HarnessOpenClaw,
-		HarnessHermes:
-		return true
-	default:
-		return false
-	}
-}
 
 func NormalizePresence(value string) (Presence, error) {
 	switch strings.ToLower(strings.TrimSpace(value)) {
@@ -448,28 +513,24 @@ func NormalizeLifecycle(value string) (NativeLifecycle, error) {
 	}
 }
 
+// Validate enforces source-specific evidence invariants for an observation.
+//
 //nolint:gocognit,cyclop,maintidx // validation enforces source-specific evidence invariants in one place
-func ValidateObservation(observation Observation) error {
+func (observation Observation) Validate() error {
 	if observation.Harness == "" {
 		return fmt.Errorf("%w: %w", ErrInvalidObservation, ErrHarnessRequired)
 	}
-	if !validHarness(observation.Harness) {
+	if !observation.Harness.IsValid() {
 		return fmt.Errorf("%w: harness %q is not canonical", ErrInvalidObservation, observation.Harness)
 	}
-	if observation.Lifecycle != nil {
-		if normalized, err := NormalizeLifecycle(string(*observation.Lifecycle)); err != nil || normalized != *observation.Lifecycle {
-			return fmt.Errorf("%w: lifecycle %q is invalid", ErrInvalidObservation, *observation.Lifecycle)
-		}
+	if observation.Lifecycle != nil && !observation.Lifecycle.IsValid() {
+		return fmt.Errorf("%w: lifecycle %q is invalid", ErrInvalidObservation, *observation.Lifecycle)
 	}
-	if observation.Presence != nil {
-		if normalized, err := NormalizePresence(string(*observation.Presence)); err != nil || normalized == "" || normalized != *observation.Presence {
-			return fmt.Errorf("%w: presence %q is invalid", ErrInvalidObservation, *observation.Presence)
-		}
+	if observation.Presence != nil && !observation.Presence.IsValid() {
+		return fmt.Errorf("%w: presence %q is invalid", ErrInvalidObservation, *observation.Presence)
 	}
-	if observation.Activity != nil {
-		if normalized, err := NormalizeActivity(string(*observation.Activity)); err != nil || normalized == "" || normalized != *observation.Activity {
-			return fmt.Errorf("%w: activity %q is invalid", ErrInvalidObservation, *observation.Activity)
-		}
+	if observation.Activity != nil && !observation.Activity.IsValid() {
+		return fmt.Errorf("%w: activity %q is invalid", ErrInvalidObservation, *observation.Activity)
 	}
 	if observation.Process != nil && (!observation.Process.Complete() || observation.Process.PPID < 0 || observation.Process.ProcessGroupID < 0) {
 		return fmt.Errorf("%w: process identity is invalid", ErrInvalidObservation)
@@ -481,7 +542,7 @@ func ValidateObservation(observation Observation) error {
 		if observation.Multiplexer.PanePID < 0 {
 			return fmt.Errorf("%w: multiplexer pane pid is invalid", ErrInvalidObservation)
 		}
-		if !observation.Multiplexer.Empty() && !validMultiplexerKind(observation.Multiplexer.Kind) {
+		if !observation.Multiplexer.Empty() && !observation.Multiplexer.Kind.IsValid() {
 			return fmt.Errorf("%w: multiplexer kind %q is invalid", ErrInvalidObservation, observation.Multiplexer.Kind)
 		}
 	}
@@ -569,15 +630,6 @@ func ValidateObservation(observation Observation) error {
 		return fmt.Errorf("%w: identity is required", ErrInvalidObservation)
 	}
 	return nil
-}
-
-func validMultiplexerKind(kind MultiplexerKind) bool {
-	switch kind {
-	case MultiplexerTmux, MultiplexerZellij, MultiplexerHerdr:
-		return true
-	default:
-		return false
-	}
 }
 
 func sessionIDForObservation(observation Observation) string {

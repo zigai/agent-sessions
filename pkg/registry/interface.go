@@ -5,6 +5,9 @@ import (
 	"time"
 )
 
+// Store is the compatibility superset shared by public store implementations.
+// Consumers should define smaller interfaces containing only the operations
+// they need; WithOptions remains here for existing interface-typed callers.
 type Store interface {
 	Observe(ctx context.Context, observation Observation) (Session, error)
 	ObserveBatch(ctx context.Context, observations []Observation) ([]Session, error)

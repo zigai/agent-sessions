@@ -3,22 +3,26 @@
 package registry
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
 	"syscall"
+	"time"
 )
+
+const storeLockRetryInterval = 10 * time.Millisecond
 
 type storeLock struct {
 	file *os.File
 }
 
-func openStoreLock(path string) (*storeLock, error) {
+func openStoreLock(ctx context.Context, path string) (*storeLock, error) {
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("opening store lock: %w", err)
 	}
-	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX); err != nil {
+	if err := acquireStoreLock(ctx, file); err != nil {
 		if closeErr := file.Close(); closeErr != nil {
 			return nil, errors.Join(
 				fmt.Errorf("locking store: %w", err),
@@ -30,6 +34,26 @@ func openStoreLock(path string) (*storeLock, error) {
 	}
 
 	return &storeLock{file: file}, nil
+}
+
+func acquireStoreLock(ctx context.Context, file *os.File) error {
+	for {
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("waiting for store lock: %w", err)
+		}
+		err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		if err == nil {
+			return nil
+		}
+		if !errors.Is(err, syscall.EWOULDBLOCK) && !errors.Is(err, syscall.EINTR) {
+			return fmt.Errorf("acquiring file lock: %w", err)
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("waiting for store lock: %w", ctx.Err())
+		case <-time.After(storeLockRetryInterval):
+		}
+	}
 }
 
 func (l *storeLock) Close() error {

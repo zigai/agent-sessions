@@ -36,6 +36,7 @@ type MemoryStore struct {
 	persistedRevision uint64
 	stateChanged      chan struct{}
 	dirty             chan struct{}
+	flush             chan struct{}
 }
 
 var _ Store = (*MemoryStore)(nil)
@@ -58,6 +59,7 @@ func OpenMemoryStore(path string) (*MemoryStore, error) {
 		persistedRevision: 0,
 		stateChanged:      make(chan struct{}),
 		dirty:             make(chan struct{}, 1),
+		flush:             make(chan struct{}, 1),
 	}, nil
 }
 
@@ -187,6 +189,10 @@ func (s *MemoryStore) GC(ctx context.Context, deleteAfter time.Duration) (GCResu
 	}
 
 	s.mu.Lock()
+	if err := ctx.Err(); err != nil {
+		s.mu.Unlock()
+		return GCResult{}, fmt.Errorf("collecting registry: %w", err)
+	}
 	now := s.now().UTC()
 	candidate := cloneRegistrySnapshotForMutation(s.snapshot)
 	deleted := deleteExpiredGoneSessions(
@@ -273,6 +279,14 @@ func (s *MemoryStore) stateLocked(filter Filter) StateSnapshot {
 
 // Flush atomically persists the latest in-memory snapshot.
 func (s *MemoryStore) Flush(ctx context.Context) error {
+	// Serialize the complete read/write/acknowledge transaction, not only its
+	// snapshot copy: an older concurrent flush must never replace a newer one.
+	select {
+	case s.flush <- struct{}{}:
+		defer func() { <-s.flush }()
+	case <-ctx.Done():
+		return fmt.Errorf("waiting to flush registry: %w", ctx.Err())
+	}
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("flushing registry: %w", err)
 	}
@@ -286,6 +300,9 @@ func (s *MemoryStore) Flush(ctx context.Context) error {
 	snapshot := cloneRegistrySnapshot(s.snapshot)
 	s.mu.RUnlock()
 
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("flushing registry: %w", err)
+	}
 	if err := writeSnapshotAtomic(s.path, snapshot); err != nil {
 		return err
 	}

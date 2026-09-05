@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"maps"
 	"os"
 	"path/filepath"
@@ -19,6 +20,7 @@ const (
 	storeSchemaVersion      = 2
 	maxObservedAtFutureSkew = 5 * time.Minute
 	automaticGoneRetention  = 5 * time.Minute
+	maxSnapshotBytes        = 64 << 20
 )
 
 // IntegrationActivityLease is the maximum age of a matching integration
@@ -31,6 +33,7 @@ var (
 	ErrObservationIdentity = errors.New("observation requires identity")
 	ErrObservationConflict = errors.New("observation conflicts with accepted evidence")
 	ErrCorruptStore        = errors.New("corrupt registry store")
+	ErrStoreTooLarge       = errors.New("registry store exceeds size limit")
 )
 
 type UnsupportedSchemaError struct {
@@ -104,7 +107,7 @@ func (s *FileStore) ObserveBatch(ctx context.Context, observations []Observation
 
 	receivedAt := s.now().UTC()
 	var saved []Session
-	err := s.withSnapshot(func(snap *snapshot) error {
+	err := s.withSnapshot(ctx, func(snap *snapshot) error {
 		var err error
 		saved, err = applyObservationBatch(ctx, snap, observations, receivedAt)
 
@@ -134,7 +137,7 @@ func applyObservationBatch(
 		if observation.ObservedAt.IsZero() {
 			observation.ObservedAt = receivedAt
 		}
-		if err := ValidateObservation(observation); err != nil {
+		if err := observation.Validate(); err != nil {
 			return nil, err
 		}
 
@@ -1028,8 +1031,8 @@ func (s *FileStore) SummaryByTmuxSessionWithOptions(ctx context.Context, options
 }
 
 func summariesForSessions(sessions []Session) []Summary {
-	byKey := make(map[string]*Summary)
-	order := make([]string, 0)
+	byKey := make(map[summaryKey]*Summary)
+	order := make([]summaryKey, 0)
 	for _, session := range sessions {
 		populateMultiplexerProjection(&session)
 		key := summaryKeyForSession(session)
@@ -1037,36 +1040,16 @@ func summariesForSessions(sessions []Session) []Summary {
 		if summary == nil {
 			summary = &Summary{
 				MultiplexerKind: session.Multiplexer.Kind, MultiplexerSessionID: session.Multiplexer.SessionID,
+				MultiplexerServerID:    session.Multiplexer.ServerID,
 				MultiplexerSessionName: session.Multiplexer.SessionName,
 				TmuxSessionID:          session.Tmux.SessionID, TmuxSessionName: session.Tmux.SessionName,
 				Total: 0, Live: 0, Gone: 0, PresenceUnknown: 0,
-				Running: 0, Waiting: 0, Idle: 0, ActivityUnknown: 0,
+				Running: 0, Waiting: 0, Idle: 0, Failed: 0, Interrupted: 0, ActivityUnknown: 0,
 			}
 			byKey[key] = summary
 			order = append(order, key)
 		}
-		summary.Total++
-		switch session.Presence {
-		case PresenceLive:
-			summary.Live++
-		case PresenceGone:
-			summary.Gone++
-		case PresenceUnknown:
-			summary.PresenceUnknown++
-		}
-		if session.Presence == PresenceGone {
-			continue
-		}
-		switch {
-		case session.Activity == nil, *session.Activity == ActivityUnknown:
-			summary.ActivityUnknown++
-		case *session.Activity == ActivityRunning:
-			summary.Running++
-		case *session.Activity == ActivityWaiting:
-			summary.Waiting++
-		case *session.Activity == ActivityIdle:
-			summary.Idle++
-		}
+		summary.addSession(session)
 	}
 	result := make([]Summary, 0, len(order))
 	for _, key := range order {
@@ -1075,15 +1058,51 @@ func summariesForSessions(sessions []Session) []Summary {
 	return result
 }
 
-func summaryKeyForSession(session Session) string {
+func (s *Summary) addSession(session Session) {
+	s.Total++
+	switch session.Presence {
+	case PresenceLive:
+		s.Live++
+	case PresenceGone:
+		s.Gone++
+	case PresenceUnknown:
+		s.PresenceUnknown++
+	}
+	if session.Presence == PresenceGone {
+		return
+	}
+	switch {
+	case session.Activity == nil, *session.Activity == ActivityUnknown:
+		s.ActivityUnknown++
+	case *session.Activity == ActivityRunning:
+		s.Running++
+	case *session.Activity == ActivityWaiting:
+		s.Waiting++
+	case *session.Activity == ActivityIdle:
+		s.Idle++
+	case *session.Activity == ActivityFailed:
+		s.Failed++
+	case *session.Activity == ActivityInterrupted:
+		s.Interrupted++
+	}
+}
+
+type summaryKey struct {
+	kind   MultiplexerKind
+	server string
+	id     string
+	name   string
+}
+
+func summaryKeyForSession(session Session) summaryKey {
 	populateMultiplexerProjection(&session)
+	key := summaryKey{kind: session.Multiplexer.Kind, server: session.Multiplexer.ServerID, id: "", name: ""}
 	if session.Multiplexer.SessionID != "" {
-		return string(session.Multiplexer.Kind) + ":" + session.Multiplexer.SessionID
+		key.id = session.Multiplexer.SessionID
+		return key
 	}
-	if session.Multiplexer.SessionName != "" {
-		return string(session.Multiplexer.Kind) + "-name:" + session.Multiplexer.SessionName
-	}
-	return "unknown"
+	key.name = session.Multiplexer.SessionName
+	return key
 }
 
 func (s *FileStore) GC(ctx context.Context, deleteAfter time.Duration) (GCResult, error) {
@@ -1092,7 +1111,7 @@ func (s *FileStore) GC(ctx context.Context, deleteAfter time.Duration) (GCResult
 	}
 	now := s.now().UTC()
 	result := GCResult{Deleted: 0, Remaining: 0}
-	err := s.withSnapshot(func(snap *snapshot) error {
+	err := s.withSnapshot(ctx, func(snap *snapshot) error {
 		result.Deleted = deleteExpiredGoneSessions(
 			snap.Sessions,
 			now,
@@ -1142,18 +1161,23 @@ func (s *FileStore) Reset(ctx context.Context) (ResetResult, error) {
 	if err := os.MkdirAll(filepath.Dir(s.path), 0o700); err != nil {
 		return ResetResult{}, fmt.Errorf("creating state directory: %w", err)
 	}
-	lock, err := openStoreLock(s.path + ".lock")
+	lock, err := openStoreLock(ctx, s.path+".lock")
 	if err != nil {
 		return ResetResult{}, err
 	}
-	old, err := os.ReadFile(s.path)
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
+	old, err := readSnapshotFile(s.path)
+	// Reset also recovers oversized/corrupt stores; their cleared count is
+	// unknown, just as it is for malformed JSON, but reading remains bounded.
+	if err != nil && !errors.Is(err, os.ErrNotExist) && !errors.Is(err, ErrStoreTooLarge) {
 		return ResetResult{}, closeStoreLock(lock, fmt.Errorf("reading store: %w", err))
 	}
 	result.Cleared = storedSessionCount(old)
 	snap := newSnapshot()
 	snap.UpdatedAt = now
 	result.Remaining = 0
+	if err := ctx.Err(); err != nil {
+		return ResetResult{}, closeStoreLock(lock, fmt.Errorf("resetting store: %w", err))
+	}
 	if err := closeStoreLock(lock, writeSnapshotAtomic(s.path, snap)); err != nil {
 		return ResetResult{}, err
 	}
@@ -1182,11 +1206,11 @@ func storedSessionCount(data []byte) int {
 	return len(sessions)
 }
 
-func (s *FileStore) withSnapshot(mutator func(*snapshot) error) error {
+func (s *FileStore) withSnapshot(ctx context.Context, mutator func(*snapshot) error) error {
 	if err := os.MkdirAll(filepath.Dir(s.path), 0o700); err != nil {
 		return fmt.Errorf("creating state directory: %w", err)
 	}
-	lock, err := openStoreLock(s.path + ".lock")
+	lock, err := openStoreLock(ctx, s.path+".lock")
 	if err != nil {
 		return err
 	}
@@ -1200,6 +1224,9 @@ func (s *FileStore) withSnapshot(mutator func(*snapshot) error) error {
 	if err := validateSnapshot(snap); err != nil {
 		return closeStoreLock(lock, fmt.Errorf("validating updated store: %w", err))
 	}
+	if err := ctx.Err(); err != nil {
+		return closeStoreLock(lock, fmt.Errorf("updating store: %w", err))
+	}
 	return closeStoreLock(lock, writeSnapshotAtomic(s.path, snap))
 }
 
@@ -1211,7 +1238,7 @@ func closeStoreLock(lock *storeLock, err error) error {
 }
 
 func (s *FileStore) load() (snapshot, error) {
-	data, err := os.ReadFile(s.path)
+	data, err := readSnapshotFile(s.path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return newSnapshot(), nil
@@ -1237,6 +1264,30 @@ func (s *FileStore) load() (snapshot, error) {
 		return snapshot{}, err
 	}
 	return snap, nil
+}
+
+func readSnapshotFile(path string) ([]byte, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("opening store: %w", err)
+	}
+	// Closing a read-only snapshot has no pending writes to finalize.
+	defer func() { _ = file.Close() }()
+	info, err := file.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("stating store: %w", err)
+	}
+	if info.Size() > maxSnapshotBytes {
+		return nil, ErrStoreTooLarge
+	}
+	data, err := io.ReadAll(io.LimitReader(file, maxSnapshotBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("reading store: %w", err)
+	}
+	if len(data) > maxSnapshotBytes {
+		return nil, ErrStoreTooLarge
+	}
+	return data, nil
 }
 
 // repairStaleNativeRevivals normalizes snapshots written by versions that
@@ -1294,7 +1345,7 @@ func storedSessionIdentityCorruption(id string, session Session) string {
 		return "map key and session id differ"
 	case session.SchemaVersion != storeSchemaVersion:
 		return "invalid session schema version"
-	case !validHarness(session.Harness):
+	case !session.Harness.IsValid():
 		return "invalid harness"
 	case session.CreatedAt.IsZero() || session.UpdatedAt.IsZero() || session.UpdatedAt.Before(session.CreatedAt):
 		return "invalid session timestamps"
@@ -1317,7 +1368,7 @@ func storedSessionStateCorruption(session Session) string {
 		return "invalid tmux pane pid"
 	case session.Multiplexer.PanePID < 0:
 		return "invalid multiplexer pane pid"
-	case !session.Multiplexer.Empty() && !validMultiplexerKind(session.Multiplexer.Kind):
+	case !session.Multiplexer.Empty() && !session.Multiplexer.Kind.IsValid():
 		return "invalid multiplexer kind"
 	case session.ActivityDecision != nil && !validStoredActivityDecision(*session.ActivityDecision):
 		return "invalid activity decision"
@@ -1374,7 +1425,7 @@ func validStoredMultiplexerObservation(observation MultiplexerObservation) bool 
 	return !observation.ObservedAt.IsZero() &&
 		validStoredProcess(observation.Process, false) &&
 		observation.Context.PanePID >= 0 &&
-		(observation.Context.Empty() || validMultiplexerKind(observation.Context.Kind))
+		(observation.Context.Empty() || observation.Context.Kind.IsValid())
 }
 
 func validStoredCatalogObservation(observation CatalogObservation) bool {
@@ -1401,21 +1452,15 @@ func validStoredActivityDecision(decision ActivityDecision) bool {
 }
 
 func validStoredPresence(presence Presence) bool {
-	normalized, err := NormalizePresence(string(presence))
-	return err == nil && normalized != "" && normalized == presence
+	return presence.IsValid()
 }
 
 func validStoredActivity(activity Activity) bool {
-	normalized, err := NormalizeActivity(string(activity))
-	return err == nil && normalized != "" && normalized == activity
+	return activity.IsValid()
 }
 
 func validStoredLifecycle(lifecycle *NativeLifecycle) bool {
-	if lifecycle == nil {
-		return true
-	}
-	normalized, err := NormalizeLifecycle(string(*lifecycle))
-	return err == nil && normalized == *lifecycle
+	return lifecycle == nil || lifecycle.IsValid()
 }
 
 func validStoredOptionalPresence(presence *Presence) bool {
@@ -1444,6 +1489,9 @@ func writeSnapshotAtomic(path string, snap snapshot) error {
 		return fmt.Errorf("encoding store: %w", err)
 	}
 	data = append(data, '\n')
+	if len(data) > maxSnapshotBytes {
+		return ErrStoreTooLarge
+	}
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("creating state directory: %w", err)

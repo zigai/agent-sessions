@@ -7,7 +7,7 @@ AHT exposes public Go packages for integrating agent tracking, realtime IPC, mul
 | Package | Import Path | Description |
 |---|---|---|
 | [`aht`](https://pkg.go.dev/github.com/zigai/aht/pkg/aht) | `github.com/zigai/aht/pkg/aht` | **Canonical entrypoint**: primary client and domain models in a single, clean import. |
-| [`broker`](https://pkg.go.dev/github.com/zigai/aht/pkg/broker) | `github.com/zigai/aht/pkg/broker` | Lightweight, dependency-free Unix domain socket client & protocol for direct realtime broker IPC. |
+| [`broker`](https://pkg.go.dev/github.com/zigai/aht/pkg/broker) | `github.com/zigai/aht/pkg/broker` | Unix domain socket client and protocol for direct realtime broker IPC. |
 | [`tmux`](https://pkg.go.dev/github.com/zigai/aht/pkg/tmux) | `github.com/zigai/aht/pkg/tmux` | Inspect and discover tmux environment, current pane, and session topology. |
 | [`client`](https://pkg.go.dev/github.com/zigai/aht/pkg/client) | `github.com/zigai/aht/pkg/client` | High-level client package supporting realtime, durable, or auto-fallback modes. |
 | [`registry`](https://pkg.go.dev/github.com/zigai/aht/pkg/registry) | `github.com/zigai/aht/pkg/registry` | Core domain storage engines (`FileStore`, `MemoryStore`) and interfaces. |
@@ -45,8 +45,8 @@ func main() {
 
 	// Query live sessions
 	sessions, err := client.List(ctx, aht.Filter{
-		Presence:  aht.PresenceLive,
-		Harnesses: []aht.Harness{aht.HarnessClaude, aht.HarnessPi},
+		Presence: aht.PresenceLive,
+		Harness:  aht.HarnessClaude,
 	})
 	if err != nil {
 		log.Fatalf("list sessions failed: %v", err)
@@ -65,6 +65,8 @@ func main() {
 
 ### Channel Streaming
 
+Using the client and context above, subscribe to all live harnesses. Both `Subscribe` and the client's callback-based `Watch` require a running broker, including in auto mode. Close a subscription or cancel its context when finished.
+
 ```go
 sub, err := client.Subscribe(ctx, aht.Filter{Presence: aht.PresenceLive})
 if err != nil {
@@ -74,6 +76,9 @@ defer sub.Close()
 
 for snapshot := range sub.Snapshots {
 	fmt.Printf("Revision %d: %d live agents\n", snapshot.Revision, len(snapshot.Sessions))
+}
+for err := range sub.Errors {
+	log.Printf("subscription ended: %v", err)
 }
 ```
 
@@ -120,10 +125,11 @@ func main() {
 
 ## 3. `pkg/broker`
 
-The `broker` package provides a pure, dependency-free client that speaks line-delimited JSON directly to AHT's Unix domain socket.
+The `broker` package speaks line-delimited JSON directly to AHT's Unix domain socket. It imports `pkg/registry`, including that package's transitive dependencies.
 
 Use `broker` when you are building an integration (like an editor extension, status line, or companion daemon) that requires:
-- Zero third-party dependencies (depends only on the Go standard library and `pkg/registry`).
+
+- Direct access to the broker protocol without the higher-level client's mode selection.
 - Immediate `ErrUnavailable` failures when AHT is stopped, with zero filesystem locking or disk fallback.
 
 ```go
@@ -140,7 +146,7 @@ import (
 
 func main() {
 	ctx := context.Background()
-	client := broker.NewClient(broker.DefaultSocketPath())
+	client := broker.NewClientForSocket(broker.DefaultSocketPath())
 
 	// Stream live snapshots over the Unix socket
 	sub, err := client.Subscribe(ctx, registry.Filter{Presence: registry.PresenceLive})
@@ -157,6 +163,9 @@ func main() {
 		for _, s := range snapshot.Sessions {
 			fmt.Printf("[%s] %s in pane %s\n", s.Harness, s.SessionID, s.Tmux.PaneID)
 		}
+	}
+	for err := range sub.Errors {
+		log.Printf("subscription ended: %v", err)
 	}
 }
 ```
@@ -183,7 +192,7 @@ func main() {
 	// Discover the current tmux pane, window, and server socket
 	current, err := tmux.Current(ctx)
 	if err != nil {
-		fmt.Println("Not running inside tmux")
+		fmt.Println("Failed to inspect current tmux pane:", err)
 		return
 	}
 
@@ -209,7 +218,7 @@ The `registry` package defines the core domain model and storage backends.
 ### Storage Engines
 
 - `FileStore`: Thread-safe, durable file storage backed by JSON and file locking.
-- `MemoryStore`: Fast, in-memory store ideal for unit tests or ephemeral tracking.
+- `MemoryStore`: Loads a durable snapshot once, then keeps observations in memory. Call `Flush` or run `RunPersistence` to persist subsequent changes. Tests can use a snapshot path under `t.TempDir()` without starting persistence.
 
 ### In-Memory Unit Testing Example
 
@@ -217,7 +226,7 @@ The `registry` package defines the core domain model and storage backends.
 package myapp_test
 
 import (
-	"context"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -225,11 +234,14 @@ import (
 )
 
 func TestAgentTracking(t *testing.T) {
-	ctx := context.Background()
-	store := registry.NewMemoryStore()
+	ctx := t.Context()
+	store, err := registry.OpenMemoryStore(filepath.Join(t.TempDir(), "sessions.json"))
+	if err != nil {
+		t.Fatalf("open memory store: %v", err)
+	}
 
 	presence := registry.PresenceLive
-	activity := registry.ActivityWorking
+	activity := registry.ActivityRunning
 
 	// Record an observation
 	session, err := store.Observe(ctx, registry.Observation{
@@ -238,8 +250,8 @@ func TestAgentTracking(t *testing.T) {
 		Evidence: registry.ObservationEvidenceNativeEvent,
 		Identity: registry.ObservationIdentity{
 			SessionID: "test-session-1",
-			Cwd:       "/workspace/repo",
 		},
+		Catalog:    &registry.CatalogMetadata{CWD: "/workspace/repo"},
 		Presence:   &presence,
 		Activity:   &activity,
 		ObservedAt: time.Now().UTC(),
@@ -286,18 +298,18 @@ func main() {
 	fmt.Printf("Installed %s integration at %s (changed: %t)\n", result.Harness, result.Path, result.Changed)
 
 	// 2. Inspect integration status
-	status, err := mgr.IntegrationStatus(ctx, registry.HarnessClaude, manage.IntegrationOptions{})
+	status, err := mgr.IntegrationStatus(ctx, registry.HarnessClaude)
 	if err != nil {
 		log.Fatalf("failed to inspect status: %v", err)
 	}
-	fmt.Printf("Claude integration status: %s (version %s)\n", status.Status, status.InstalledVersion)
+	fmt.Printf("Claude integration status: %s (%s)\n", status.Status, status.Message)
 
-	// 3. Ensure the background tracker daemon is active
+	// 3. Inspect the background tracker daemon (does not start it)
 	serviceStatus, err := mgr.TrackerStatus(ctx)
 	if err != nil {
 		log.Fatalf("failed to get tracker status: %v", err)
 	}
-	fmt.Printf("Tracker active: %t, enabled: %t\n", serviceStatus.Active, serviceStatus.Enabled)
+	fmt.Printf("Tracker running: %t, installed: %t\n", serviceStatus.Running, serviceStatus.Installed)
 }
 ```
 
@@ -314,14 +326,13 @@ import (
 	"fmt"
 
 	"github.com/zigai/aht/pkg/harness"
-	"github.com/zigai/aht/pkg/registry"
 )
 
 func main() {
 	// Parse user input or CLI args into canonical harness IDs
 	id, err := harness.Parse("kimi-code")
 	if err == nil {
-		fmt.Printf("Parsed harness: %s\n", id) // "kimi"
+		fmt.Printf("Parsed harness: %s\n", id) // "kimi-code"
 	}
 
 	// Identify harness from process executable path

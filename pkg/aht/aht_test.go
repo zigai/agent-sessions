@@ -1,12 +1,26 @@
 package aht_test
 
 import (
+	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/zigai/aht/pkg/aht"
 	"github.com/zigai/aht/pkg/registry"
 )
+
+func TestInvalidModeDoesNotCreateState(t *testing.T) {
+	t.Parallel()
+	storePath := filepath.Join(t.TempDir(), "state", "sessions.json")
+	c := aht.New(aht.Config{Mode: "typo", StorePath: storePath})
+	if _, err := c.List(t.Context(), aht.Filter{}); !errors.Is(err, aht.ErrInvalidMode) {
+		t.Fatalf("List error = %v, want ErrInvalidMode", err)
+	}
+	if _, err := os.Stat(filepath.Dir(storePath)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("invalid mode touched state directory: %v", err)
+	}
+}
 
 func TestAhtPackageTypesAndDefaults(t *testing.T) {
 	t.Parallel()

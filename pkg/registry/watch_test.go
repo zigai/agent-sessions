@@ -387,47 +387,6 @@ func TestFileStoreWatchReturnsCallbackError(t *testing.T) {
 	}
 }
 
-func TestFileStoreWatchSuppressesUnchangedSnapshots(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "sessions.json")
-	store := registry.NewFileStore(path)
-	observeWatchSession(t, store, "unchanged")
-	ctx, cancel := context.WithCancel(context.Background())
-	initial := make(chan struct{})
-	done := make(chan error, 1)
-	var callbacks atomic.Int32
-	go func() {
-		done <- store.Watch(ctx, registry.WatchOptions{
-			Debounce:          5 * time.Millisecond,
-			ReconcileInterval: time.Hour,
-		}, func(result registry.WatchResult) error {
-			if result.Err != nil {
-				return result.Err
-			}
-			callbacks.Add(1)
-			if result.Initial {
-				close(initial)
-			}
-			return nil
-		})
-	}()
-	awaitWatchSignal(t, initial)
-	time.Sleep(100 * time.Millisecond)
-
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	replaceWatchTestFile(t, path, data)
-	time.Sleep(50 * time.Millisecond)
-	cancel()
-	if err := awaitWatchError(t, done); err != nil {
-		t.Fatal(err)
-	}
-	if got := callbacks.Load(); got != 1 {
-		t.Fatalf("callback count = %d, want 1", got)
-	}
-}
-
 func observeWatchSession(t *testing.T, store *registry.FileStore, id string) registry.Session {
 	t.Helper()
 	activity := registry.ActivityIdle

@@ -17,6 +17,8 @@ var (
 	ErrProtocol         = errors.New("aht broker protocol error")
 	errHandlerRequired  = errors.New("watch handler is required")
 	ErrRealtimeRequired = errors.New("operation requires a realtime broker connection")
+	// ErrInvalidMode means a client was configured with an unsupported Mode.
+	ErrInvalidMode = errors.New("invalid aht client mode")
 )
 
 // Mode controls how a Client routes operations between the realtime broker
@@ -70,7 +72,7 @@ type (
 	// Summary represents aggregate session counts for a terminal session.
 	Summary = registry.Summary
 
-	// Subscription streams immutable state snapshots from the realtime broker.
+	// Subscription streams independently owned snapshots from the realtime broker.
 	Subscription = broker.Subscription
 )
 
@@ -113,19 +115,32 @@ type Config struct {
 	Mode       Mode
 }
 
+// stateStore is the routing client's operational contract. Public compatibility
+// aliases on registry.Store are not requirements for an internal backend.
+type stateStore interface {
+	Observe(context.Context, registry.Observation) (registry.Session, error)
+	ObserveBatch(context.Context, []registry.Observation) ([]registry.Session, error)
+	List(context.Context, registry.Filter) ([]registry.Session, error)
+	Get(context.Context, string) (registry.Session, error)
+	SummaryByTmuxSession(context.Context, registry.Filter) ([]registry.Summary, error)
+	GC(context.Context, time.Duration) (registry.GCResult, error)
+}
+
 // Client reads and updates agent-harness state through the local AHT broker.
 // Depending on [Mode], operations route to the realtime broker socket, durable
 // disk storage, or auto-fallback between the two.
 type Client struct {
 	mode      Mode
 	storePath string
-	store     registry.Store
+	store     stateStore
 	realtime  *broker.Client
+	configErr error
 }
 
 var _ registry.Store = (*Client)(nil)
 
-// New returns a client for the configured local AHT instance.
+// New returns a client for the configured local AHT instance. An unsupported
+// Mode makes all operations return ErrInvalidMode without performing I/O.
 func New(config Config) *Client {
 	mode := config.Mode
 	if mode == "" {
@@ -144,16 +159,17 @@ func New(config Config) *Client {
 
 	realtime := broker.NewClientForSocket(socketPath)
 
-	var store registry.Store
+	var store stateStore
+	var configErr error
 	switch mode {
 	case ModeRealtimeOnly:
 		store = realtime
 	case ModeDurableOnly:
 		store = registry.NewFileStore(storePath)
 	case ModeAuto:
-		fallthrough
-	default:
 		store = broker.NewStoreForSocket(storePath, socketPath)
+	default:
+		configErr = fmt.Errorf("%w: %q", ErrInvalidMode, mode)
 	}
 
 	return &Client{
@@ -161,6 +177,7 @@ func New(config Config) *Client {
 		storePath: storePath,
 		store:     store,
 		realtime:  realtime,
+		configErr: configErr,
 	}
 }
 
@@ -187,6 +204,9 @@ func (c *Client) Realtime() *broker.Client {
 // Subscribe returns an active subscription streaming state snapshots from the broker.
 // Subscribe requires a running broker and is not supported in [ModeDurableOnly].
 func (c *Client) Subscribe(ctx context.Context, filter registry.Filter) (*broker.Subscription, error) {
+	if c.configErr != nil {
+		return nil, c.configErr
+	}
 	if c.mode == ModeDurableOnly {
 		return nil, ErrRealtimeRequired
 	}
@@ -201,36 +221,54 @@ func (c *Client) Subscribe(ctx context.Context, filter registry.Filter) (*broker
 
 // Ping verifies that the realtime broker is accepting requests.
 func (c *Client) Ping(ctx context.Context) error {
+	if c.configErr != nil {
+		return c.configErr
+	}
 	return publicError(c.realtime.Ping(ctx))
 }
 
-// Observe records one agent-harness observation. When the broker is not
-// running, the client records the observation directly in the durable registry.
+// Observe records one agent-harness observation using the configured Mode.
+// Only ModeAuto falls back to durable storage when the broker is unavailable.
 func (c *Client) Observe(ctx context.Context, observation registry.Observation) (registry.Session, error) {
+	if c.configErr != nil {
+		return registry.Session{}, c.configErr
+	}
 	session, err := c.store.Observe(ctx, observation)
 	return session, publicError(err)
 }
 
 // ObserveBatch atomically records a group of agent-harness observations.
 func (c *Client) ObserveBatch(ctx context.Context, observations []registry.Observation) ([]registry.Session, error) {
+	if c.configErr != nil {
+		return nil, c.configErr
+	}
 	sessions, err := c.store.ObserveBatch(ctx, observations)
 	return sessions, publicError(err)
 }
 
 // List returns all sessions matching filter.
 func (c *Client) List(ctx context.Context, filter registry.Filter) ([]registry.Session, error) {
+	if c.configErr != nil {
+		return nil, c.configErr
+	}
 	sessions, err := c.store.List(ctx, filter)
 	return sessions, publicError(err)
 }
 
 // Get returns the session identified by id.
 func (c *Client) Get(ctx context.Context, id string) (registry.Session, error) {
+	if c.configErr != nil {
+		return registry.Session{}, c.configErr
+	}
 	session, err := c.store.Get(ctx, id)
 	return session, publicError(err)
 }
 
 // Summary returns aggregate session counts grouped by terminal-multiplexer session.
 func (c *Client) Summary(ctx context.Context, filter registry.Filter) ([]registry.Summary, error) {
+	if c.configErr != nil {
+		return nil, c.configErr
+	}
 	summaries, err := c.store.SummaryByTmuxSession(ctx, filter)
 	return summaries, publicError(err)
 }
@@ -247,6 +285,9 @@ func (c *Client) SummaryByTmuxSessionWithOptions(ctx context.Context, options re
 
 // GC removes gone-session tombstones at least deleteAfter old.
 func (c *Client) GC(ctx context.Context, deleteAfter time.Duration) (registry.GCResult, error) {
+	if c.configErr != nil {
+		return registry.GCResult{}, c.configErr
+	}
 	result, err := c.store.GC(ctx, deleteAfter)
 	return result, publicError(err)
 }
@@ -258,6 +299,9 @@ func (c *Client) Watch(
 	filter registry.Filter,
 	yield func(registry.StateSnapshot) error,
 ) error {
+	if c.configErr != nil {
+		return c.configErr
+	}
 	if yield == nil {
 		return errHandlerRequired
 	}
@@ -267,6 +311,15 @@ func (c *Client) Watch(
 		return err
 	}
 	defer subscription.Close()
+	return watchSnapshots(ctx, subscription, yield)
+}
+
+// IsUnavailable reports whether err means that no realtime broker accepted the connection.
+func IsUnavailable(err error) bool {
+	return errors.Is(err, ErrUnavailable)
+}
+
+func watchSnapshots(ctx context.Context, subscription *broker.Subscription, yield func(registry.StateSnapshot) error) error {
 	snapshots := subscription.Snapshots
 	errorsChannel := subscription.Errors
 	for snapshots != nil || errorsChannel != nil {
@@ -293,11 +346,6 @@ func (c *Client) Watch(
 	}
 
 	return nil
-}
-
-// IsUnavailable reports whether err means that no realtime broker accepted the connection.
-func IsUnavailable(err error) bool {
-	return errors.Is(err, ErrUnavailable)
 }
 
 // OperationError is a machine-readable failure returned by the AHT broker.

@@ -119,6 +119,9 @@ const (
 )
 
 var (
+	// ErrInvalidMode means the client was configured with an unsupported operating mode.
+	ErrInvalidMode = client.ErrInvalidMode
+
 	// ErrUnavailable means no realtime AHT broker accepted the local connection.
 	ErrUnavailable = client.ErrUnavailable
 
