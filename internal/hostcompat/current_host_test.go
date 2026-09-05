@@ -193,6 +193,25 @@ func (host *isolatedHost) runLifecycle(t *testing.T) {
 	host.waitForSession(t, hostOutput)
 }
 
+func (host isolatedHost) validateSession(session registry.Session) bool {
+	if host.contract.Level == compatibilityDiscovery {
+		return true
+	}
+	if session.Observations.Native == nil {
+		return false
+	}
+	if session.Observations.Native.SessionID == "" {
+		return false
+	}
+	if session.SessionID != "" && session.SessionID != session.Observations.Native.SessionID {
+		return false
+	}
+	if host.work != "" && filepath.Clean(session.CWD) != filepath.Clean(host.work) {
+		return false
+	}
+	return true
+}
+
 func (host isolatedHost) waitForSession(t *testing.T, hostOutput []byte) {
 	t.Helper()
 
@@ -202,18 +221,67 @@ func (host isolatedHost) waitForSession(t *testing.T, hostOutput []byte) {
 	defer ticker.Stop()
 	for {
 		listOutput := host.runAHT(t, "--json", "list", "--agent", string(host.contract.ID))
-		var sessions []map[string]any
+		var sessions []registry.Session
 		if err := json.Unmarshal(listOutput, &sessions); err != nil {
 			t.Fatalf("decoding final session list: %v\n%s", err, listOutput)
 		}
-		if len(sessions) > 0 {
-			return
+		for _, s := range sessions {
+			if host.validateSession(s) {
+				return
+			}
 		}
 		select {
 		case <-deadline.C:
-			t.Fatalf("%s completed provider lifecycle without a native AHT session\n%s", host.contract.ID, hostOutput)
+			t.Fatalf("%s completed provider lifecycle without native observation evidence\n%s", host.contract.ID, hostOutput)
 		case <-ticker.C:
 		}
+	}
+}
+
+func TestSessionOracleRequiresNativeObservation(t *testing.T) {
+	t.Parallel()
+
+	workDir := "/tmp/project"
+	processOnly := registry.Session{
+		ID:       "s1",
+		Harness:  registry.HarnessOpenCode,
+		Presence: registry.PresenceLive,
+		CWD:      workDir,
+		Observations: registry.Observations{
+			Process: &registry.ProcessObservation{
+				Present: true,
+			},
+		},
+	}
+	host := isolatedHost{work: workDir, contract: hostContract{ID: registry.HarnessOpenCode, Level: compatibilityLifecycle}}
+	if host.validateSession(processOnly) {
+		t.Fatal("oracle accepted process-only session for non-exempt harness")
+	}
+
+	withNative := processOnly
+	withNative.SessionID = "opencode-1"
+	withNative.Observations.Native = &registry.NativeObservation{
+		SessionID: "opencode-1",
+		Event:     "agent_start",
+	}
+	if !host.validateSession(withNative) {
+		t.Fatal("oracle rejected valid native session")
+	}
+
+	wrongCWD := withNative
+	wrongCWD.CWD = "/tmp/other"
+	if host.validateSession(wrongCWD) {
+		t.Fatal("oracle accepted session with mismatched CWD")
+	}
+	mismatchedID := withNative
+	mismatchedID.SessionID = "different-session"
+	if host.validateSession(mismatchedID) {
+		t.Fatal("oracle accepted session with mismatched native session ID")
+	}
+
+	cursorHost := isolatedHost{work: workDir, contract: hostContract{ID: registry.HarnessCursor, Level: compatibilityDiscovery}}
+	if !cursorHost.validateSession(processOnly) {
+		t.Fatal("oracle rejected discovery-only state for exempt cursor harness")
 	}
 }
 

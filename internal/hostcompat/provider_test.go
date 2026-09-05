@@ -38,12 +38,10 @@ type scriptedProvider struct {
 	mu       sync.Mutex
 	requests []providerRequest
 	step     int
-	first    chan struct{}
-	second   chan struct{}
 	err      error
 }
 
-func newScriptedProvider(t *testing.T, protocol providerProtocol, toolName string, toolArgs map[string]any, marker string) *scriptedProvider {
+func newScriptedProvider(t *testing.T, protocol providerProtocol, toolName string, toolArgs map[string]any, marker string) *scriptedProvider { //nolint:unparam // marker varies across build-tag variants (e.g. compatibility tag in current_host_test.go)
 	t.Helper()
 	provider := &scriptedProvider{
 		protocol: protocol,
@@ -51,8 +49,6 @@ func newScriptedProvider(t *testing.T, protocol providerProtocol, toolName strin
 		toolArgs: toolArgs,
 		marker:   marker,
 		requests: make([]providerRequest, 0, 2),
-		first:    make(chan struct{}),
-		second:   make(chan struct{}),
 	}
 	provider.server = httptest.NewServer(http.HandlerFunc(provider.serveHTTP))
 	t.Cleanup(provider.server.Close)
@@ -99,7 +95,7 @@ func (provider *scriptedProvider) serveHTTP(writer http.ResponseWriter, request 
 		return
 	}
 
-	if request.Method == http.MethodPost && provider.validPath(request.URL.Path) && (strings.Contains(string(body), "You are a title generator") || strings.Contains(string(body), "ultra-short dashboard line") || requestAdvertisesTool(body, "session_title") || (!strings.Contains(string(body), provider.marker) && !requestHasTools(body))) {
+	if request.Method == http.MethodPost && provider.validPath(request.URL.Path) && (strings.Contains(string(body), "You are a title generator") || strings.Contains(string(body), "ultra-short dashboard line") || requestAdvertisesTool(body, "session_title")) {
 		provider.writeFinal(writer, body)
 		return
 	}
@@ -128,15 +124,13 @@ func (provider *scriptedProvider) serveHTTP(writer http.ResponseWriter, request 
 			http.Error(writer, "missing tool", http.StatusBadRequest)
 			return
 		}
-		close(provider.first)
 		provider.writeToolCall(writer, body)
 	case 1:
-		if !strings.Contains(string(body), provider.marker) {
-			provider.fail(fmt.Errorf("%w: tool continuation does not contain marker %q", errInvalidProviderRequest, provider.marker))
+		if !requestContainsToolResult(provider.protocol, body, provider.toolCallID(), provider.marker) {
+			provider.fail(fmt.Errorf("%w: tool continuation does not contain valid tool result with marker %q for call %q", errInvalidProviderRequest, provider.marker, provider.toolCallID()))
 			http.Error(writer, "missing tool result", http.StatusBadRequest)
 			return
 		}
-		close(provider.second)
 		provider.writeFinal(writer, body)
 	default:
 		provider.fail(fmt.Errorf("%w: unexpected model request %d", errInvalidProviderRequest, step+1))
@@ -155,6 +149,13 @@ func (provider *scriptedProvider) validPath(path string) bool {
 	default:
 		return false
 	}
+}
+
+func (provider *scriptedProvider) toolCallID() string {
+	if provider.protocol == protocolAnthropicMessages {
+		return "tool_compat"
+	}
+	return "call_compat"
 }
 
 func (provider *scriptedProvider) writeToolCall(writer http.ResponseWriter, body []byte) {
@@ -262,11 +263,147 @@ func (provider *scriptedProvider) fail(err error) {
 }
 
 func requestAdvertisesTool(body []byte, toolName string) bool {
-	var value any
+	var value map[string]any
 	if json.Unmarshal(body, &value) != nil {
 		return false
 	}
-	return containsJSONString(value, toolName)
+	tools, ok := value["tools"].([]any)
+	if !ok {
+		return false
+	}
+	for _, item := range tools {
+		toolMap, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		if name, ok := toolMap["name"].(string); ok && name == toolName {
+			return true
+		}
+		if fn, ok := toolMap["function"].(map[string]any); ok {
+			if name, ok := fn["name"].(string); ok && name == toolName {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func matchesCallID(actual string, expected string) bool {
+	return expected == "" || actual == expected
+}
+
+func anthropicBlockMatchesToolResult(b any, callID, marker string) bool {
+	bMap, ok := b.(map[string]any)
+	if !ok || bMap["type"] != "tool_result" {
+		return false
+	}
+	toolUseID, ok := bMap["tool_use_id"].(string)
+	if !ok || !matchesCallID(toolUseID, callID) {
+		return false
+	}
+	return containsJSONString(bMap["content"], marker)
+}
+
+func anthropicContainsToolResult(value map[string]any, callID, marker string) bool {
+	messages, ok := value["messages"].([]any)
+	if !ok {
+		return false
+	}
+	for _, m := range messages {
+		msgMap, ok := m.(map[string]any)
+		if !ok {
+			continue
+		}
+		blocks, ok := msgMap["content"].([]any)
+		if !ok {
+			continue
+		}
+		for _, b := range blocks {
+			if anthropicBlockMatchesToolResult(b, callID, marker) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func openAIChatMessageMatchesToolResult(m any, callID, marker string) bool {
+	msgMap, ok := m.(map[string]any)
+	if !ok || msgMap["role"] != "tool" {
+		return false
+	}
+	tcID, ok := msgMap["tool_call_id"].(string)
+	if !ok || !matchesCallID(tcID, callID) {
+		return false
+	}
+	return containsJSONString(msgMap["content"], marker)
+}
+
+func openAIChatContainsToolResult(value map[string]any, callID, marker string) bool {
+	messages, ok := value["messages"].([]any)
+	if !ok {
+		return false
+	}
+	for _, m := range messages {
+		if openAIChatMessageMatchesToolResult(m, callID, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func openAIResponsesItemMatchesToolResult(item any, callID, marker string) bool {
+	itemMap, ok := item.(map[string]any)
+	if !ok {
+		return false
+	}
+	if itemMap["type"] == "function_call_output" {
+		cID, ok := itemMap["call_id"].(string)
+		if ok && matchesCallID(cID, callID) && containsJSONString(itemMap["output"], marker) {
+			return true
+		}
+	}
+	if itemMap["role"] == "tool" {
+		cID, ok := itemMap["tool_call_id"].(string)
+		if ok && matchesCallID(cID, callID) && containsJSONString(itemMap["content"], marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func openAIResponsesContainsToolResult(value map[string]any, callID, marker string) bool {
+	if inputList, ok := value["input"].([]any); ok {
+		for _, item := range inputList {
+			if openAIResponsesItemMatchesToolResult(item, callID, marker) {
+				return true
+			}
+		}
+	}
+	if messages, ok := value["messages"].([]any); ok {
+		for _, m := range messages {
+			if openAIChatMessageMatchesToolResult(m, callID, marker) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func requestContainsToolResult(protocol providerProtocol, body []byte, callID string, marker string) bool {
+	var value map[string]any
+	if json.Unmarshal(body, &value) != nil {
+		return false
+	}
+	switch protocol {
+	case protocolAnthropicMessages:
+		return anthropicContainsToolResult(value, callID, marker)
+	case protocolOpenAIChat:
+		return openAIChatContainsToolResult(value, callID, marker)
+	case protocolOpenAIResponses:
+		return openAIResponsesContainsToolResult(value, callID, marker)
+	}
+	return false
 }
 
 func containsJSONString(value any, expected string) bool {
@@ -287,19 +424,6 @@ func containsJSONString(value any, expected string) bool {
 		}
 	}
 	return false
-}
-
-func requestHasTools(body []byte) bool {
-	var value map[string]any
-	if json.Unmarshal(body, &value) != nil {
-		return false
-	}
-	tools, exists := value["tools"]
-	if !exists || tools == nil {
-		return false
-	}
-	list, ok := tools.([]any)
-	return !ok || len(list) > 0
 }
 
 func requestWantsStream(body []byte) bool {
@@ -353,17 +477,30 @@ func TestScriptedProviderCompletesEveryProtocolAfterToolResult(t *testing.T) {
 		path     string
 		tool     string
 		first    string
+		second   string
 	}{
-		{name: "anthropic", protocol: protocolAnthropicMessages, path: "/v1/messages", tool: "Bash", first: `{"stream":false,"tools":[{"name":"Bash"}]}`},
-		{name: "openai-chat", protocol: protocolOpenAIChat, path: "/v1/chat/completions", tool: "shell", first: `{"stream":false,"tools":[{"type":"function","function":{"name":"shell"}}]}`},
-		{name: "openai-responses", protocol: protocolOpenAIResponses, path: "/v1/responses", tool: "shell", first: `{"stream":false,"tools":[{"type":"function","name":"shell"}]}`},
+		{
+			name: "anthropic", protocol: protocolAnthropicMessages, path: "/v1/messages", tool: "Bash",
+			first:  `{"stream":false,"tools":[{"name":"Bash"}]}`,
+			second: `{"messages":[{"role":"user","content":[{"type":"tool_result","tool_use_id":"tool_compat","content":"marker"}]}]}`,
+		},
+		{
+			name: "openai-chat", protocol: protocolOpenAIChat, path: "/v1/chat/completions", tool: "shell",
+			first:  `{"stream":false,"tools":[{"type":"function","function":{"name":"shell"}}]}`,
+			second: `{"messages":[{"role":"tool","tool_call_id":"call_compat","content":"marker"}]}`,
+		},
+		{
+			name: "openai-responses", protocol: protocolOpenAIResponses, path: "/v1/responses", tool: "shell",
+			first:  `{"stream":false,"tools":[{"type":"function","name":"shell"}]}`,
+			second: `{"input":[{"type":"function_call_output","call_id":"call_compat","output":"marker"}]}`,
+		},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			provider := newScriptedProvider(t, test.protocol, test.tool, map[string]any{"command": "printf marker"}, "marker")
 			postProviderRequest(t, provider.URL()+test.path, test.first, http.StatusOK)
-			postProviderRequest(t, provider.URL()+test.path, `{"messages":[{"role":"tool","content":"marker"}],"input":"marker"}`, http.StatusOK)
+			postProviderRequest(t, provider.URL()+test.path, test.second, http.StatusOK)
 			if err := provider.Error(); err != nil {
 				t.Fatal(err)
 			}
@@ -371,6 +508,26 @@ func TestScriptedProviderCompletesEveryProtocolAfterToolResult(t *testing.T) {
 				t.Fatalf("request count = %d, want 2", len(provider.Requests()))
 			}
 		})
+	}
+}
+
+func TestScriptedProviderRejectsPromptOnlyMarker(t *testing.T) {
+	provider := newScriptedProvider(t, protocolOpenAIChat, "shell", map[string]any{"command": "printf marker"}, "marker")
+	first := `{"stream":false,"tools":[{"type":"function","function":{"name":"shell"}}]}`
+	postProviderRequest(t, provider.URL()+"/v1/chat/completions", first, http.StatusOK)
+	promptOnly := `{"messages":[{"role":"user","content":"please print marker"}],"tools":[{"type":"function","function":{"name":"shell"}}],"tool_calls":[]}`
+	postProviderRequest(t, provider.URL()+"/v1/chat/completions", promptOnly, http.StatusBadRequest)
+	if provider.Error() == nil {
+		t.Fatal("provider accepted a continuation with marker only in user prompt")
+	}
+}
+
+func TestScriptedProviderRejectsToolDeclarationInNonToolField(t *testing.T) {
+	provider := newScriptedProvider(t, protocolOpenAIChat, "shell", map[string]any{"command": "printf marker"}, "marker")
+	nonTool := `{"stream":false,"prompt":"run shell","tools":[]}`
+	postProviderRequest(t, provider.URL()+"/v1/chat/completions", nonTool, http.StatusBadRequest)
+	if provider.Error() == nil {
+		t.Fatal("provider accepted a tool request where tool name was in prompt instead of tools declaration")
 	}
 }
 
