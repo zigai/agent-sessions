@@ -53,3 +53,69 @@ func TestResolveHarnessScansKnownWrappers(t *testing.T) {
 		})
 	}
 }
+
+func TestResolveHarnessIgnoresElectronHelperSubprocesses(t *testing.T) {
+	t.Parallel()
+	for _, arg := range []string{"--type=zygote", "--type=utility", "--type=gpu-process", "--type=renderer"} {
+		process := processinfo.Process{
+			Executable: "/home/test/.local/bin/agy",
+			Args:       []string{"/home/test/.local/bin/agy", arg},
+		}
+		harness, ok := resolveHarness(process)
+		if ok || harness != "" {
+			t.Fatalf("resolveHarness with %s = %q, %v; want ignored helper", arg, harness, ok)
+		}
+	}
+}
+
+func TestResolveHarnessIgnoresTestFixtures(t *testing.T) {
+	t.Parallel()
+	process := processinfo.Process{
+		Executable: "/tmp/aht-systest-12345/codex",
+		Args:       []string{"/tmp/aht-systest-12345/codex", "--store", "/tmp/aht-systest-12345/state.json"},
+	}
+	harness, ok := resolveHarness(process)
+	if ok || harness != "" {
+		t.Fatalf("resolveHarness = %q, %v; want ignored test fixture", harness, ok)
+	}
+}
+
+func TestResolveHarnessIgnoresAhtTrackerLoop(t *testing.T) {
+	t.Parallel()
+	process := processinfo.Process{
+		Executable: "/home/test/bin/codex",
+		Args:       []string{"codex", "manage", "tracker", "run", "--quiet"},
+	}
+	harness, ok := resolveHarness(process)
+	if ok || harness != "" {
+		t.Fatalf("resolveHarness = %q, %v; want ignored tracker runner", harness, ok)
+	}
+}
+
+func TestHasAncestorHarness(t *testing.T) {
+	t.Parallel()
+	processes := map[int]processinfo.Process{
+		10: {PID: 10, PPID: 1},
+		20: {PID: 20, PPID: 10},
+		30: {PID: 30, PPID: 20},
+		40: {PID: 40, PPID: 1},
+	}
+	harnessByPID := map[int]registry.Harness{
+		10: registry.HarnessClaude,
+		20: registry.HarnessClaude,
+		30: registry.HarnessClaude,
+		40: registry.HarnessCodex,
+	}
+	if hasAncestorHarness(10, registry.HarnessClaude, processes, harnessByPID) {
+		t.Fatal("PID 10 unexpectedly has ancestor with same harness")
+	}
+	if !hasAncestorHarness(20, registry.HarnessClaude, processes, harnessByPID) {
+		t.Fatal("PID 20 should have PID 10 as ancestor with same harness")
+	}
+	if !hasAncestorHarness(30, registry.HarnessClaude, processes, harnessByPID) {
+		t.Fatal("PID 30 should have ancestor with same harness")
+	}
+	if hasAncestorHarness(40, registry.HarnessCodex, processes, harnessByPID) {
+		t.Fatal("PID 40 should not have ancestor with same harness")
+	}
+}

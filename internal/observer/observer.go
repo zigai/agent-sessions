@@ -9,6 +9,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -340,6 +341,15 @@ func (o *Observer) runCycle(ctx context.Context) (Result, error) {
 		if !ok {
 			continue
 		}
+		if hasAncestorHarness(process.PID, harnessID, processByPID, harnessByPID) {
+			delete(harnessByPID, process.PID)
+		}
+	}
+	for _, process := range processes {
+		harnessID, ok := harnessByPID[process.PID]
+		if !ok {
+			continue
+		}
 		key := processKey{harness: harnessID, pid: process.PID, start: process.StartIdentity}
 		current[key] = trackedProcess{process: process, seenAt: at, missingSince: time.Time{}, missingCount: 0}
 		present := true
@@ -509,6 +519,14 @@ func resolveHarness(process processinfo.Process) (registry.Harness, bool) {
 }
 
 func observableHarness(process processinfo.Process, harnessID registry.Harness) (registry.Harness, bool) {
+	if isTestFixtureProcess(process) {
+		return "", false
+	}
+	for _, arg := range process.Args {
+		if strings.HasPrefix(arg, "--type=") {
+			return "", false
+		}
+	}
 	if harnessID == registry.HarnessOmp {
 		for _, arg := range process.Args {
 			if strings.HasPrefix(filepath.Base(arg), "__omp_worker_") {
@@ -516,7 +534,48 @@ func observableHarness(process processinfo.Process, harnessID registry.Harness) 
 			}
 		}
 	}
+	if harnessID == registry.HarnessCursor {
+		if process.TTY == "" && process.MultiplexerPane == "" && !slices.Contains(process.Args, "agent") {
+			return "", false
+		}
+	}
 	return harnessID, true
+}
+
+func isTestFixtureProcess(process processinfo.Process) bool {
+	if strings.Contains(process.Executable, "/aht-systest-") || strings.Contains(process.CWD, "/aht-systest-") {
+		return true
+	}
+	for _, arg := range process.Args {
+		if strings.Contains(arg, "/aht-systest-") {
+			return true
+		}
+	}
+	if slices.Contains(process.Args, "manage") && (slices.Contains(process.Args, "tracker") || slices.Contains(process.Args, "run")) {
+		return true
+	}
+	return false
+}
+
+func hasAncestorHarness(pid int, harnessID registry.Harness, processByPID map[int]processinfo.Process, harnessByPID map[int]registry.Harness) bool {
+	curr, ok := processByPID[pid]
+	if !ok {
+		return false
+	}
+	ppid := curr.PPID
+	visited := map[int]bool{pid: true}
+	for ppid > 0 && !visited[ppid] {
+		visited[ppid] = true
+		if ancestorHarness, found := harnessByPID[ppid]; found && ancestorHarness == harnessID {
+			return true
+		}
+		parent, ok := processByPID[ppid]
+		if !ok {
+			break
+		}
+		ppid = parent.PPID
+	}
+	return false
 }
 
 func isAgentWrapper(process processinfo.Process) bool {
