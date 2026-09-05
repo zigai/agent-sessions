@@ -37,7 +37,7 @@ func New() harness.Adapter {
 			"google-antigravity",
 			"google_antigravity",
 		},
-		ProcessNames: []string{"agy", "antigravity", "antigravity-cli"},
+		ProcessNames: []string{"agy", "antigravity-cli"},
 		Env: harness.EnvKeys{
 			SessionID:   nil,
 			SessionPath: nil,
