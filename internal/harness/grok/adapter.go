@@ -17,6 +17,12 @@ const (
 
 type grokHarness struct{ harness.BaseAdapter }
 
+type grokHookSpec struct {
+	event   string
+	matcher string
+	command string
+}
+
 func New() grokHarness {
 	return grokHarness{BaseAdapter: harness.NewBaseAdapter(harness.Definition{
 		ID:           registry.HarnessGrok,
@@ -77,12 +83,6 @@ func grokPayloadValidator(rawPayload json.RawMessage) bool {
 
 func (grokHarness) PayloadDefaults(payload map[string]any) (harness.PayloadDefaults, error) {
 	return grokPayloadDefaults(payload), nil
-}
-
-type grokHookSpec struct {
-	event   string
-	matcher string
-	command string
 }
 
 func grokHookConfig(binary string) map[string]any {

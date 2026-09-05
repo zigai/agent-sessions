@@ -14,11 +14,8 @@ import (
 )
 
 const (
-	kimiCommand     = "kimi"
-	kimiSessionFlag = "--session"
-)
-
-const (
+	kimiCommand                     = "kimi"
+	kimiSessionFlag                 = "--session"
 	kimiCodeIntegrationSource       = "kimi-code-hook"
 	kimiCodeManagedIntegrationStart = "# BEGIN aht managed integration: kimi-code"
 	kimiCodeManagedIntegrationEnd   = "# END aht managed integration: kimi-code"
@@ -30,6 +27,13 @@ type hookPayload struct {
 	SessionID     string `json:"session_id"      validate:"required,notblank"`
 	CWD           string `json:"cwd"             validate:"required,notblank"`
 	HookEventName string `json:"hook_event_name" validate:"required,notblank"`
+}
+
+type kimiCodeHookSpec struct {
+	event   string
+	matcher string
+	command string
+	timeout int
 }
 
 func New() kimiCodeHarness {
@@ -82,13 +86,6 @@ func (kimiCodeHarness) PayloadCompatible(rawPayload json.RawMessage) bool {
 
 func (kimiCodeHarness) PayloadDefaults(payload map[string]any) (harness.PayloadDefaults, error) {
 	return kimiCodePayloadDefaults(payload)
-}
-
-type kimiCodeHookSpec struct {
-	event   string
-	matcher string
-	command string
-	timeout int
 }
 
 func kimiCodeHookBlock(binary string) string {

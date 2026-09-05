@@ -7,15 +7,17 @@ import (
 	"github.com/zigai/aht/pkg/registry"
 )
 
-type EnvField string
-
 const (
+	IntegrationVersion = 7
+
 	EnvSessionID   EnvField = "session_id"
 	EnvSessionPath EnvField = "session_path"
 	EnvProjectRoot EnvField = "project_root"
 	EnvPID         EnvField = "pid"
 	EnvEvent       EnvField = "event"
 )
+
+type EnvField string
 
 type EnvKeys struct {
 	SessionID   []string
@@ -52,8 +54,6 @@ type Definition struct {
 	Capabilities       Capabilities
 	IntegrationVersion int
 }
-
-const IntegrationVersion = 7
 
 type Adapter interface {
 	Definition() Definition
@@ -95,8 +95,8 @@ func (adapter BaseAdapter) Definition() Definition {
 func cloneDefinition(definition Definition) Definition {
 	return Definition{
 		ID:                 definition.ID,
-		Aliases:            cloneStrings(definition.Aliases),
-		ProcessNames:       cloneStrings(definition.ProcessNames),
+		Aliases:            slices.Clone(definition.Aliases),
+		ProcessNames:       slices.Clone(definition.ProcessNames),
 		Env:                cloneEnvKeys(definition.Env),
 		Capabilities:       definition.Capabilities,
 		IntegrationVersion: definition.IntegrationVersion,
@@ -105,14 +105,10 @@ func cloneDefinition(definition Definition) Definition {
 
 func cloneEnvKeys(keys EnvKeys) EnvKeys {
 	return EnvKeys{
-		SessionID:   cloneStrings(keys.SessionID),
-		SessionPath: cloneStrings(keys.SessionPath),
-		ProjectRoot: cloneStrings(keys.ProjectRoot),
-		PID:         cloneStrings(keys.PID),
-		Event:       cloneStrings(keys.Event),
+		SessionID:   slices.Clone(keys.SessionID),
+		SessionPath: slices.Clone(keys.SessionPath),
+		ProjectRoot: slices.Clone(keys.ProjectRoot),
+		PID:         slices.Clone(keys.PID),
+		Event:       slices.Clone(keys.Event),
 	}
-}
-
-func cloneStrings(values []string) []string {
-	return slices.Clone(values)
 }

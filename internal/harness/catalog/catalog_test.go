@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -784,8 +785,7 @@ type agyHookTestCase struct {
 	parentArgs   []string
 	wantReport   bool
 	wantActivity registry.Activity
-	wantDecision string
-	wantEmpty    bool
+	wantResponse map[string]any
 }
 
 func TestHandleHookAgy(t *testing.T) {
@@ -804,8 +804,7 @@ func TestHandleHookAgy(t *testing.T) {
 			parentArgs:   nil,
 			wantReport:   true,
 			wantActivity: registry.ActivityRunning,
-			wantDecision: "",
-			wantEmpty:    true,
+			wantResponse: map[string]any{},
 		},
 		{
 			name:  "pre tool use permission reports waiting",
@@ -822,8 +821,7 @@ func TestHandleHookAgy(t *testing.T) {
 			parentArgs:   nil,
 			wantReport:   true,
 			wantActivity: registry.ActivityWaiting,
-			wantDecision: "allow",
-			wantEmpty:    false,
+			wantResponse: map[string]any{"decision": "allow"},
 		},
 		{
 			name:  "fully idle stop reports idle",
@@ -838,8 +836,7 @@ func TestHandleHookAgy(t *testing.T) {
 			parentArgs:   nil,
 			wantReport:   true,
 			wantActivity: registry.ActivityIdle,
-			wantDecision: "",
-			wantEmpty:    false,
+			wantResponse: map[string]any{},
 		},
 		{
 			name:  "fully idle stop remains idle regardless of parent args",
@@ -853,8 +850,7 @@ func TestHandleHookAgy(t *testing.T) {
 			parentArgs:   []string{"agy", "--print", "hello"},
 			wantReport:   true,
 			wantActivity: registry.ActivityIdle,
-			wantDecision: "",
-			wantEmpty:    false,
+			wantResponse: map[string]any{},
 		},
 		{
 			name:  "empty post tool use does not report",
@@ -868,8 +864,7 @@ func TestHandleHookAgy(t *testing.T) {
 			parentArgs:   nil,
 			wantReport:   false,
 			wantActivity: "",
-			wantDecision: "",
-			wantEmpty:    true,
+			wantResponse: map[string]any{},
 		},
 	}
 
@@ -894,6 +889,9 @@ func assertAgyHookResult(t *testing.T, test agyHookTestCase) {
 	)
 	if !ok {
 		t.Fatal("expected agy hook adapter")
+	}
+	if !reflect.DeepEqual(result.Response, test.wantResponse) {
+		t.Fatalf("expected response %#v, got %#v", test.wantResponse, result.Response)
 	}
 	if result.ReportOK != test.wantReport {
 		t.Fatalf("expected report ok %v, got %v", test.wantReport, result.ReportOK)

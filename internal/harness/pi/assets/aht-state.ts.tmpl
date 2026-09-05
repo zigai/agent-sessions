@@ -9,66 +9,7 @@ const ahtBin = {{BINARY}};
 const currentSessionSource = {{SOURCE}};
 const heartbeatIntervalMs = 10000;
 
-const commandTimeoutMs = 1000;
-const commandKillGraceMs = 100;
-const maxPendingReports = 64;
-const pendingCommands: string[][] = [];
-let commandDrain: Promise<void> | undefined;
-let reportingWarningShown = false;
-
-function warnReporting(): void {
-  if (reportingWarningShown) return;
-  reportingWarningShown = true;
-  console.warn("aht: reporting unavailable or overloaded; some state updates may be lost");
-}
-
-function runCommand(args: string[]): Promise<void> {
-  return new Promise((resolve) => {
-    try {
-      const child = spawn(ahtBin, args, { stdio: "ignore" });
-      let killTimer: ReturnType<typeof setTimeout> | undefined;
-      const timeout = setTimeout(() => {
-        warnReporting();
-        child.kill("SIGTERM");
-        killTimer = setTimeout(() => child.kill("SIGKILL"), commandKillGraceMs);
-      }, commandTimeoutMs);
-      child.once("error", warnReporting);
-      child.once("close", (code) => {
-        clearTimeout(timeout);
-        clearTimeout(killTimer);
-        if (code !== 0) warnReporting();
-        resolve();
-      });
-    } catch {
-      warnReporting();
-      resolve();
-    }
-  });
-}
-
-// The module owns one child and a bounded FIFO. Overload drops the oldest
-// unsent observation, preserving the newest/final state and enqueue-time identity.
-// Referenced child/timers keep normal process exit from abandoning a report.
-function enqueueCommand(args: string[]): Promise<void> {
-  if (pendingCommands.length >= maxPendingReports) {
-    pendingCommands.shift();
-    warnReporting();
-  }
-  pendingCommands.push(args);
-  if (!commandDrain) {
-    commandDrain = (async () => {
-      try {
-        let next: string[] | undefined;
-        while ((next = pendingCommands.shift()) !== undefined) await runCommand(next);
-      } catch {
-        warnReporting();
-      } finally {
-        commandDrain = undefined;
-      }
-    })();
-  }
-  return commandDrain;
-}
+{{TYPESCRIPT_QUEUE}}
 
 
 // Native consumer seam: https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/docs/extensions.md

@@ -9,12 +9,12 @@ import (
 	"github.com/go-playground/validator/v10"
 )
 
-type HookPayloadValidator func(json.RawMessage) bool
-
 var (
 	hookPayloadValidatorOnce sync.Once
 	hookPayloadValidate      *validator.Validate
 )
+
+type HookPayloadValidator func(json.RawMessage) bool
 
 func PayloadValidator[T any]() HookPayloadValidator {
 	return func(rawPayload json.RawMessage) bool {

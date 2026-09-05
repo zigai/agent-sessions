@@ -27,6 +27,10 @@ type gooseHookSpec struct {
 	matcher    string
 }
 
+type goosePayload struct {
+	SessionID string `json:"session_id" validate:"notblank"`
+}
+
 func New() gooseHarness {
 	return gooseHarness{BaseAdapter: harness.NewBaseAdapter(harness.Definition{
 		ID:           registry.HarnessGoose,
@@ -111,7 +115,6 @@ func gooseHookConfig() map[string]any {
 	for _, spec := range gooseHookSpecs() {
 		hooks[spec.event] = []any{gooseHookRule(spec)}
 	}
-	hooks[harness.HookEventSessionStart] = []any{gooseSessionStartHookRule()}
 
 	return map[string]any{"hooks": hooks}
 }
@@ -129,14 +132,6 @@ func gooseHookSpecs() []gooseHookSpec {
 		{event: "AfterShellExecution", transition: harness.HookActivityRunning, matcher: ""},
 		{event: harness.HookEventStop, transition: harness.HookActivityIdle, matcher: ""},
 		{event: "SessionEnd", transition: harness.HookPresenceGone, matcher: ""},
-	}
-}
-
-func gooseSessionStartHookRule() map[string]any {
-	return map[string]any{
-		"hooks": []any{
-			gooseCommandHook(gooseHookSpec{event: harness.HookEventSessionStart, transition: harness.HookActivityIdle, matcher: ""}),
-		},
 	}
 }
 
@@ -218,10 +213,6 @@ func goosePayloadDefaults(payload map[string]any) harness.PayloadDefaults {
 		Event:       harness.PayloadString(payload, "event"),
 		Attributes:  attributes,
 	}
-}
-
-type goosePayload struct {
-	SessionID string `json:"session_id" validate:"notblank"`
 }
 
 func goosePluginsDir() string {

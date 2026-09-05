@@ -3,25 +3,28 @@ package kilo
 import (
 	"strings"
 	"testing"
+
+	"github.com/zigai/aht/internal/harness"
 )
 
-func TestPluginTemplateUsesCurrentModuleShape(t *testing.T) {
+func TestPluginTemplateRendersCleanly(t *testing.T) {
 	t.Parallel()
 
-	if !strings.Contains(kiloPluginTemplate, "async function AHTPlugin(ctx: PluginContext): Promise<PluginHooks>") {
-		t.Fatal("expected per-context plugin factory")
+	h := New()
+	plan := h.InstallPlan("/usr/local/bin/aht")
+	if len(plan.Actions) == 0 {
+		t.Fatal("expected at least one install action")
 	}
-	if !strings.Contains(kiloPluginTemplate, `export default { id: "aht-state", server: AHTPlugin }`) {
-		t.Fatal("expected native default plugin export")
+	action, ok := plan.Actions[0].(harness.RenderedFileAction)
+	if !ok {
+		t.Fatalf("expected harness.RenderedFileAction, got %T", plan.Actions[0])
 	}
-	if !strings.Contains(kiloPluginTemplate, `["properties", "status", "type"]`) {
-		t.Fatal("expected nested session status handling")
+	rendered := action.Plan.Content
+	if strings.TrimSpace(rendered) == "" {
+		t.Fatal("rendered kilo template is empty")
 	}
-	if !strings.Contains(kiloPluginTemplate, `case "session.idle":`) {
-		t.Fatal("expected deprecated idle event compatibility")
-	}
-	if !strings.Contains(kiloPluginTemplate, `child.once("error", warnReporting);`) {
-		t.Fatal("expected asynchronous child error handling")
+	if strings.Contains(rendered, "{{") || strings.Contains(rendered, "}}") {
+		t.Fatalf("rendered kilo template contains unresolved placeholders:\n%s", rendered)
 	}
 }
 

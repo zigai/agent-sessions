@@ -21,22 +21,7 @@ const (
 	HookEventPreToolUse           = "PreToolUse"
 	HookEventStop                 = "Stop"
 	ResumeFlag                    = "--resume"
-)
 
-// HookTimeoutSecondsFor returns the native command-hook timeout for an event.
-func HookTimeoutSecondsFor(harness registry.Harness, event string) int {
-	if harness == registry.HarnessCodex && event == HookEventSessionEnd {
-		return codexSessionEndTimeoutSeconds
-	}
-
-	return HookTimeoutSeconds
-}
-
-// HookTransition is the closed, dimension-aware state used by generated hook
-// specifications that need to store a transition before rendering it.
-type HookTransition string
-
-const (
 	HookActivityRunning     HookTransition = "activity:running"
 	HookActivityWaiting     HookTransition = "activity:waiting"
 	HookActivityIdle        HookTransition = "activity:idle"
@@ -44,6 +29,17 @@ const (
 	HookActivityInterrupted HookTransition = "activity:interrupted"
 	HookPresenceGone        HookTransition = "presence:gone"
 )
+
+const (
+	PluginRegistrationMissing PluginRegistrationState = iota
+	PluginRegistrationCurrent
+	PluginRegistrationStale
+	PluginRegistrationForeign
+)
+
+// HookTransition is the closed, dimension-aware state used by generated hook
+// specifications that need to store a transition before rendering it.
+type HookTransition string
 
 type Transition interface {
 	registry.Activity | registry.Presence | HookTransition
@@ -61,41 +57,27 @@ type JSONCommandHooksAction struct {
 	Plan JSONCommandHookInstallPlan
 }
 
-func (JSONCommandHooksAction) installAction() {}
-
 type CursorJSONHooksAction struct {
 	Plan CursorJSONHookInstallPlan
 }
-
-func (CursorJSONHooksAction) installAction() {}
 
 type ManagedTextBlockAction struct {
 	Plan ManagedTextBlockInstallPlan
 }
 
-func (ManagedTextBlockAction) installAction() {}
-
 type RenderedFileAction struct {
 	Plan RenderedFileInstallPlan
 }
-
-func (RenderedFileAction) installAction() {}
 
 type RenderedFilesAction struct {
 	Plan RenderedFilesInstallPlan
 }
 
-func (RenderedFilesAction) installAction() {}
-
 type PluginDirectoryAction struct {
 	Plan PluginDirectoryInstallPlan
 }
 
-func (PluginDirectoryAction) installAction() {}
-
 type ShimAction struct{}
-
-func (ShimAction) installAction() {}
 
 type JSONCommandHookInstallPlan struct {
 	Path              string
@@ -169,13 +151,6 @@ type PluginDirectoryInstallPlan struct {
 }
 type PluginRegistrationState uint8
 
-const (
-	PluginRegistrationMissing PluginRegistrationState = iota
-	PluginRegistrationCurrent
-	PluginRegistrationStale
-	PluginRegistrationForeign
-)
-
 type PluginRegistration interface {
 	ID() string
 	Label() string
@@ -191,6 +166,29 @@ type ImportManifestInstallPlan struct {
 	Name       string
 	Source     string
 	Components []string
+}
+
+func (JSONCommandHooksAction) installAction() {}
+
+func (CursorJSONHooksAction) installAction() {}
+
+func (ManagedTextBlockAction) installAction() {}
+
+func (RenderedFileAction) installAction() {}
+
+func (RenderedFilesAction) installAction() {}
+
+func (PluginDirectoryAction) installAction() {}
+
+func (ShimAction) installAction() {}
+
+// HookTimeoutSecondsFor returns the native command-hook timeout for an event.
+func HookTimeoutSecondsFor(harness registry.Harness, event string) int {
+	if harness == registry.HarnessCodex && event == HookEventSessionEnd {
+		return codexSessionEndTimeoutSeconds
+	}
+
+	return HookTimeoutSeconds
 }
 
 func ReportHookCommand[T Transition](binary string, harness registry.Harness, transition T, event string, source string) string {
@@ -233,6 +231,7 @@ func RenderScriptTemplate(template string, integrationID string, binary string, 
 		"{{INTEGRATION_VERSION}}", strconv.Itoa(version),
 		"{{BINARY}}", strconv.Quote(binary),
 		"{{SOURCE}}", strconv.Quote(source),
+		"{{TYPESCRIPT_QUEUE}}", typeScriptQueueTemplate,
 	).Replace(template)
 }
 

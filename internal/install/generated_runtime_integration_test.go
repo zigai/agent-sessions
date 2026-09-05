@@ -54,23 +54,25 @@ func TestGeneratedRuntimeFamilies(t *testing.T) {
 	requireRuntimeTool(t, "node")
 	requireRuntimeTool(t, "python3")
 	requireRuntimeTool(t, "sh")
-
-	capture := captureBinary(t)
-	t.Setenv("AHT_CAPTURE", capture.path)
-
 	t.Run("command-hook", func(t *testing.T) {
+		capture := captureBinary(t)
+		t.Setenv("AHT_CAPTURE", capture.path)
 		command := generatedCommandHook(t, registry.HarnessClaude)
 		runGeneratedCommand(t, exec.Command("sh", "-c", command), `{"session_id":"command-session","prompt":"`+generatedRuntimeSensitiveSentinel+`"}`)
 		requireCapturedArguments(t, capture.path, "report", "claude", "--activity", "idle")
 	})
 
 	t.Run("goose-shell-wrapper", func(t *testing.T) {
+		capture := captureBinary(t)
+		t.Setenv("AHT_CAPTURE", capture.path)
 		script := writeRuntimeArtifact(t, "report.sh", generatedArtifactContent(t, registry.HarnessGoose, "scripts/report.sh"))
 		runGeneratedCommand(t, exec.Command("sh", script, "running", "UserPromptSubmit"), `{"session_id":"goose-session","prompt":"`+generatedRuntimeSensitiveSentinel+`"}`)
 		requireCapturedArguments(t, capture.path, "report", "goose", "--activity", "running")
 	})
 
 	t.Run("cline-plugin", func(t *testing.T) {
+		capture := captureBinary(t)
+		t.Setenv("AHT_CAPTURE", capture.path)
 		module := generatedArtifactContent(t, registry.HarnessCline, "index.js")
 		runNodeRuntime(t, "index.js", module, `
 import plugin from "./index.js";
@@ -82,6 +84,8 @@ await hooks.afterRun({snapshot: {status: "failed", prompt: "`+generatedRuntimeSe
 	})
 
 	t.Run("openclaw-plugin", func(t *testing.T) {
+		capture := captureBinary(t)
+		t.Setenv("AHT_CAPTURE", capture.path)
 		module := generatedArtifactContent(t, registry.HarnessOpenClaw, "index.js")
 		extra := map[string]string{
 			"node_modules/openclaw/package.json": `{"name":"openclaw","type":"module","exports":{"./plugin-sdk/plugin-entry":"./plugin-entry.js"}}`,
@@ -97,6 +101,8 @@ await hooks.get("agent_end")({success: false, reason: "error", prompt: "`+genera
 	})
 
 	t.Run("hermes-plugin", func(t *testing.T) {
+		capture := captureBinary(t)
+		t.Setenv("AHT_CAPTURE", capture.path)
 		module := generatedArtifactContent(t, registry.HarnessHermes, "__init__.py")
 		dir := t.TempDir()
 		modulePath := filepath.Join(dir, "aht_state.py")
@@ -123,6 +129,8 @@ ctx.hooks["on_session_end"](session_id="hermes-session", completed=False, prompt
 	})
 
 	t.Run("pi-extension", func(t *testing.T) {
+		capture := captureBinary(t)
+		t.Setenv("AHT_CAPTURE", capture.path)
 		module := generatedArtifactContent(t, registry.HarnessPi, "aht-state.ts")
 		runNodeRuntime(t, "extension.ts", module, `
 import extension from "./extension.ts";
@@ -136,6 +144,8 @@ await hooks.get("session_shutdown")({type: "session_shutdown"}, ctx);
 	})
 
 	t.Run("omp-extension", func(t *testing.T) {
+		capture := captureBinary(t)
+		t.Setenv("AHT_CAPTURE", capture.path)
 		module := generatedArtifactContent(t, registry.HarnessOmp, "aht-state.ts")
 		runNodeRuntime(t, "extension.ts", module, `
 import extension from "./extension.ts";
@@ -149,22 +159,133 @@ await hooks.get("session_shutdown")({type: "session_shutdown"}, ctx);
 		requireCapturedArguments(t, capture.path, "report", "omp", "--activity", "failed")
 	})
 
-	t.Run("opencode-kilo-plugin-family", func(t *testing.T) {
+	t.Run("opencode-plugin", func(t *testing.T) {
+		capture := captureBinary(t)
+		t.Setenv("AHT_CAPTURE", capture.path)
 		module := generatedArtifactContent(t, registry.HarnessOpenCode, "aht-state.ts")
 		runNodeRuntime(t, "plugin.ts", module, `
 import plugin from "./plugin.ts";
+if (plugin.id !== "aht-state" || typeof plugin.server !== "function") {
+	throw new Error("unexpected plugin export shape: " + JSON.stringify(plugin));
+}
 const runtime = await plugin.server({directory: "/tmp/project", worktree: "/tmp/project"});
+if (typeof runtime.event !== "function") {
+	throw new Error("unexpected plugin runtime hooks: " + JSON.stringify(runtime));
+}
 await runtime.event({event: {type: "session.error", sessionID: "opencode-session", prompt: "`+generatedRuntimeSensitiveSentinel+`"}});
+await runtime.event({event: {type: "session.status", sessionID: "opencode-session", properties: {status: {type: "idle"}}}});
+await runtime.event({event: {type: "session.idle", sessionID: "opencode-session"}});
 `, nil)
 		requireCapturedArguments(t, capture.path, "report", "opencode", "--activity", "failed")
+		requireCapturedArguments(t, capture.path, "report", "opencode", "--activity", "idle")
 	})
 
-	data, err := os.ReadFile(capture.path)
-	if err != nil {
-		t.Fatalf("read runtime capture: %v", err)
+	t.Run("kilo-plugin", func(t *testing.T) {
+		capture := captureBinary(t)
+		t.Setenv("AHT_CAPTURE", capture.path)
+		module := generatedArtifactContent(t, registry.HarnessKilo, "aht-state.ts")
+		runNodeRuntime(t, "plugin.ts", module, `
+import plugin from "./plugin.ts";
+if (plugin.id !== "aht-state" || typeof plugin.server !== "function") {
+	throw new Error("unexpected plugin export shape: " + JSON.stringify(plugin));
+}
+const runtime = await plugin.server({directory: "/tmp/project", worktree: "/tmp/project"});
+if (typeof runtime.event !== "function") {
+	throw new Error("unexpected plugin runtime hooks: " + JSON.stringify(runtime));
+}
+await runtime.event({event: {type: "session.error", sessionID: "kilo-session", prompt: "`+generatedRuntimeSensitiveSentinel+`"}});
+await runtime.event({event: {type: "session.status", sessionID: "kilo-session", properties: {status: {type: "idle"}}}});
+await runtime.event({event: {type: "session.idle", sessionID: "kilo-session"}});
+`, nil)
+		requireCapturedArguments(t, capture.path, "report", "kilo", "--activity", "failed")
+		requireCapturedArguments(t, capture.path, "report", "kilo", "--activity", "idle")
+	})
+
+	t.Run("missing-binary-nonfatal", func(t *testing.T) {
+		const absentBinary = "/nonexistent/binary/absent-aht"
+		renderAbsentModule := func(h registry.Harness) string {
+			t.Helper()
+			adapter, ok := harnesscatalog.Find(h)
+			if !ok {
+				t.Fatalf("find harness %s", h)
+			}
+			installer, ok := adapter.(harnesspkg.Installable)
+			if !ok {
+				t.Fatalf("harness %s is not installable", h)
+			}
+			for _, action := range installer.InstallPlan(absentBinary).Actions {
+				if rf, ok := action.(harnesspkg.RenderedFileAction); ok {
+					if !strings.Contains(rf.Plan.Content, absentBinary) {
+						t.Fatalf("rendered %s template did not select absent binary %q", h, absentBinary)
+					}
+					return rf.Plan.Content
+				}
+			}
+			t.Fatalf("no rendered action found for %s", h)
+			return ""
+		}
+
+		runNodeRuntime(t, "opencode_absent.ts", renderAbsentModule(registry.HarnessOpenCode), `
+import plugin from "./opencode_absent.ts";
+const runtime = await plugin.server({directory: "/tmp/project", worktree: "/tmp/project"});
+await runtime.event({event: {type: "session.status", sessionID: "missing-session", properties: {status: {type: "idle"}}}});
+await new Promise(resolve => setTimeout(resolve, 50));
+`, nil)
+
+		runNodeRuntime(t, "kilo_absent.ts", renderAbsentModule(registry.HarnessKilo), `
+import plugin from "./kilo_absent.ts";
+const runtime = await plugin.server({directory: "/tmp/project", worktree: "/tmp/project"});
+await runtime.event({event: {type: "session.status", sessionID: "missing-session", properties: {status: {type: "idle"}}}});
+await new Promise(resolve => setTimeout(resolve, 50));
+`, nil)
+
+		runNodeRuntime(t, "pi_absent.ts", renderAbsentModule(registry.HarnessPi), `
+import extension from "./pi_absent.ts";
+const hooks = new Map();
+extension({on: (name, callback) => hooks.set(name, callback)});
+const ctx = {cwd: "/tmp/project", sessionManager: {getSessionId: () => "pi-session", getSessionFile: () => "/tmp/pi.jsonl"}};
+hooks.get("agent_end")({type: "agent_end", status: "failed"}, ctx);
+await new Promise(resolve => setTimeout(resolve, 50));
+`, nil)
+
+		runNodeRuntime(t, "omp_absent.ts", renderAbsentModule(registry.HarnessOmp), `
+import extension from "./omp_absent.ts";
+const hooks = new Map();
+extension({on: (name, callback) => hooks.set(name, callback)});
+const ctx = {hasUI: true, cwd: "/tmp/project", sessionManager: {getSessionId: () => "omp-session", getSessionFile: () => "/tmp/omp.jsonl", getBranch: () => []}};
+hooks.get("session_start")({type: "session_start"}, ctx);
+hooks.get("agent_error")({type: "agent_error", error: "fatal"}, ctx);
+await new Promise(resolve => setTimeout(resolve, 50));
+`, nil)
+	})
+}
+
+func TestMatchInvocationRequiresSameFrameAndAdjacentFlags(t *testing.T) {
+	t.Parallel()
+
+	invocations := [][]string{
+		{"report", "claude", "--activity", "running"},
+		{"report", "openclaw", "--activity", "failed"},
 	}
-	if strings.Contains(string(data), generatedRuntimeSensitiveSentinel) {
-		t.Fatalf("generated runtime leaked sensitive payload into report arguments:\n%s", data)
+	matched := false
+	for _, inv := range invocations {
+		if matchInvocation(inv, []string{"report", "openclaw", "--activity", "running"}) {
+			matched = true
+			break
+		}
+	}
+	if matched {
+		t.Fatal("matchInvocation accepted cross-invocation arguments")
+	}
+
+	nonAdjacent := []string{"report", "claude", "--activity", "extra-token", "running"}
+	if matchInvocation(nonAdjacent, []string{"report", "claude", "--activity", "running"}) {
+		t.Fatal("matchInvocation accepted non-adjacent flag and value")
+	}
+
+	valid := []string{"report", "claude", "--activity", "running", "--event", "test"}
+	if !matchInvocation(valid, []string{"report", "claude", "--activity", "running"}) {
+		t.Fatal("matchInvocation rejected valid same-frame adjacent invocation")
 	}
 }
 
@@ -376,6 +497,71 @@ func runGeneratedCommand(t *testing.T, command *exec.Cmd, stdin string) {
 	}
 }
 
+func parseCapturedInvocations(content string) [][]string {
+	var invocations [][]string
+	for _, chunk := range strings.Split(content, "---") {
+		chunk = strings.TrimSpace(chunk)
+		if chunk == "" {
+			continue
+		}
+		var args []string
+		for _, line := range strings.Split(chunk, "\n") {
+			line = strings.TrimSpace(line)
+			if line != "" {
+				args = append(args, line)
+			}
+		}
+		if len(args) > 0 {
+			invocations = append(invocations, args)
+		}
+	}
+	return invocations
+}
+
+func matchInvocation(args []string, expected []string) bool {
+	if len(expected) == 0 {
+		return true
+	}
+	if len(args) < len(expected) {
+		return false
+	}
+	idx := 0
+	for idx < len(expected) && !strings.HasPrefix(expected[idx], "-") {
+		if idx >= len(args) || args[idx] != expected[idx] {
+			return false
+		}
+		idx++
+	}
+	for i := idx; i < len(expected); i += 2 {
+		flag := expected[i]
+		if i+1 >= len(expected) {
+			found := false
+			for _, a := range args {
+				if a == flag {
+					found = true
+					break
+				}
+			}
+			if !found {
+				return false
+			}
+			break
+		}
+		val := expected[i+1]
+		found := false
+		for j := 0; j+1 < len(args); j++ {
+			if args[j] == flag && args[j+1] == val {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
+}
+
 func requireCapturedArguments(t *testing.T, path string, expected ...string) {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)
@@ -383,15 +569,14 @@ func requireCapturedArguments(t *testing.T, path string, expected ...string) {
 		data, err := os.ReadFile(path)
 		if err == nil {
 			content := string(data)
-			matched := true
-			for _, value := range expected {
-				if !strings.Contains(content, value+"\n") {
-					matched = false
-					break
-				}
+			if strings.Contains(content, generatedRuntimeSensitiveSentinel) {
+				t.Fatalf("generated runtime leaked sensitive payload into report arguments:\n%s", content)
 			}
-			if matched {
-				return
+			invocations := parseCapturedInvocations(content)
+			for _, inv := range invocations {
+				if matchInvocation(inv, expected) {
+					return
+				}
 			}
 		} else if !os.IsNotExist(err) {
 			t.Fatalf("read generated runtime capture: %v", err)
@@ -399,7 +584,7 @@ func requireCapturedArguments(t *testing.T, path string, expected ...string) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	data, _ := os.ReadFile(path)
-	t.Fatalf("generated runtime arguments missing %q:\n%s", expected, data)
+	t.Fatalf("generated runtime arguments in %s missing framed %q:\n%s", path, expected, data)
 }
 
 func requireRuntimeTool(t *testing.T, name string) string {
