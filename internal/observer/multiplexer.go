@@ -17,13 +17,13 @@ import (
 	"github.com/zigai/aht/pkg/zellij"
 )
 
-var errUnsupportedMultiplexerPane = errors.New("unsupported multiplexer pane")
-
 const (
 	multiplexerPriorityTmux   = 1
 	multiplexerPriorityZellij = 2
 	multiplexerPriorityHerdr  = 3
 )
+
+var errUnsupportedMultiplexerPane = errors.New("unsupported multiplexer pane")
 
 func listMultiplexerPanes(ctx context.Context) ([]mux.Pane, error) {
 	panes := make([]mux.Pane, 0)

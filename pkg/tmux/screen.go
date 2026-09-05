@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+
+	"github.com/zigai/aht/pkg/mux"
 )
 
 const defaultCaptureLines = 100
@@ -58,22 +60,9 @@ func CapturePaneWithOptions(ctx context.Context, pane Pane, options CaptureOptio
 		title = ""
 	}
 	if lines > 0 {
-		text = boundBottomLines(text, lines)
+		text = strings.Join(mux.BoundBottomLines(text, lines), "\n")
 	}
 	return ScreenSnapshot{Text: text, Title: strings.TrimRight(title, "\r\n")}, nil
-}
-
-func boundBottomLines(text string, limit int) string {
-	text = strings.ReplaceAll(text, "\r\n", "\n")
-	text = strings.ReplaceAll(text, "\r", "\n")
-	lines := strings.Split(text, "\n")
-	if len(lines) > 0 && lines[len(lines)-1] == "" {
-		lines = lines[:len(lines)-1]
-	}
-	if len(lines) > limit {
-		lines = lines[len(lines)-limit:]
-	}
-	return strings.Join(lines, "\n")
 }
 
 func serverArgsForIdentity(identity string) ([]string, error) {

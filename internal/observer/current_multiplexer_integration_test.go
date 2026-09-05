@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/zigai/aht/internal/harness"
 	"github.com/zigai/aht/pkg/herdr"
 	"github.com/zigai/aht/pkg/mux"
 	"github.com/zigai/aht/pkg/registry"
@@ -28,39 +29,50 @@ func TestCurrentZellijDiscoveryAndCapture(t *testing.T) {
 	session := fmt.Sprintf("aht-zellij-%d", time.Now().UnixNano())
 	configDir := t.TempDir()
 	t.Setenv("ZELLIJ_CONFIG_DIR", configDir)
+	configPath := filepath.Join(configDir, "config.kdl")
+	if err := os.WriteFile(configPath, []byte("show_startup_tips false\nshow_release_notes false\n"), 0o600); err != nil {
+		t.Fatalf("write Zellij config: %v", err)
+	}
 	logPath := filepath.Join(t.TempDir(), "zellij.log")
 	logFile, err := os.Create(logPath)
 	if err != nil {
 		t.Fatalf("create Zellij log: %v", err)
 	}
 	commandLine := strings.Join([]string{
-		shellSingleQuote(zellijBinary), "--config-dir", shellSingleQuote(configDir),
-		"--session", shellSingleQuote(session),
+		harness.ShellQuote(zellijBinary), "--config-dir", harness.ShellQuote(configDir),
+		"--session", harness.ShellQuote(session),
 	}, " ")
-	process := exec.Command(script, "-q", "-c", commandLine, "/dev/null")
+	process := exec.Command(script, "-q", "-c", commandLine, logPath)
 	process.Stdout = logFile
 	process.Stderr = logFile
+	stdin, err := process.StdinPipe()
+	if err != nil {
+		_ = logFile.Close()
+		t.Fatalf("create Zellij stdin pipe: %v", err)
+	}
 	if err := process.Start(); err != nil {
+		_ = stdin.Close()
 		_ = logFile.Close()
 		t.Fatalf("start Zellij session: %v", err)
 	}
 	t.Cleanup(func() {
-		if t.Failed() {
-			t.Logf("Zellij startup log:\n%s", readProbeLog(logPath))
-		}
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_ = exec.CommandContext(ctx, zellijBinary, "--config-dir", configDir, "kill-session", session).Run()
+		_ = stdin.Close()
 		if process.Process != nil {
 			_ = process.Process.Kill()
 		}
 		_ = process.Wait()
 		_ = logFile.Close()
+		if t.Failed() {
+			t.Logf("Zellij startup log:\n%s", readProbeLog(logPath))
+		}
 	})
 
-	waitForCommandSuccess(t, 10*time.Second, zellijBinary, "--config-dir", configDir, "--session", session, "action", "list-panes", "--all", "--json")
+	waitForCommandSuccess(t, 15*time.Second, zellijBinary, "--config-dir", configDir, "--session", session, "action", "list-panes", "--all", "--json")
 	marker := "AHT_ZELLIJ_CURRENT_VERSION_CAPTURE"
-	run := exec.Command(zellijBinary, "--config-dir", configDir, "--session", session, "run", "--", "sh", "-c", "printf '%s\\n' "+shellSingleQuote(marker)+"; sleep 30")
+	run := exec.Command(zellijBinary, "--config-dir", configDir, "--session", session, "run", "--", "sh", "-c", "printf '%s\\n' "+harness.ShellQuote(marker)+"; sleep 30")
 	output, err := run.CombinedOutput()
 	if err != nil {
 		t.Fatalf("create Zellij test pane: %v\n%s\n%s", err, output, readProbeLog(logPath))
@@ -124,7 +136,7 @@ func TestCurrentHerdrDiscoveryAndCapture(t *testing.T) {
 		return herdr.ListPanes(ctx)
 	})
 	marker := "AHT_HERDR_CURRENT_VERSION_CAPTURE"
-	run := exec.Command(herdrBinary, "pane", "run", pane.Location.PaneID, "printf '%s\\n' "+shellSingleQuote(marker))
+	run := exec.Command(herdrBinary, "pane", "run", pane.Location.PaneID, "printf '%s\\n' "+harness.ShellQuote(marker))
 	run.Env = os.Environ()
 	output, err = run.CombinedOutput()
 	if err != nil {

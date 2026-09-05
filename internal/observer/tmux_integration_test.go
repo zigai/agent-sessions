@@ -52,7 +52,7 @@ func TestRealTmuxBottomScreenDetectionForFourAgents(t *testing.T) {
 	for index, test := range tests {
 		sessionName := string(test.harness)
 		script := filepath.Join(t.TempDir(), sessionName+".sh")
-		contents := "#!/bin/sh\nprintf '\\033[999;1H%s' " + shellSingleQuote(test.screen) + "\nexec sleep 60\n"
+		contents := "#!/bin/sh\nprintf '\\033[999;1H%s' " + harnesspkg.ShellQuote(test.screen) + "\nexec sleep 60\n"
 		if err := os.WriteFile(script, []byte(contents), 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -170,9 +170,6 @@ func activityValue(value *registry.Activity) registry.Activity {
 	return *value
 }
 
-func shellSingleQuote(value string) string {
-	return harnesspkg.ShellQuote(value)
-}
 
 func shortTmuxDirectory() (string, error) {
 	return os.MkdirTemp("/tmp", "aht-observer-tmux-")

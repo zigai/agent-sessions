@@ -59,8 +59,15 @@ func TestCapturePaneDefaultsToVisibleViewport(t *testing.T) {
 func TestBoundBottomLinesPreservesBlankRows(t *testing.T) {
 	t.Parallel()
 	input := strings.Join(append([]string{"discard"}, append(make([]string, 99), "last")...), "\n") + "\n\n"
-	bounded := boundBottomLines(input, 100)
-	lines := strings.Split(bounded, "\n")
+	pane := Pane{Tmux: testTmuxContext("%8"), ServerIdentity: "-L:work", PanePID: 1, PaneTTY: "/dev/pts/2"}
+	run := func(_ context.Context, _ Env, _ ...string) (string, error) {
+		return input, nil
+	}
+	snapshot, err := CapturePaneWithOptions(context.Background(), pane, CaptureOptions{Run: run, Lines: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(snapshot.Text, "\n")
 	if len(lines) != 100 || lines[0] != "" || lines[len(lines)-2] != "last" || lines[len(lines)-1] != "" {
 		t.Fatalf("bounded lines = %#v", lines)
 	}

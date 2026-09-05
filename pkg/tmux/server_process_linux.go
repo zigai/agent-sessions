@@ -19,7 +19,6 @@ var (
 	errEffectiveUserID = errors.New("effective user id outside uint32 range")
 )
 
-//nolint:cyclop // process enumeration filters transient and non-tmux entries explicitly
 func listCurrentUserTmuxServers(ctx context.Context) ([]ServerProcess, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("tmux process context: %w", err)
@@ -46,9 +45,7 @@ func listCurrentUserTmuxServers(ctx context.Context) ([]ServerProcess, error) {
 			}
 			return nil, processErr
 		}
-		if process != nil {
-			processes = append(processes, *process)
-		}
+		processes = append(processes, *process)
 	}
 	return processes, nil
 }
