@@ -11,7 +11,14 @@ import (
 	"github.com/zigai/aht/pkg/registry"
 )
 
-const defaultTrackerInterval = 300 * time.Millisecond
+const (
+	defaultTrackerInterval = 300 * time.Millisecond
+
+	ArtifactMissing ArtifactStatus = "missing"
+	ArtifactCurrent ArtifactStatus = "current"
+	ArtifactStale   ArtifactStatus = "stale"
+	ArtifactForeign ArtifactStatus = "foreign"
+)
 
 var (
 	// ErrForeignTracker means the service definition is not owned by AHT.
@@ -36,20 +43,6 @@ type Manager struct {
 	config Config
 }
 
-// New returns a Manager with normalized local defaults.
-func New(config Config) *Manager {
-	if config.Binary == "" {
-		config.Binary = "aht"
-	}
-	if config.StorePath == "" {
-		config.StorePath = registry.DefaultStorePath()
-	}
-	if config.TrackerInterval <= 0 {
-		config.TrackerInterval = defaultTrackerInterval
-	}
-	return &Manager{config: config}
-}
-
 // IntegrationOptions controls one managed harness integration operation.
 type IntegrationOptions struct {
 	TargetBinary string
@@ -71,13 +64,6 @@ type IntegrationResult struct {
 // ArtifactStatus describes the ownership and freshness of a managed integration artifact.
 type ArtifactStatus string
 
-const (
-	ArtifactMissing ArtifactStatus = "missing"
-	ArtifactCurrent ArtifactStatus = "current"
-	ArtifactStale   ArtifactStatus = "stale"
-	ArtifactForeign ArtifactStatus = "foreign"
-)
-
 // IntegrationStatus describes the installed state of one harness integration.
 type IntegrationStatus struct {
 	Harness  registry.Harness
@@ -85,6 +71,38 @@ type IntegrationStatus struct {
 	Paths    []string
 	Message  string
 	NextStep string
+}
+
+// TrackerOptions controls a tracker operation.
+type TrackerOptions struct {
+	DryRun bool
+}
+
+// TrackerResult describes the platform-native tracker state after an operation.
+type TrackerResult struct {
+	Platform       string
+	Manager        string
+	ManagedPath    string
+	ManagedVersion int
+	Installed      bool
+	Current        bool
+	Running        bool
+	Changed        bool
+	Message        string
+}
+
+// New returns a Manager with normalized local defaults.
+func New(config Config) *Manager {
+	if config.Binary == "" {
+		config.Binary = "aht"
+	}
+	if config.StorePath == "" {
+		config.StorePath = registry.DefaultStorePath()
+	}
+	if config.TrackerInterval <= 0 {
+		config.TrackerInterval = defaultTrackerInterval
+	}
+	return &Manager{config: config}
 }
 
 func (s ArtifactStatus) IsValid() bool {
@@ -156,24 +174,6 @@ func (m *Manager) IntegrationStatus(
 		Message:  status.Message,
 		NextStep: status.NextStep,
 	}, nil
-}
-
-// TrackerOptions controls a tracker operation.
-type TrackerOptions struct {
-	DryRun bool
-}
-
-// TrackerResult describes the platform-native tracker state after an operation.
-type TrackerResult struct {
-	Platform       string
-	Manager        string
-	ManagedPath    string
-	ManagedVersion int
-	Installed      bool
-	Current        bool
-	Running        bool
-	Changed        bool
-	Message        string
 }
 
 // EnableTracker installs, updates, and starts background agent-session tracking.
