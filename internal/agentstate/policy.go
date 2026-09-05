@@ -6,20 +6,12 @@ import (
 	"github.com/zigai/aht/pkg/registry"
 )
 
-type Authority string
-
 const (
 	AuthorityHook   Authority = "hook"
 	AuthorityScreen Authority = "screen"
 )
 
-func (a Authority) IsValid() bool {
-	switch a {
-	case AuthorityHook, AuthorityScreen:
-		return true
-	}
-	return false
-}
+type Authority string
 
 type Policy struct {
 	Primary          Authority
@@ -32,6 +24,14 @@ type HookEvaluation struct {
 	Fresh          bool
 	ProcessMatches bool
 	Reason         string
+}
+
+func (a Authority) IsValid() bool {
+	switch a {
+	case AuthorityHook, AuthorityScreen:
+		return true
+	}
+	return false
 }
 
 func PolicyFor(harness registry.Harness) Policy {
@@ -72,12 +72,7 @@ func EvaluateHook(session registry.Session, now time.Time) HookEvaluation {
 	if !ok {
 		return failure
 	}
-	// Hook-primary harnesses without screen fallback keep their last native state
-	// authoritative; freshness still exposes staleness to diagnostics.
 	if reason := invalidHookTimeReason(native.ObservedAt, now); reason != "" {
-		if reason == "integration_report_stale" && !policy.ScreenFallback {
-			return HookEvaluation{Active: true, Fresh: false, ProcessMatches: true, Reason: reason}
-		}
 		return HookEvaluation{Active: false, Fresh: false, ProcessMatches: true, Reason: reason}
 	}
 	return HookEvaluation{Active: true, Fresh: true, ProcessMatches: true, Reason: "matching_live_process_report"}
